@@ -1,6 +1,6 @@
 # r2 — plan for rewriting the c2 console in Rust
 
-Status: **draft for review** · Baseline: [`adipata/c2@408d6f2`](https://github.com/adipata/c2/commit/408d6f29aa968ad4afcd7888b5958ba4608c902c)
+Status: **approved decisions (§13); ready for S0** · Baseline: [`adipata/c2@408d6f2`](https://github.com/adipata/c2/commit/408d6f29aa968ad4afcd7888b5958ba4608c902c)
 (2026-08-21, "Manage certificates, generic keys and data objects" — L0–L16 all `done`).
 
 This document plans the Rust rewrite. Its first execution step (S0, §8) turns it into
@@ -15,13 +15,17 @@ the working documents that agents code against: a Rust `spec.md` (frozen contrac
   state (L0–L16 merged). The rewrite ports the **final spec, not the history**: generic
   secrets/HMAC, data objects, `other`, template files and `--kek` are designed in from the
   start rather than retrofitted. No new features until parity is signed off.
+- **Identity:** the product is renamed to **r2** throughout — binary `r2`, prompt `r2>`,
+  `r2.yaml`, `$R2_CONFIG`, `r2` config/state/log dirs, crates `r2-*`. It installs side by
+  side with c2 and shares no files with it.
 - **Compatibility contract:** the command grammar, ref grammar, messages and hints,
-  config schema, discovery and `defaults.yaml`, PKCS#11 object layouts, and every file
-  format (exports, wrapped blobs, template YAML, history) stay identical. A token or
-  config file used by Python c2 works unchanged with Rust c2, in both directions.
+  config *schema* and merge semantics, PKCS#11 object layouts, and every data file format
+  (exports, wrapped blobs, template YAML) stay identical. Tokens are shared freely between
+  c2 and r2; a c2 config file works in r2 once renamed to `r2.yaml` (and its `c2` paths
+  edited).
 - **Stack:** `cryptoki` (PKCS#11), `openssl` (memory provider, key formats, PKCS#12),
-  `der`/`x509-cert` (CSR assembly with an external signer), `rustyline` + `rpassword`
-  (REPL), `comfy-table` + `anstream` (rendering), `serde_yaml_ng` behind a hand-written
+  `der`/`x509-cert` (CSR assembly with an external signer), `reedline` + `rpassword`
+  (REPL, with dropdown completion menus), `comfy-table` + `anstream` (rendering), `serde_yaml_ng` behind a hand-written
   typed decoder (config), `tracing` (logging), `clap` (CLI).
 - **Architecture:** a Cargo workspace whose crate graph is exactly spec §3.1's layer
   graph, so the compiler enforces the layering that code review enforces in c2. Providers
@@ -64,7 +68,7 @@ transport keys, and compile-time enforcement of the architecture rules.
 1. **The spec stays the single source of truth.** S0 ports c2 `spec.md` to r2: §1–§3
    are adapted, §4 is rewritten as Rust signatures (§5 below gives the shapes), §5–§10
    are carried over with backend substitutions (pyca → OpenSSL, PyKCS11 → cryptoki,
-   prompt_toolkit → rustyline, rich → comfy-table), and a new **§11 "Deviations from
+   prompt_toolkit → reedline, c2 → r2 naming, rich → comfy-table), and a new **§11 "Deviations from
    c2"** lists every intentional difference. Anything not listed there is a parity bug.
 2. **Same multi-agent working agreement as c2.** One loop = one branch = one PR,
    exclusive file ownership, a STATUS table with single-line rows, and the §4.11
@@ -89,11 +93,11 @@ transport keys, and compile-time enforcement of the architecture rules.
 | PKCS#11 | PyKCS11 (SWIG) | **`cryptoki`** (+ `cryptoki-sys` constants; a narrowly scoped `unsafe` shim only for proven gaps) | Safe wrapper, dynamic loading, typed CKR errors, `VendorDefined` attributes and mechanisms. Constants resolve at compile time from `cryptoki-sys`, the equivalent of "resolve CKM numerics from PyKCS11, never hardcode". |
 | Memory-provider crypto, key parsing, PKCS#12, X.509 | pyca/cryptography (OpenSSL-backed) | **`openssl`** crate, with the `vendored` feature for release builds | pyca *is* OpenSSL, so behavior is byte-identical (both KWP dialects, traditional encrypted PEM, legacy PKCS#12, Ed448/X448, OAEP with separate MGF hash and label, PSS salt lengths, CMAC, raw RSA). Pure-Rust RustCrypto has gaps here (Ed448/X448 maturity, PKCS#12 building, traditional encrypted PEM) and an open RSA timing advisory. |
 | CSR with external signer | pyca builder + callback | **`der` + `x509-cert` + `spki` + `const-oid`** | Assemble `CertificationRequestInfo` and sign through the provider callback, which works for non-extractable HSM keys (c2 §5.7). OpenSSL's `X509ReqBuilder` needs a local private key. |
-| REPL line editing | prompt_toolkit | **`rustyline`** (history hints, completion, bracketed paste) + **`rpassword`** (hidden input) | Mature, and falls back to plain stdin reads when not on a TTY, which piped tests and Windows piped smoke tests need. History is added explicitly, so filtering `--pin`/`--password` lines is trivial. c2's `…>` continuation already lives in the REPL loop, not the editor. `reedline` is the alternative if dropdown completion menus become a requirement. |
+| REPL line editing | prompt_toolkit | **`reedline`** (columnar/IDE dropdown completion menus, history-based hints like `AutoSuggestFromHistory`, syntax highlighting of commands/refs, bracketed paste, multiline via `Validator`) + **`rpassword`** (hidden input) | The richest TUI of the Rust line editors and the closest match to prompt_toolkit. reedline needs a real terminal, so non-TTY stdin goes through a plain line reader (§6). `--pin`/`--password` lines are kept out of history by a custom `History` wrapper. c2's `…>` continuation already lives in the REPL loop, not the editor. |
 | Rendering | rich | **`comfy-table`**, **`anstream`/`anstyle`** (color policy, `NO_COLOR`), an own panel/hex-dump renderer, **`indicatif`** spinner | Same columns and content. rich's markup-eating bugs (`[#…]`, `[x]`) disappear by construction. |
 | Config | PyYAML + dataclasses `from_dict` | **`serde_yaml_ng`** `Value` for parse, merge and emit, plus a hand-written typed decoder (path-aware errors) | Mirrors c2's explicit `from_dict(data, path)` design: deep merge on untyped trees, `origins`, unknown-key warnings. `serde_yaml` itself is archived. |
 | "Did you mean" suggestions | `difflib.get_close_matches` | **`difflib`** crate | Same algorithm and cutoff, so the same suggestions. |
-| Platform dirs | platformdirs | small own function replicating platformdirs' paths exactly | `dirs::config_dir()` differs on Windows (Roaming versus Local). Config discovery must find the same files. |
+| Platform dirs | platformdirs | small own function following platformdirs' layout with app name `r2` | Keeps c2's per-OS conventions (e.g. Windows Local, not Roaming, which `dirs::config_dir()` would pick). |
 | CLI args | argparse | **`clap`** (derive) | `--version`, `--config PATH`, `--debug`. |
 | Logging | stdlib logging, size-rotating file, `RedactingFilter` | **`tracing`** + `tracing-subscriber` + **`file-rotate`** (size-based, N backups) + a redaction layer | Keeps `app.log.max_bytes`/`backups` semantics (`tracing-appender` only rotates by time). |
 | Secrets | `str`/`bytearray`, best-effort zeroization | **`secrecy`** (`SecretString` PINs/passwords, redacted `Debug`), **`zeroize`** (`Zeroizing<Vec<u8>>` for key material and transport keys) | Real zeroization, which is an improvement over c2 §5.5's CPython caveat. |
@@ -112,18 +116,18 @@ r2/
   clippy.toml  deny.toml  justfile
   .github/workflows/ci.yml  release.yml
   crates/
-    c2-core/        error, keys (model + ref grammar), template, params, io (ConsoleIo,
+    r2-core/        error, keys (model + ref grammar), template, params, io (ConsoleIo,
                     TemplateEditor, Renderable), codec, datainput, keyparse, x509build, der
-    c2-config/      model, loader, defaults.yaml (include_str!, byte-identical to c2 §7)
-    c2-provider/    Provider trait + data types, ProviderRegistry, shared helpers (rsa_raw_modexp)
-    c2-ops/         OperationSpec, OperationRegistry, builtins (aes/rsa/ec/generic), custom, ParamResolver
-    c2-memory/      MemoryProvider (openssl)
-    c2-pkcs11/      Pkcs11Provider, backend seam (cryptoki impl + fake), mechanisms, catalog, softhsm
-    c2-services/    keyload, keyexport, certops, transfer, templatefile, wrapload
-    c2-console/     repl, io (terminal + plain), parser, completer, render, commands/,
+    r2-config/      model, loader, defaults.yaml (include_str!; c2 §7 with `c2` → `r2` in paths)
+    r2-provider/    Provider trait + data types, ProviderRegistry, shared helpers (rsa_raw_modexp)
+    r2-ops/         OperationSpec, OperationRegistry, builtins (aes/rsa/ec/generic), custom, ParamResolver
+    r2-memory/      MemoryProvider (openssl)
+    r2-pkcs11/      Pkcs11Provider, backend seam (cryptoki impl + fake), mechanisms, catalog, softhsm
+    r2-services/    keyload, keyexport, certops, transfer, templatefile, wrapload
+    r2-console/     repl, io (terminal + plain), parser, completer, render, commands/,
                     template_editor, wizard
-    c2-cli/         the `c2` binary: args, logging, bootstrap
-    c2-testkit/     (dev-dependency only) ScriptedIo, FakeProvider, provider_contract_tests!,
+    r2-cli/         the `r2` binary: args, logging, bootstrap
+    r2-testkit/     (dev-dependency only) ScriptedIo, FakeProvider, provider_contract_tests!,
                     softhsm fixture
   parity/           differential harness vs Python c2 (R13; optional CI job)
   spec.md  loops.md  CLAUDE.md  README.md  PLAN.md
@@ -133,36 +137,36 @@ Crate dependency graph, which is c2 §3.1 made structural (no cycles possible; a
 not listed doesn't compile):
 
 ```
-c2-cli      → c2-console, c2-memory, c2-pkcs11, c2-config (incl. loader)
-c2-console  → c2-services, c2-ops, c2-pkcs11 (catalog, wizard's init_token), c2-provider, c2-config, c2-core
-c2-services → c2-ops, c2-pkcs11 (catalog only), c2-provider, c2-config, c2-core
-c2-ops      → c2-provider, c2-config, c2-core
-c2-memory   → c2-provider, c2-core
-c2-pkcs11   → c2-provider, c2-config, c2-core, cryptoki
-c2-provider → c2-config (model), c2-core
-c2-config   → c2-core
-c2-core     → std, openssl, der / x509-cert / spki
+r2-cli      → r2-console, r2-memory, r2-pkcs11, r2-config (incl. loader)
+r2-console  → r2-services, r2-ops, r2-pkcs11 (catalog, wizard's init_token), r2-provider, r2-config, r2-core
+r2-services → r2-ops, r2-pkcs11 (catalog only), r2-provider, r2-config, r2-core
+r2-ops      → r2-provider, r2-config, r2-core
+r2-memory   → r2-provider, r2-core
+r2-pkcs11   → r2-provider, r2-config, r2-core, cryptoki
+r2-provider → r2-config (model), r2-core
+r2-config   → r2-core
+r2-core     → std, openssl, der / x509-cert / spki
 ```
 
-- `cryptoki` is a dependency of **`c2-pkcs11` only**, and no cryptoki type appears in
+- `cryptoki` is a dependency of **`r2-pkcs11` only**, and no cryptoki type appears in
   its public API. This is c2's "PyKCS11 only inside `providers/pkcs11/`" rule, enforced by
   the compiler. The static `CKA_CATALOG` (plus the CKO/CKK/CKC/CKM symbol tables that
-  `templatefile` needs) is a public module of `c2-pkcs11` with no cryptoki calls, so
+  `templatefile` needs) is a public module of `r2-pkcs11` with no cryptoki calls, so
   services and console may use it, as they use `attributes.py` today.
-- Nothing depends on `c2-console` except `c2-cli`. `c2-config`'s `load_config` is called
-  only by `c2-cli` (review rule; the model types are importable anywhere, as in c2).
-- `openssl` is used by `c2-core` (keyparse, x509build), `c2-provider` (raw RSA modexp)
-  and `c2-memory`, mirroring "core → stdlib + pyca".
+- Nothing depends on `r2-console` except `r2-cli`. `r2-config`'s `load_config` is called
+  only by `r2-cli` (review rule; the model types are importable anywhere, as in c2).
+- `openssl` is used by `r2-core` (keyparse, x509build), `r2-provider` (raw RSA modexp)
+  and `r2-memory`, mirroring "core → stdlib + pyca".
 
 Workspace lints and `clippy.toml` encode the c2 CLAUDE.md conventions:
 
 | c2 convention | r2 enforcement |
 |---|---|
-| no `print()` (ruff T20) | `clippy::print_stdout`/`print_stderr` = deny (one allowed site: `--version`/early-startup errors in `c2-cli`) |
+| no `print()` (ruff T20) | `clippy::print_stdout`/`print_stderr` = deny (one allowed site: `--version`/early-startup errors in `r2-cli`) |
 | no ad-hoc threads (spec §6) | `disallowed-methods`: `std::thread::spawn`. Allowed exceptions: the indicatif ticker and the Ctrl-C flag handler, which touch no app state. Providers are `!Send`/`!Sync` (`Rc`/`RefCell` inside), so misuse doesn't compile. |
-| env mutation only before C_Initialize | `disallowed-methods`: `std::env::set_var`, with one audited `#[allow]` site in `c2-pkcs11` (edition 2024 makes it `unsafe`; the single-thread invariant is the safety argument) |
-| no bare `except` / everything is a `ConsoleError` | every fallible public fn returns `c2_core::Result<T>`; `clippy::unwrap_used`/`expect_used` deny outside tests |
-| mypy strict | the compiler, plus `#![forbid(unsafe_code)]` in every crate except `c2-pkcs11` (`deny`, audited `allow`s) |
+| env mutation only before C_Initialize | `disallowed-methods`: `std::env::set_var`, with one audited `#[allow]` site in `r2-pkcs11` (edition 2024 makes it `unsafe`; the single-thread invariant is the safety argument) |
+| no bare `except` / everything is a `ConsoleError` | every fallible public fn returns `r2_core::Result<T>`; `clippy::unwrap_used`/`expect_used` deny outside tests |
+| mypy strict | the compiler, plus `#![forbid(unsafe_code)]` in every crate except `r2-pkcs11` (`deny`, audited `allow`s) |
 | skeleton stubs are temporary | `clippy::todo`/`unimplemented` = warn until R13, deny from R13 |
 
 ## 5. Translating the frozen contracts (spec §4)
@@ -174,7 +178,7 @@ S0 writes these in full. The shapes below are binding decisions for S0. Python i
 | exception hierarchy + `isinstance` | one `ConsoleError { kind, message, hint }` with `ErrorKind` variants carrying the extra fields, plus family predicates (`is_provider()`, `is_key_lookup()`, `is_operation()`) |
 | `ReplExit` (the documented exemption) | not an error: `Command::run` returns `Result<Flow>` with `Flow::{Continue, Exit}` |
 | ABC with default methods | object-safe trait with default methods returning `UnsupportedOperation` |
-| `Protocol` (ConsoleIO, TemplateEditor) | object-safe traits in `c2-core::io` |
+| `Protocol` (ConsoleIO, TemplateEditor) | object-safe traits in `r2-core::io` |
 | keyword arguments with defaults | request structs implementing `Default` (`GenerateRequest`, `UnwrapRequest`) |
 | `object`-typed values | closed enums: `AttrValue`, `ParamValue` |
 | `options: dict` escape hatch (wrap/unwrap) | typed `WrapOptions` struct; S0 enumerates fields from current call sites |
@@ -188,7 +192,7 @@ S0 writes these in full. The shapes below are binding decisions for S0. Python i
 Core shapes (abridged; S0 fills in every item):
 
 ```rust
-// c2-core::error
+// r2-core::error
 pub struct ConsoleError { pub kind: ErrorKind, pub message: String, pub hint: Option<String> }
 pub enum ErrorKind {
     Generic, Config, Parse { line: String, pos: usize }, Codec, KeyParse, DataIo,
@@ -201,7 +205,7 @@ pub enum ErrorKind {
 }
 pub type Result<T> = std::result::Result<T, ConsoleError>;
 
-// c2-core::keys
+// r2-core::keys
 pub enum KeyClass { Secret, Private, Public, Certificate, Data }
 pub enum KeyAlgorithm { Aes, Rsa, Ec, EcEdwards, EcMontgomery, Generic, None, Other }
 pub struct KeyRef { pub provider: String, pub label: String, pub key_id: Option<Vec<u8>> }
@@ -220,21 +224,21 @@ pub struct ParsedRef { pub provider: String, pub label: String, pub key_id: Opti
 pub fn parse_ref(s: &str) -> Result<ParsedRef>;          // the ONE grammar parser (c2 §4.3)
 pub fn display_refs(infos: &[KeyInfo]) -> Vec<String>;
 
-// c2-core::template
+// r2-core::template
 pub enum AttrKind { Bool, Str, Bytes, Ulong }
 pub enum AttrValue { Bool(bool), Str(String), Bytes(Vec<u8>), Ulong(u64), Symbol(String) }
 pub struct TemplateAttr { pub name: String, pub kind: AttrKind, pub value: AttrValue,
                           pub enabled: bool, pub locked: bool }
 pub struct KeyTemplate { pub attrs: Vec<TemplateAttr> }  // get / set (unknown → Param) / enabled_attrs
 
-// c2-core::params
+// r2-core::params
 pub enum ParamValue { Bytes(Vec<u8>), Int(i64), Str(String), Bool(bool), Enum(String), KeyRef(KeyInfo) }
 pub struct ParamSpec { pub name: &'static str, pub kind: ParamKind, pub prompt: String,
                        pub required: bool, pub default: Option<ParamValue>,
                        pub default_from: Option<&'static str>, pub choices: Option<Vec<String>>,
                        pub length: Option<usize>, pub validate: Option<fn(&ParamValue) -> Result<()>> }
 
-// c2-core::io — all &self: implementations use interior mutability (single thread)
+// r2-core::io — all &self: implementations use interior mutability (single thread)
 pub trait ConsoleIo {
     fn prompt(&self, spec: &ParamSpec) -> Result<String>;        // Ctrl-C → UserAbort
     fn prompt_secret(&self, text: &str) -> Result<SecretString>;
@@ -248,7 +252,7 @@ pub trait TemplateEditor { fn edit(&self, t: KeyTemplate, title: &str) -> Result
 ```
 
 ```rust
-// c2-provider — &self everywhere; session/login state in RefCell inside the provider.
+// r2-provider — &self everywhere; session/login state in RefCell inside the provider.
 // This makes same-provider flows (`copy softhsm:x softhsm`) borrow-safe: no &mut aliasing.
 pub trait Provider {
     fn name(&self) -> &str;
@@ -290,7 +294,7 @@ impl ProviderRegistry {
 ```
 
 ```rust
-// c2-console — command framework
+// r2-console — command framework
 pub struct BoundArgs { pub positionals: Vec<String>, pub positional_quoted: Vec<bool>,
                        pub named: IndexMap<String, String>,
                        pub options: IndexMap<String, OptValue> }   // Value(String) | Flag
@@ -308,7 +312,7 @@ pub struct AppContext { pub config: Rc<LoadedConfig>, pub providers: ProviderReg
                         pub template_editor: Box<dyn TemplateEditor> }
 ```
 
-Test contracts (c2 §4.10) become `c2-testkit` items: `ScriptedIo::new(answers)` with
+Test contracts (c2 §4.10) become `r2-testkit` items: `ScriptedIo::new(answers)` with
 `.output(): Vec<String>`; `FakeProvider::new(name).type_name("pkcs11").mechanisms(..)`
 with `.calls()` using c2's frozen call-summary encoding; a
 `provider_contract_tests!(make_provider_expr)` macro that expands the ABC-semantics suite
@@ -332,15 +336,15 @@ into `#[test]` functions (replacing the pytest mixin); and a `softhsm_token()` f
 
   The rest of the provider (identity resolution, twin guard, CKM folding, software
   fallbacks, auto-recovery) is backend-agnostic and fully unit-testable.
-- **Terminal I/O.** `TerminalIo` (rustyline + rpassword) when stdin is a TTY, `PlainIo`
+- **Terminal I/O.** `TerminalIo` (reedline + rpassword) when stdin is a TTY, `PlainIo`
   (line reads from stdin, secrets read as plain lines) otherwise. Both share the
   renderer. Piped sessions work identically on all OSes, which fixes c2's Windows
   release-smoke limitation (c2 §9). The REPL loop keeps c2's own `…>` continuation logic
   (`line_is_complete`), so it stays editor-agnostic.
-- **History.** Own persistence in prompt_toolkit's `FileHistory` format
-  (`# <timestamp>` / `+<line>`) at the same `app.history_file`, fed into rustyline's
-  in-memory history. The file stays shared with Python c2, and the
-  `--pin`/`--password` filter is r2's own (it mirrors `SecretFilteringFileHistory`).
+- **History.** reedline `FileBackedHistory` at `app.history_file` (default
+  `~/.local/state/r2/history`), wrapped by a `History` impl whose `save` drops lines
+  containing `--pin`/`--password` (mirrors c2's `SecretFilteringFileHistory`). No sharing
+  with c2's history file.
 - **Ctrl-C.** Inside prompts it is a key, which maps to `UserAbort` and prints
   `Aborted.`. During operations, a `ctrlc` handler sets an atomic flag that commands and
   services check at step boundaries (for example between copy-ladder rungs).
@@ -365,9 +369,9 @@ into `#[test]` functions (replacing the pytest mixin); and a `softhsm_token()` f
 - `parse_ref` grammar incl. selector precedence and carve-outs; `display_refs` suffixing.
 - `decode_data` detection order, PEM re-wrap incl. RFC 1421 headers, "hex beats base64".
 - Error messages and hints (copied verbatim from c2; tests assert text), CKR table.
-- Config: discovery order, `C2_CONFIG`, deep merge (lists replace), `origins`,
+- Config: discovery order (with `r2` names: `--config`, `$R2_CONFIG`, `./r2.yaml`, user dir `r2/r2.yaml`), deep merge (lists replace), `origins`,
   validation messages with config paths, unknown-key warnings via logging.
-  `defaults.yaml` is byte-identical. The decoder accepts **YAML 1.1** spellings PyYAML
+  `defaults.yaml` is c2's with only `c2` → `r2` path renames. The decoder accepts **YAML 1.1** spellings PyYAML
   accepts in existing user files (`yes/no/on/off` booleans, `0x…` integers), because
   YAML-1.2 parsers read those as strings.
 - PKCS#11 object layouts: attribute sets, 4-byte random CKA_IDs, EC params/point DER
@@ -375,7 +379,7 @@ into `#[test]` functions (replacing the pytest mixin); and a `softhsm_token()` f
   that objects created by either implementation are fully usable by the other on the
   same token.
 - File formats: exports (PEM/DER/PKCS#8 encrypted, SPKI, X.509, PKCS#12), CSRs,
-  wrapped blobs (raw/hex/b64), `key template` YAML, the history file.
+  wrapped blobs (raw/hex/b64), `key template` YAML.
 - Copy decision matrix, ladder order, refusal UX; KWP preference and both-dialect unwrap.
 
 ### 7.2 Deliberate deviations (recorded in r2 spec §11)
@@ -388,6 +392,7 @@ into `#[test]` functions (replacing the pytest mixin); and a `softhsm_token()` f
 | D4 | `--debug` shows a Rust backtrace instead of a Python traceback; log line format differs (same path and rotation) | runtime difference |
 | D5 | macOS ships x86_64 and arm64 (c2: arm64 only) | free with cargo targets |
 | D6 | `RSA-AES-KEY-WRAP` on PKCS#11 is advertised **only if** the S0 spike shows `cryptoki` binds `CK_RSA_AES_KEY_WRAP_PARAMS`; otherwise it stays unadvertised, as in c2 | capability improvement, gated on the `mechanisms()` probe as c2 §5.5 requires |
+| D7 | Renamed to r2: binary, `r2>` prompt, `r2.yaml`, `$R2_CONFIG`, config/state/log/SoftHSM-conf dirs, history file (reedline format), messages that name the tool | decision §13.2; c2 and r2 install side by side |
 
 ## 8. Loop decomposition
 
@@ -451,7 +456,7 @@ in R1/R2/R3/R4/R5/R8/R10, because the ported spec already describes the final st
      OAEP/PSS knobs, Ed448/X448, encrypted traditional PEM, PKCS#12 build and parse, and
      legacy PKCS#12 (RC2/3DES) under a *vendored* OpenSSL 3, which needs the `legacy`
      provider, on Linux, macOS and Windows.
-  3. **Terminal.** Check rustyline + rpassword on macOS, Linux and Windows Terminal:
+  3. **Terminal.** Check reedline + rpassword on macOS, Linux and Windows Terminal:
      bracketed paste of a PEM, the non-TTY fallback, hint and completion behavior.
 - Accept: every c2 §4 item has a Rust counterpart or an `n/a: Python-only` note (for
   example the `handle_int` repr rule and lazy imports). Every c2 test is assigned to
@@ -460,7 +465,7 @@ in R1/R2/R3/R4/R5/R8/R10, because the ported spec already describes the final st
 **R0 — Workspace, contract skeleton, CI** (c2 L0)
 - Owns: workspace `Cargo.toml`, toolchain/lint/deny/clippy config, `justfile`, `ci.yml`,
   every crate's `lib.rs` skeleton (**handed off** to the owning loops, like c2's stub
-  `app.py`), the `c2-cli` stub (`--version`), `c2-testkit::softhsm`,
+  `app.py`), the `r2-cli` stub (`--version`), `r2-testkit::softhsm`,
   `scripts/softhsm-init.sh`.
 - Skeleton: all §4 types and traits with real definitions; function bodies stubbed. This
   includes the cross-loop hooks: `services::templatefile::load_seed_file` (R14) and
@@ -470,8 +475,8 @@ in R1/R2/R3/R4/R5/R8/R10, because the ported spec already describes the final st
   initializes and lists a token.
 
 **R1 — Core model & codec** (c2 L1, plus L16 model parts)
-- Owns `c2-core`: `error`, `keys`, `template`, `params`, `io` (incl. `Renderable`),
-  `codec`, `datainput`; `c2-testkit::scripted_io`.
+- Owns `r2-core`: `error`, `keys`, `template`, `params`, `io` (incl. `Renderable`),
+  `codec`, `datainput`; `r2-testkit::scripted_io`.
 - Ports `core/{errors,keys,params,io,codec,datainput}.py`; `tests/unit/core/*` (94 tests,
   incl. `test_keys_objects`, `test_scripted_io`).
 - Accept: c2's codec input matrix (L1 accept list) table-driven; `parse_ref` and
@@ -479,7 +484,7 @@ in R1/R2/R3/R4/R5/R8/R10, because the ported spec already describes the final st
   sequence.
 
 **R2 — Configuration** (c2 L2)
-- Owns `c2-config`: `defaults.yaml` (byte-identical copy), `loader`, `model`
+- Owns `r2-config`: `defaults.yaml` (c2's, renamed paths), `loader`, `model`
   (`default_template`, `template_class_key`, all sections), platformdirs-compatible
   user-dir resolution, YAML 1.1 compatibility shims.
 - Ports `config/*.py`; `test_config.py`, `test_config_objects.py`.
@@ -488,9 +493,9 @@ in R1/R2/R3/R4/R5/R8/R10, because the ported spec already describes the final st
   fixture config using `yes/no` and `0x` values decodes identically to PyYAML.
 
 **R3 — Provider & operation contracts** (c2 L3, plus `builtin_generic`)
-- Owns `c2-provider` (trait, types, registry, `rsa_raw_modexp`); `c2-ops` except
+- Owns `r2-provider` (trait, types, registry, `rsa_raw_modexp`); `r2-ops` except
   `params` (model, registry, `builtin_{aes,rsa,ec,generic}`, `custom`);
-  `c2-testkit::{fake_provider, contract}`.
+  `r2-testkit::{fake_provider, contract}`.
 - Ports `providers/{base,registry}.py`, `ops/{model,registry,builtin_*,custom}.py`,
   `tests/support/fake_provider.py`, `tests/contract/base.py` (34 contract tests);
   `test_ops_registry`, `test_provider_base`, `test_ops_objects`.
@@ -500,7 +505,7 @@ in R1/R2/R3/R4/R5/R8/R10, because the ported spec already describes the final st
   presentations.
 
 **R4 — Memory provider** (c2 L4, plus L15/L16 memory parts)
-- Owns `c2-memory`.
+- Owns `r2-memory`.
 - Ports `providers/memory.py`; `test_memory_provider`, `test_memory_objects`,
   `test_memory_wrap_kek`, including every KAT (SP 800-38A, GCM case 16, RFC 4493, RFC 3394,
   RFC 6979, RFC 8032, RFC 7748, the independent RFC 8017 PSS verify-KAT, and the Utimaco
@@ -509,7 +514,7 @@ in R1/R2/R3/R4/R5/R8/R10, because the ported spec already describes the final st
   equals RFC 4231; hand-rolled RSA-RAW; the RSA-AES-KEY-WRAP blob format matches c2's.
 
 **R5a — PKCS#11 foundation** (first half of c2 L5)
-- Owns `c2-pkcs11`: `backend` (trait, `CryptokiBackend`, `FakeBackend`), `catalog`
+- Owns `r2-pkcs11`: `backend` (trait, `CryptokiBackend`, `FakeBackend`), `catalog`
   (`CKA_CATALOG` + symbol tables), `softhsm` (`find_softhsm_module`), and in the provider
   the lazy init with `env`, slots/tokens/login/logout, keep-PIN auto-recovery, the CKR
   choke point, template conversion with material injection, the object read path
@@ -523,7 +528,7 @@ in R1/R2/R3/R4/R5/R8/R10, because the ported spec already describes the final st
   wrapping, RSA CRT set); SoftHSM login, generate, and import of every object kind.
 
 **R5b — PKCS#11 crypto, wrap, derive, edit** (second half of c2 L5, plus L8/L14/L15/L16 provider parts)
-- Owns `c2-pkcs11::mechanisms` (CKM↔name folding, custom ckm→id merge, advisory EdDSA
+- Owns `r2-pkcs11::mechanisms` (CKM↔name folding, custom ckm→id merge, advisory EdDSA
   probe, the five `param_struct` packers) and the provider's verbs with software
   fallbacks:
   - ECB PKCS#7, non-SHA1 OAEP over raw RSA, CMAC/HMAC truncation, bare-ECDSA prehash,
@@ -539,7 +544,7 @@ in R1/R2/R3/R4/R5/R8/R10, because the ported spec already describes the final st
   SoftHSM.
 
 **R6 — Key formats & X.509** (c2 L6)
-- Owns `c2-core::{keyparse, x509build, der}`. The `der` module holds the EC OID/point
+- Owns `r2-core::{keyparse, x509build, der}`. The `der` module holds the EC OID/point
   encodings and r‖s↔DER conversion shared by memory, pkcs11 and certops.
 - Ports `core/{keyparse,x509build}.py`; `test_keyparse`, `test_x509build`.
 - Accept: per-format parse round-trips incl. hex-wrapped PEM and hint mismatches;
@@ -549,8 +554,8 @@ in R1/R2/R3/R4/R5/R8/R10, because the ported spec already describes the final st
   parses.
 
 **R7 — Console shell & framework** (c2 L7)
-- Owns `c2-console::{io, repl, parser, completer, render, commands/mod + build.rs,
-  commands/{help,misc}}`, `c2-ops::params` (ParamResolver), and `c2-cli` (args,
+- Owns `r2-console::{io, repl, parser, completer, render, commands/mod + build.rs,
+  commands/{help,misc}}`, `r2-ops::params` (ParamResolver), and `r2-cli` (args,
   bootstrap incl. SoftHSM autodetect and custom-CKM map into `Pkcs11Provider`, logging
   with size rotation and redaction, panic hook).
 - Ports `app.py`, `logging_setup.py`, `ops/params.py`,
@@ -565,7 +570,7 @@ in R1/R2/R3/R4/R5/R8/R10, because the ported spec already describes the final st
 **R8 — Provider & key commands** (c2 L8, plus `key edit`, L16 console parts)
 - Owns `commands/{providers,keys}.rs` (providers, slots, login with the wizard trigger,
   logout, keys, key info, key edit, generate, load, export, csr, delete) and
-  `c2-services::{keyload, keyexport, certops}`. It calls the R14/R15 hooks for
+  `r2-services::{keyload, keyexport, certops}`. It calls the R14/R15 hooks for
   `--template`/`--kek`.
 - Ports `providers_cmd.py`, `keys_cmd.py` (minus the `--kek`/`key template` paths),
   `services/{keyload,keyexport,certops}.py`; `unit/console/{test_providers_cmd,
@@ -583,7 +588,7 @@ in R1/R2/R3/R4/R5/R8/R10, because the ported spec already describes the final st
   resident-key rendering, `ops` capability filtering.
 
 **R10 — Template editor & copy** (c2 L10, plus the L16 data-copy route)
-- Owns `c2-console::template_editor`, `commands/copy.rs`, `c2-services::transfer`.
+- Owns `r2-console::template_editor`, `commands/copy.rs`, `r2-services::transfer`.
 - Ports `template_editor.py`, `copy_cmd.py`, `services/transfer.py`;
   `test_template_editor`, `test_copy_cmd`, `test_transfer`, the transfer part of
   `test_objects_services`, `integration/test_copy`.
@@ -593,7 +598,7 @@ in R1/R2/R3/R4/R5/R8/R10, because the ported spec already describes the final st
   path; SoftHSM mem↔SoftHSM↔SoftHSM copies give identical ciphertexts; the refusal UX.
 
 **R11 — SoftHSM wizard** (c2 L11)
-- Owns `c2-console::wizard`.
+- Owns `r2-console::wizard`.
 - Ports `wizard.py`; `unit/console/test_wizard`, `integration/test_wizard`.
 - Accept: a ScriptedIo run against a fresh temp token dir gives a working provider; the
   decline path; the conf file and appended config entry match c2 §5.13; the
@@ -607,7 +612,7 @@ in R1/R2/R3/R4/R5/R8/R10, because the ported spec already describes the final st
   old-glibc container; SHA256SUMS published.
 
 **R14 — Template files** (c2 L14)
-- Owns `c2-services::templatefile` (codec + `build_seed`, NAME-based kind resolution,
+- Owns `r2-services::templatefile` (codec + `build_seed`, NAME-based kind resolution,
   `NON_CREATION_ATTRS`) and `commands/key_template.rs`, and fills in the
   `load_seed_file` hook.
 - Ports `services/templatefile.py`; `unit/services/test_templatefile` and the
@@ -617,7 +622,7 @@ in R1/R2/R3/R4/R5/R8/R10, because the ported spec already describes the final st
   Rust c2, and vice versa.**
 
 **R15 — Wrapped-key load/export** (c2 L15)
-- Owns `c2-services::wrapload` (the six-row direction-aware table, KEK resolution,
+- Owns `r2-services::wrapload` (the six-row direction-aware table, KEK resolution,
   `load_wrapped`, `wrap_for_export`) and `commands/kek.rs`, and fills in the R8 hooks.
 - Ports `services/wrapload.py` plus the `--kek` paths of `keys_cmd.py`;
   `test_wrapload`, `test_load_kek`, `test_export_kek`, `integration/test_load_kek`.
@@ -641,7 +646,7 @@ in R1/R2/R3/R4/R5/R8/R10, because the ported spec already describes the final st
    path) or `n/a:<reason>`. Examples of `n/a`: mypy Protocol conformance, importlib
    discovery, prompt_toolkit sticky-kwargs regressions. R13 requires zero `todo` rows.
 2. **Doubles, as in c2 §4.10.** ScriptedIo for every interactive flow; FakeProvider for
-   console, ops and services; FakeBackend only inside `c2-pkcs11`; the contract macro
+   console, ops and services; FakeBackend only inside `r2-pkcs11`; the contract macro
    instantiated for FakeProvider (both presentations), MemoryProvider and Pkcs11Provider
    on SoftHSM.
 3. **KATs and properties.** c2's vectors are copied verbatim. Round-trips cover every
@@ -650,7 +655,7 @@ in R1/R2/R3/R4/R5/R8/R10, because the ported spec already describes the final st
    otherwise, and they fail hard when SoftHSM is missing. This is stricter than pytest's
    skip plus `--softhsm-required`, and nothing can hide behind a skip.
    - `scripts/softhsm-init.sh` initializes the shared token *before* the test process
-     starts. It exports `SOFTHSM2_CONF` and `C2_TEST_SOFTHSM_*`, so tests never mutate
+     starts. It exports `SOFTHSM2_CONF` and `R2_TEST_SOFTHSM_*`, so tests never mutate
      the environment.
    - nextest's process-per-test model plus `unique_label()` keeps the tests isolated.
    - Wizard tests spawn the binary with their own fresh `SOFTHSM2_CONF`.
@@ -658,6 +663,8 @@ in R1/R2/R3/R4/R5/R8/R10, because the ported spec already describes the final st
    temp `--config`; `insta` snapshots cover help, tables and error panels.
 6. **Differential parity harness** (`parity/`, R13, optional CI job that checks out
    c2@408d6f2 and runs `uv sync`):
+   - Both sides get equivalent configs (`c2.yaml`/`r2.yaml`); the prompt and tool name
+     are normalized before comparing.
    - *Transcript diff:* identical scripted sessions piped into both binaries on the
      memory provider, restricted to deterministic operations (AES-ECB/CBC/CTR/GCM with
      pinned IVs, CMAC, GMAC, HMAC, RSA-PKCS1 and Ed25519 signatures, loads, exports).
@@ -665,7 +672,7 @@ in R1/R2/R3/R4/R5/R8/R10, because the ported spec already describes the final st
      glyphs.
    - *Artifact interop:* every file format is exported by one implementation and loaded
      by the other (PKCS#8 plain and encrypted, SPKI, X.509, PKCS#12, CSR, wrapped blobs in
-     three encodings, template YAML, history file, user config files).
+     three encodings, template YAML, user config files renamed to `r2.yaml`).
    - *Shared token:* both implementations run against **one** SoftHSM token dir. Objects
      created by each (every kind, keypairs, PKCS#12 imports, data objects) are listed,
      used and copied by the other. This is the strongest check that attribute layouts
@@ -730,16 +737,11 @@ Build settings:
 | c2 keeps evolving and the targets diverge | M / H | freeze rule in §11; any c2 change carries its r2 spec and ledger entry |
 | Scope creep (for example batch mode, because the plain reader makes it tempting) | M / M | no features before M3; list them for post-parity loops |
 
-## 13. Decisions to confirm
+## 13. Decisions (confirmed)
 
-These are the defaults this plan assumes. Changing one changes S0.
-
-1. **Crypto backend: OpenSSL (`openssl` crate, vendored)** — recommended for
-   byte-identical parity with pyca. The alternative, pure-Rust RustCrypto, gives an
-   easier static build but has gaps (Ed448/X448 maturity, PKCS#12 building, traditional
-   encrypted PEM) and an open RSA timing advisory.
-2. **Binary and config identity: keep `c2`** (binary name, `c2.yaml`, `C2_CONFIG`,
-   config/state dirs), as a drop-in replacement. `r2` stays the repository name only.
-3. **Line editor: `rustyline`** — recommended for its non-TTY fallback and explicit
-   history control. `reedline` is the alternative if dropdown completion menus are wanted.
+1. **Crypto backend: OpenSSL** (`openssl` crate, vendored for releases).
+2. **Name: r2 everywhere** — binary, prompt, config file and env var, dirs, crates, logs.
+   c2 and r2 coexist; they share tokens and data file formats, not config/state files.
+3. **Line editor: `reedline`** for the nicer TUI (dropdown completion menus, hints,
+   highlighting), with a plain reader for non-TTY stdin.
 4. **c2 freeze** at 408d6f2 until M3, with the mirror rule in §11.
