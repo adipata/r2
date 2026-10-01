@@ -26,7 +26,7 @@ interpretation, and anything a later loop must know.
 | ID | State | Commit/PR | Date | Deviations / notes |
 |----|-------|-----------|------|--------------------|
 | S0 | done | `S0:` commits | 2026-10-01 | spec.md, loops.md, CLAUDE.md, parity ledger; spikes recorded in spec |
-| R0 | todo | | | |
+| R0 | done | `R0:` commits | 2026-10-01 | No §4.11 change. Skeleton = S0 generator re-run on the final spec §4 (identical to the seed modulo provenance comments; 640 §4 items checked present) + mandated bodies of §4.1.1; additions: `.gitignore` (/target), `license = "GPL-3.0-only"` in [workspace.package] (c2 LICENSE is the plain GPLv3 text), header comments in manifests/configs. SoftHSM fixture: `UniqueLabel { label, token }`; `unique_label()` requires the fixture; the fixture and its self-test take no `global_state_lock()` (env read-only, nextest-only; the lock is still R1's stub). softhsm-init.sh refuses a non-empty DIR/tokens and reads the probe list from defaults.yaml; it and build-softhsm.sh (opendnssec/SoftHSMv2 tag, cached prefix ~/.local/softhsm-<v>) verified locally on SoftHSM 2.6.1 and 2.7.0. deny: `der` deny-multiple-versions, other duplicates warn, GPL-compatible license allow-list. nextest: softhsm group = `test(/softhsm/) | binary(/softhsm/)`, max-threads 1. CI (not runnable here; actionlint + shellcheck clean): Windows OpenSSL via vcpkg x64-windows-static-md, msrv = pinned toolchain `--all-features`. Extra tests: `r2-core::r0_mandated` (mandated r2-core bodies), softhsm.rs in-file env-parsing tests, teardown-deletion test. |
 | R1 | todo | | | |
 | R2 | todo | | | |
 | R3 | todo | | | |

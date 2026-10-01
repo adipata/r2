@@ -86,8 +86,8 @@ tests/integration/test_pkcs11_provider.py::TestInitToken::test_init_token_label_
 tests/integration/test_pkcs11_provider.py::TestKeyEdit::test_edit_mixes_applied_and_refused_attributes,1,R5b,todo,,softhsm
 tests/integration/test_pkcs11_provider.py::TestKeyEdit::test_read_key_template_snapshots_the_object,1,R5b,todo,,softhsm
 tests/integration/test_pkcs11_provider.py::TestKeyEdit::test_keypair_half_rename_leaves_sibling,1,R5b,todo,,softhsm
-tests/integration/test_softhsm_fixture.py::test_softhsm_token_is_initialized_and_listed,1,R0,todo,,softhsm
-tests/integration/test_softhsm_fixture.py::test_unique_label_is_fresh_per_use,1,R0,todo,,softhsm
+tests/integration/test_softhsm_fixture.py::test_softhsm_token_is_initialized_and_listed,1,R0,ported,r2-testkit::softhsm_fixture test_softhsm_token_is_initialized_and_listed,"softhsm | feature softhsm; token R2TEST (D7) initialized by scripts/softhsm-init.sh before the test process, fails (never skips) when the env is missing (§4.10.5)"
+tests/integration/test_softhsm_fixture.py::test_unique_label_is_fresh_per_use,1,R0,ported,r2-testkit::softhsm_fixture test_unique_label_is_fresh_per_use ; r2-testkit::softhsm_fixture test_unique_label_drop_deletes_objects_created_under_it,softhsm | feature softhsm; prefix r2test- (D7); r2 adds a teardown-deletion test (pkcs11-tool)
 tests/integration/test_wizard.py::test_wizard_yields_working_provider,1,R11,todo,,softhsm
 tests/integration/test_wizard.py::test_wizard_falls_back_to_softhsm2_util,1,R11,todo,,softhsm
 tests/unit/console/test_app.py::test_build_operation_registry_registers_builtins_and_customs,1,R3,todo,,build_operation_registry moved to R3 (spec §4.1.1): r2_ops::registry
@@ -1215,9 +1215,9 @@ tests/unit/test_provider_base.py::TestFakeProviderBehavior::test_same_class_dupl
 tests/unit/test_provider_base.py::TestFakeProviderBehavior::test_class_selector_overrides_pair_preference,1,R3,todo,,
 tests/unit/test_provider_base.py::TestFakeProviderBehavior::test_resolve_ref_with_class_and_handle_selectors,1,R3,todo,,
 tests/unit/test_smoke.py::test_subpackage_imports,9,R0,n/a:python-import-mechanics,,importlib of every c2 subpackage; Rust: the workspace build proves each crate exists
-tests/unit/test_smoke.py::test_version_string,1,R0,todo,,R0 card: test_smoke (version part)
-tests/unit/test_smoke.py::test_version_matches_distribution_metadata,1,R0,todo,,Rust: `r2 --version` prints CARGO_PKG_VERSION (workspace version)
-tests/unit/test_smoke.py::test_main_version_flag,1,R0,todo,,R0 card: r2-cli stub --version
+tests/unit/test_smoke.py::test_version_string,1,R0,ported,r2-cli::smoke test_version_string,R0 card: test_smoke (version part) | CARGO_PKG_VERSION is a non-empty MAJOR.MINOR.PATCH
+tests/unit/test_smoke.py::test_version_matches_distribution_metadata,1,R0,ported,r2-cli::smoke test_version_matches_distribution_metadata,Rust: `r2 --version` prints CARGO_PKG_VERSION (workspace version) | [workspace.package] version == CARGO_PKG_VERSION == `r2 --version` output
+tests/unit/test_smoke.py::test_main_version_flag,1,R0,ported,r2-cli::smoke test_main_version_flag,"R0 card: r2-cli stub --version | assert_cmd: `r2 --version` exits 0, stdout exactly ""r2 <version>\n"""
 tests/unit/test_smoke.py::test_main_help_flag_lists_cli_options,1,R7,todo,,clap --help lists --version/--config/--debug
 tests/unit/test_smoke.py::test_main_config_flag_with_missing_file_is_a_hard_error,1,R7,todo,,
 tests/unit/test_transfer.py::TestAesTransport::test_sensitive_but_extractable_key_copies_via_wrap,1,R10,todo,,
