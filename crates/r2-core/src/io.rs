@@ -1,5 +1,4 @@
-// R0 skeleton — owner R1 (generated from spec §4)
-// ---- spec §4.9.1 block 0
+// Interaction traits and the Renderable model (spec §4.9.1/§4.9.2; owner R1).
 use crate::error::{ConsoleError, ErrorKind, Result};
 use crate::params::ParamSpec;
 use crate::template::KeyTemplate;
@@ -80,8 +79,25 @@ pub trait ConsoleIo {
 /// loses `f`'s result. The only sanctioned way to call `busy` (it avoids the
 /// `Option<Result<T>>` dance under `-D clippy::unwrap_used`).
 pub fn busy_with<T>(io: &dyn ConsoleIo, message: &str, f: impl FnOnce() -> T) -> T {
-    let _ = (io, message, f);
-    unimplemented!("R1")
+    let mut job = Some(f);
+    let mut result = None;
+    io.busy(message, &mut || {
+        if let Some(job) = job.take() {
+            result = Some(job());
+        }
+    });
+    match (result, job) {
+        (Some(value), _) => value,
+        // Contract violation (the implementation never ran `f`): run it here.
+        (None, Some(job)) => job(),
+        // Unreachable: `job` is only taken by the closure, which then stores its result.
+        (None, None) => busy_with_unreachable(),
+    }
+}
+
+#[cold]
+fn busy_with_unreachable() -> ! {
+    unreachable!("busy_with: the closure took the job without storing its result")
 }
 
 /// One-method hook (frozen-provisional, §4.11). Edits a copy; returns the edited template;
@@ -100,7 +116,7 @@ impl TemplateEditor for IdentityTemplateEditor {
         Ok(template)
     }
 }
-// ---- spec §4.9.2 block 0
+// ---- Renderable model (spec §4.9.2) ----
 /// Text style. Error = bold red, Danger = red.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Tone {
@@ -165,23 +181,64 @@ impl From<String> for Renderable {
 /// Red-bordered panel titled "error": message line (Tone::Error), then "hint: {hint}"
 /// (Tone::Dim) when given.
 pub fn error_panel(message: &str, hint: Option<&str>) -> Renderable {
-    let _ = (message, hint);
-    unimplemented!("R1")
+    let mut body = vec![vec![Span {
+        text: message.to_owned(),
+        tone: Tone::Error,
+    }]];
+    // c2 `if err.hint:` — an empty hint is no hint.
+    if let Some(hint) = hint.filter(|hint| !hint.is_empty()) {
+        body.push(vec![Span {
+            text: format!("hint: {hint}"),
+            tone: Tone::Dim,
+        }]);
+    }
+    Renderable::Panel(PanelData {
+        title: Some("error".to_owned()),
+        subtitle: None,
+        border: Tone::Danger,
+        body,
+    })
 }
 /// The physical row of `line` containing byte offset `pos` (clamped to 0..=len), then a
 /// row of spaces + "^" (Tone::Error) whose column is the unicode-width display width of
 /// the row prefix before `pos`.
 pub fn caret(line: &str, pos: usize) -> Renderable {
-    let _ = (line, pos);
-    unimplemented!("R1")
+    let mut pos = pos.min(line.len());
+    while !line.is_char_boundary(pos) {
+        pos -= 1;
+    }
+    let row_start = line[..pos].rfind('\n').map_or(0, |i| i + 1);
+    let row_end = line[pos..].find('\n').map_or(line.len(), |i| pos + i);
+    let column = crate::render::display_width(&line[row_start..pos]);
+    Renderable::Styled(vec![
+        vec![Span {
+            text: line[row_start..row_end].to_owned(),
+            tone: Tone::Plain,
+        }],
+        vec![
+            Span {
+                text: " ".repeat(column),
+                tone: Tone::Plain,
+            },
+            Span {
+                text: "^".to_owned(),
+                tone: Tone::Error,
+            },
+        ],
+    ])
 }
 /// Uniform table used by every command (cells verbatim).
 pub fn table(title: Option<&str>, columns: &[&str], rows: Vec<Vec<String>>) -> Renderable {
-    let _ = (title, columns, rows);
-    unimplemented!("R1")
+    Renderable::Table(TableData {
+        title: title.map(str::to_owned),
+        columns: columns.iter().map(|column| (*column).to_owned()).collect(),
+        rows,
+    })
 }
 /// Hex dump panel (c2 `render.hex_panel`).
 pub fn hex(data: &[u8], title: Option<&str>) -> Renderable {
-    let _ = (data, title);
-    unimplemented!("R1")
+    Renderable::Hex {
+        data: data.to_vec(),
+        title: title.map(str::to_owned),
+    }
 }

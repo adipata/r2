@@ -1,4 +1,4 @@
-// R0 skeleton — owner R1 (generated from spec §4)
+// r2-core crate root (owner R1; R0 wrote the module list).
 #![forbid(unsafe_code)]
 //! r2-core (spec §4.2–§4.4, §4.6.1, §4.7, §4.9.1/§4.9.2/§4.9.8).
 pub mod catalog;

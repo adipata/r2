@@ -1023,6 +1023,7 @@ dependencies = [
  "r2-testkit",
  "secrecy",
  "spki",
+ "tempfile",
  "tracing",
  "unicode-width",
  "x509-cert",

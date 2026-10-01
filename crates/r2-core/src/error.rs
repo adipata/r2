@@ -1,5 +1,4 @@
-// R0 skeleton — owner R1 (generated from spec §4)
-// ---- spec §4.2 block 0
+// Errors (spec §4.2; owner R1).
 use std::borrow::Cow;
 use std::fmt;
 
@@ -78,30 +77,73 @@ pub enum ErrorKind {
 impl ErrorKind {
     /// The c2 class name ("ParamError", "Pkcs11Error", …) — for logs and test assertions.
     pub fn class_name(&self) -> &'static str {
-        unimplemented!("R1")
+        match self {
+            ErrorKind::Generic => "ConsoleError",
+            ErrorKind::Config => "ConfigError",
+            ErrorKind::Parse { .. } => "ParseError",
+            ErrorKind::Codec => "CodecError",
+            ErrorKind::KeyParse => "KeyParseError",
+            ErrorKind::DataIo => "DataIOError",
+            ErrorKind::Provider => "ProviderError",
+            ErrorKind::ProviderUnavailable => "ProviderUnavailableError",
+            ErrorKind::ProviderNotFound => "ProviderNotFoundError",
+            ErrorKind::AuthRequired => "AuthRequiredError",
+            ErrorKind::AlreadyLoggedIn => "AlreadyLoggedInError",
+            ErrorKind::Pkcs11 { .. } => "Pkcs11Error",
+            ErrorKind::KeyLookup => "KeyLookupError",
+            ErrorKind::KeyNotFound => "KeyNotFoundError",
+            ErrorKind::AmbiguousKey { .. } => "AmbiguousKeyError",
+            ErrorKind::DuplicateKey => "DuplicateKeyError",
+            ErrorKind::KeyNotExportable => "KeyNotExportableError",
+            ErrorKind::Operation => "OperationError",
+            ErrorKind::UnknownOperation => "UnknownOperationError",
+            ErrorKind::UnsupportedOperation => "UnsupportedOperationError",
+            ErrorKind::Param { .. } => "ParamError",
+            ErrorKind::Crypto => "CryptoError",
+            ErrorKind::UserAbort => "UserAbort",
+        }
     }
     /// ProviderError family: Provider, ProviderUnavailable, ProviderNotFound, AuthRequired,
     /// AlreadyLoggedIn, Pkcs11.
     pub fn is_provider(&self) -> bool {
-        unimplemented!("R1")
+        matches!(
+            self,
+            ErrorKind::Provider
+                | ErrorKind::ProviderUnavailable
+                | ErrorKind::ProviderNotFound
+                | ErrorKind::AuthRequired
+                | ErrorKind::AlreadyLoggedIn
+                | ErrorKind::Pkcs11 { .. }
+        )
     }
     /// KeyLookupError family: KeyLookup, KeyNotFound, AmbiguousKey, DuplicateKey.
     pub fn is_key_lookup(&self) -> bool {
-        unimplemented!("R1")
+        matches!(
+            self,
+            ErrorKind::KeyLookup
+                | ErrorKind::KeyNotFound
+                | ErrorKind::AmbiguousKey { .. }
+                | ErrorKind::DuplicateKey
+        )
     }
     /// OperationError family: Operation, UnknownOperation, UnsupportedOperation, Param, Crypto.
     pub fn is_operation(&self) -> bool {
-        unimplemented!("R1")
+        matches!(
+            self,
+            ErrorKind::Operation
+                | ErrorKind::UnknownOperation
+                | ErrorKind::UnsupportedOperation
+                | ErrorKind::Param { .. }
+                | ErrorKind::Crypto
+        )
     }
     /// UserAbort (c2's KeyboardInterrupt/EOFError/UserAbort path — never swallowed, below).
     pub fn is_user_abort(&self) -> bool {
-        unimplemented!("R1")
+        matches!(self, ErrorKind::UserAbort)
     }
 }
 
 impl ConsoleError {
-    // R0 mandated working bodies (§4.1.1): `new`, `with_hint`, `with_hint_opt`, `generic`,
-    // `crypto` and `not_implemented`, so skeleton stubs return Err instead of panicking.
     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
         Self {
             kind,
@@ -126,95 +168,91 @@ impl ConsoleError {
         Self::new(ErrorKind::Generic, message)
     }
     pub fn config(message: impl Into<String>) -> Self {
-        let _ = message;
-        unimplemented!("R1")
+        Self::new(ErrorKind::Config, message)
     }
     pub fn parse(message: impl Into<String>, line: impl Into<String>, pos: usize) -> Self {
-        let _ = (message, line, pos);
-        unimplemented!("R1")
+        Self::new(
+            ErrorKind::Parse {
+                line: line.into(),
+                pos,
+            },
+            message,
+        )
     }
     pub fn codec(message: impl Into<String>) -> Self {
-        let _ = message;
-        unimplemented!("R1")
+        Self::new(ErrorKind::Codec, message)
     }
     pub fn key_parse(message: impl Into<String>) -> Self {
-        let _ = message;
-        unimplemented!("R1")
+        Self::new(ErrorKind::KeyParse, message)
     }
     pub fn data_io(message: impl Into<String>) -> Self {
-        let _ = message;
-        unimplemented!("R1")
+        Self::new(ErrorKind::DataIo, message)
     }
     pub fn provider(message: impl Into<String>) -> Self {
-        let _ = message;
-        unimplemented!("R1")
+        Self::new(ErrorKind::Provider, message)
     }
     pub fn provider_unavailable(message: impl Into<String>) -> Self {
-        let _ = message;
-        unimplemented!("R1")
+        Self::new(ErrorKind::ProviderUnavailable, message)
     }
     pub fn provider_not_found(message: impl Into<String>) -> Self {
-        let _ = message;
-        unimplemented!("R1")
+        Self::new(ErrorKind::ProviderNotFound, message)
     }
     pub fn auth_required(message: impl Into<String>) -> Self {
-        let _ = message;
-        unimplemented!("R1")
+        Self::new(ErrorKind::AuthRequired, message)
     }
     pub fn already_logged_in(message: impl Into<String>) -> Self {
-        let _ = message;
-        unimplemented!("R1")
+        Self::new(ErrorKind::AlreadyLoggedIn, message)
     }
     pub fn pkcs11(
         message: impl Into<String>,
         ckr_code: u64,
         ckr_name: impl Into<Cow<'static, str>>,
     ) -> Self {
-        let _ = (message, ckr_code, ckr_name);
-        unimplemented!("R1")
+        Self::new(
+            ErrorKind::Pkcs11 {
+                ckr_code,
+                ckr_name: ckr_name.into(),
+            },
+            message,
+        )
     }
     pub fn key_lookup(message: impl Into<String>) -> Self {
-        let _ = message;
-        unimplemented!("R1")
+        Self::new(ErrorKind::KeyLookup, message)
     }
     pub fn key_not_found(message: impl Into<String>) -> Self {
-        let _ = message;
-        unimplemented!("R1")
+        Self::new(ErrorKind::KeyNotFound, message)
     }
     pub fn ambiguous_key(message: impl Into<String>, candidates: Vec<KeyRef>) -> Self {
-        let _ = (message, candidates);
-        unimplemented!("R1")
+        Self::new(ErrorKind::AmbiguousKey { candidates }, message)
     }
     pub fn duplicate_key(message: impl Into<String>) -> Self {
-        let _ = message;
-        unimplemented!("R1")
+        Self::new(ErrorKind::DuplicateKey, message)
     }
     pub fn key_not_exportable(message: impl Into<String>) -> Self {
-        let _ = message;
-        unimplemented!("R1")
+        Self::new(ErrorKind::KeyNotExportable, message)
     }
     pub fn operation(message: impl Into<String>) -> Self {
-        let _ = message;
-        unimplemented!("R1")
+        Self::new(ErrorKind::Operation, message)
     }
     pub fn unknown_operation(message: impl Into<String>) -> Self {
-        let _ = message;
-        unimplemented!("R1")
+        Self::new(ErrorKind::UnknownOperation, message)
     }
     pub fn unsupported(message: impl Into<String>) -> Self {
-        let _ = message;
-        unimplemented!("R1")
+        Self::new(ErrorKind::UnsupportedOperation, message)
     }
     pub fn param(message: impl Into<String>, param_name: impl Into<String>) -> Self {
-        let _ = (message, param_name);
-        unimplemented!("R1")
+        Self::new(
+            ErrorKind::Param {
+                param_name: param_name.into(),
+            },
+            message,
+        )
     }
     pub fn crypto(message: impl Into<String>) -> Self {
         Self::new(ErrorKind::Crypto, message)
     }
     pub fn user_abort(message: impl Into<String>) -> Self {
-        let _ = message;
-        unimplemented!("R1")
+        Self::new(ErrorKind::UserAbort, message)
     }
     /// R0 skeleton stub error: Generic, message `not implemented (<loop>)`, e.g. "not implemented (R4)".
     pub fn not_implemented(owner_loop: &str) -> Self {
@@ -223,16 +261,28 @@ impl ConsoleError {
 
     // Field accessors (None when the kind does not carry the field):
     pub fn param_name(&self) -> Option<&str> {
-        unimplemented!("R1")
+        match &self.kind {
+            ErrorKind::Param { param_name } => Some(param_name),
+            _ => None,
+        }
     }
     pub fn ckr(&self) -> Option<(u64, &str)> {
-        unimplemented!("R1")
+        match &self.kind {
+            ErrorKind::Pkcs11 { ckr_code, ckr_name } => Some((*ckr_code, ckr_name.as_ref())),
+            _ => None,
+        }
     }
     pub fn candidates(&self) -> Option<&[KeyRef]> {
-        unimplemented!("R1")
+        match &self.kind {
+            ErrorKind::AmbiguousKey { candidates } => Some(candidates),
+            _ => None,
+        }
     }
     pub fn parse_position(&self) -> Option<(&str, usize)> {
-        unimplemented!("R1")
+        match &self.kind {
+            ErrorKind::Parse { line, pos } => Some((line, *pos)),
+            _ => None,
+        }
     }
 }
 
