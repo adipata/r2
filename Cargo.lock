@@ -974,6 +974,7 @@ dependencies = [
  "r2-core",
  "r2-testkit",
  "serde_yaml_ng",
+ "tempfile",
  "tracing",
  "yaml-rust2",
 ]

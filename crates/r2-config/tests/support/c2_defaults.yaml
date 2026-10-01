@@ -1,0 +1,106 @@
+app:
+  history_file: "~/.local/state/c2/history"
+  log:
+    level: info            # debug|info|warning|error
+    file: "~/.local/state/c2/c2.log"
+    max_bytes: 1048576
+    backups: 3
+
+ui:
+  color: auto              # auto|always|never
+  hex_group: 2             # bytes per group in hex output; 0 = continuous
+  hex_width: 32            # bytes per line
+  confirm_delete: true
+
+providers:
+  memory:
+    enabled: true
+    name: mem
+  pkcs11: []               # external config typically overrides this list wholesale:
+  # pkcs11:
+  #   - name: prodhsm
+  #     library: /usr/lib/libvendor_pkcs11.so
+  #     slot: null           # optional: preselect slot id
+  #     token_label: null    # optional: preselect token by label
+  #     env: {}              # extra env vars set before C_Initialize
+
+softhsm:
+  autodetect: true
+  provider_name: softhsm
+  search_paths:
+    - /opt/homebrew/lib/softhsm/libsofthsm2.so                 # macOS brew (ARM)
+    - /usr/local/lib/softhsm/libsofthsm2.so                    # macOS brew (Intel) / generic
+    - /opt/homebrew/opt/softhsm/lib/softhsm/libsofthsm2.so
+    - /usr/lib/softhsm/libsofthsm2.so                          # Debian/Ubuntu (legacy)
+    - /usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so         # Debian/Ubuntu
+    - /usr/lib/aarch64-linux-gnu/softhsm/libsofthsm2.so
+    - /usr/lib64/softhsm/libsofthsm2.so                        # Fedora/RHEL
+    - /usr/lib64/pkcs11/libsofthsm2.so
+    - "C:/SoftHSM2/lib/softhsm2-x64.dll"                       # Windows
+  conf_dir: "~/.config/c2/softhsm2"     # wizard writes softhsm2.conf here
+  token_dir: "~/.local/state/c2/softhsm2/tokens"
+
+# Policy/usage attributes only. CKA_CLASS/CKA_KEY_TYPE (locked rows), CKA_LABEL/CKA_ID
+# (from --label/--id; an identity row added in the editor is honored, spec §4.7) and
+# material attributes are injected by the loader — never listed here. Secure defaults:
+# operators consciously enable extractability in the always-shown template editor.
+templates:
+  pkcs11:
+    aes:
+      CKA_TOKEN: true
+      CKA_PRIVATE: true
+      CKA_SENSITIVE: true
+      CKA_EXTRACTABLE: false
+      CKA_ENCRYPT: true
+      CKA_DECRYPT: true
+      CKA_SIGN: true         # CMAC/GMAC
+      CKA_VERIFY: true
+      CKA_WRAP: false
+      CKA_UNWRAP: false
+    generic_secret:          # CKK_GENERIC_SECRET (HMAC / KDF input keys)
+      CKA_TOKEN: true
+      CKA_PRIVATE: true
+      CKA_SENSITIVE: true
+      CKA_EXTRACTABLE: false
+      CKA_SIGN: true         # HMAC
+      CKA_VERIFY: true
+      CKA_DERIVE: true
+    rsa_private:
+      CKA_TOKEN: true
+      CKA_PRIVATE: true
+      CKA_SENSITIVE: true
+      CKA_EXTRACTABLE: false
+      CKA_DECRYPT: true
+      CKA_SIGN: true
+      CKA_UNWRAP: false
+    rsa_public:
+      CKA_TOKEN: true
+      CKA_PRIVATE: false
+      CKA_ENCRYPT: true
+      CKA_VERIFY: true
+      CKA_WRAP: false
+    ec_private:
+      CKA_TOKEN: true
+      CKA_PRIVATE: true
+      CKA_SENSITIVE: true
+      CKA_EXTRACTABLE: false
+      CKA_SIGN: true
+      CKA_DERIVE: true
+    ec_public:
+      CKA_TOKEN: true
+      CKA_PRIVATE: false
+      CKA_VERIFY: true
+      CKA_DERIVE: true
+    certificate:
+      CKA_TOKEN: true
+      CKA_PRIVATE: false
+    data:                    # CKO_DATA objects (CKA_VALUE + optional CKA_APPLICATION/CKA_OBJECT_ID)
+      CKA_TOKEN: true
+      CKA_PRIVATE: true
+  # Vendor attributes added to the standard CKA_* list everywhere attributes
+  # are handled by name: the template editor's `add`, `key template` dumps and
+  # `--template` file seeding (§5.16). Each entry: NAME: {code, kind}, e.g.
+  #   CKA_ACME_USAGE: {code: 0x80000101, kind: bytes}   # kind: bool|str|bytes|ulong
+  custom_attributes: {}
+
+custom_mechanisms: []      # entry schema: spec §4.8 / example §5.14
