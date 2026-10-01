@@ -78,7 +78,9 @@ impl FromStr for OutFormat {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// `Debug` by hand: `token` (the pasted payload — possibly key material or plaintext) is
+/// shown as `Some("<N chars>")`.
+#[derive(Clone, PartialEq, Eq)]
 pub struct DataInput {
     /// "inline" | the file path as displayed — for messages.
     pub origin: String,
@@ -87,6 +89,20 @@ pub struct DataInput {
     /// File form only.
     pub path: Option<PathBuf>,
     pub fmt: InFormat,
+}
+impl fmt::Debug for DataInput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let token = self
+            .token
+            .as_ref()
+            .map(|token| format!("<{} chars>", token.chars().count()));
+        f.debug_struct("DataInput")
+            .field("origin", &self.origin)
+            .field("token", &token)
+            .field("path", &self.path)
+            .field("fmt", &self.fmt)
+            .finish()
+    }
 }
 impl DataInput {
     pub fn inline(token: impl Into<String>) -> Self {
@@ -143,7 +159,13 @@ impl DataInput {
                         ))
                         .with_hint("use --format raw for binary files")
                     })?;
-                let forced = Zeroizing::new(format!("{}:{text}", self.fmt));
+                // "{fmt}:{text}" — the file's secret text again: one allocation, wiped.
+                let prefix = self.fmt.as_str();
+                let mut forced =
+                    Zeroizing::new(String::with_capacity(prefix.len() + 1 + text.len()));
+                forced.push_str(prefix);
+                forced.push(':');
+                forced.push_str(text);
                 decode_data(&forced).map(|(data, _)| data)
             }
             InFormat::Auto => {
@@ -207,17 +229,7 @@ impl DataOutput {
             )));
             return Ok(());
         };
-        let payload: Zeroizing<Vec<u8>> = match self.fmt {
-            OutFormat::Raw => Zeroizing::new(data.to_vec()),
-            OutFormat::Hex => Zeroizing::new(format!("{}\n", hex::encode(data)).into_bytes()),
-            OutFormat::B64 => Zeroizing::new(
-                format!(
-                    "{}\n",
-                    base64::engine::general_purpose::STANDARD.encode(data)
-                )
-                .into_bytes(),
-            ),
-        };
+        let payload = encode_output(data, self.fmt)?;
         std::fs::write(path, &*payload).map_err(|err| {
             ConsoleError::data_io(format!(
                 "cannot write {}: {}",
@@ -226,4 +238,32 @@ impl DataOutput {
             ))
         })
     }
+}
+
+/// The file payload of `DataOutput::write`, encoded straight into one pre-sized buffer that
+/// is wiped on drop (no unwiped hex/base64 temporaries of the secret).
+fn encode_output(data: &[u8], fmt: OutFormat) -> Result<Zeroizing<Vec<u8>>> {
+    let too_large = || ConsoleError::data_io(format!("cannot encode {} bytes", data.len()));
+    let mut out = match fmt {
+        OutFormat::Raw => return Ok(Zeroizing::new(data.to_vec())),
+        OutFormat::Hex => {
+            let len = data.len().checked_mul(2).ok_or_else(too_large)?;
+            let mut out = Zeroizing::new(vec![0u8; len + 1]);
+            hex::encode_to_slice(data, &mut out[..len]).map_err(|_| too_large())?;
+            out
+        }
+        OutFormat::B64 => {
+            let len = base64::encoded_len(data.len(), true).ok_or_else(too_large)?;
+            let mut out = Zeroizing::new(vec![0u8; len + 1]);
+            let written = base64::engine::general_purpose::STANDARD
+                .encode_slice(data, &mut out[..len])
+                .map_err(|_| too_large())?;
+            out.truncate(written + 1);
+            out
+        }
+    };
+    if let Some(last) = out.last_mut() {
+        *last = b'\n';
+    }
+    Ok(out)
 }

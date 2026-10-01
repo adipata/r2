@@ -59,9 +59,8 @@ pub fn decode_data(text: &str) -> Result<(Zeroizing<Vec<u8>>, InputFormat)> {
 
     if is_hex_text(&compact)
         && compact.len().is_multiple_of(2)
-        && let Ok(data) = hex::decode(&compact)
+        && let Some(data) = hex_decode(&compact)
     {
-        let data = Zeroizing::new(data);
         if data.starts_with(b"-----BEGIN") {
             return Ok((reparse_wrapped_pem(&data, "hex")?, InputFormat::Pem));
         }
@@ -108,9 +107,21 @@ pub fn format_hex(data: &[u8], group: usize, width: usize) -> String {
 
 // ---- helpers ---------------------------------------------------------------------------
 
-/// c2 `_WS_RE.sub("", text)` (`\s` of a str pattern = `str.isspace()`).
-fn remove_whitespace(text: &str) -> String {
-    text.chars().filter(|&c| !is_py_space(c)).collect()
+/// c2 `_WS_RE.sub("", text)` (`\s` of a str pattern = `str.isspace()`). The result is the
+/// pasted secret (hex/base64 text of a key): one allocation of `text.len()` bytes, never
+/// reallocated, wiped on drop.
+fn remove_whitespace(text: &str) -> Zeroizing<String> {
+    let mut out = Zeroizing::new(String::with_capacity(text.len()));
+    out.extend(text.chars().filter(|&c| !is_py_space(c)));
+    out
+}
+
+/// `bytes.fromhex` of validated hex text (even length, hex digits only) into one
+/// zeroizing buffer; None if the text is not hex after all.
+fn hex_decode(text: &str) -> Option<Zeroizing<Vec<u8>>> {
+    let mut out = Zeroizing::new(vec![0u8; text.len() / 2]);
+    hex::decode_to_slice(text, &mut out[..]).ok()?;
+    Some(out)
 }
 
 /// `^[0-9A-Fa-f]+$`
@@ -141,9 +152,7 @@ fn forced_hex(content: &str) -> Result<Zeroizing<Vec<u8>>> {
     if !is_hex_text(&compact) || !compact.len().is_multiple_of(2) {
         return Err(failed());
     }
-    hex::decode(&compact)
-        .map(Zeroizing::new)
-        .map_err(|_| failed())
+    hex_decode(&compact).ok_or_else(failed)
 }
 
 fn forced_b64(content: &str) -> Result<Zeroizing<Vec<u8>>> {
@@ -315,8 +324,9 @@ fn is_pem_header_line(line: &str) -> bool {
     false
 }
 
-/// c2 `_split_pem_headers`: (header lines, remaining body text).
-fn split_pem_headers(body: &str) -> (Vec<&str>, String) {
+/// c2 `_split_pem_headers`: (header lines, remaining body text — a copy of the secret
+/// base64, wiped on drop).
+fn split_pem_headers(body: &str) -> (Vec<&str>, Zeroizing<String>) {
     let lines = py_splitlines(body);
     let mut index = 0;
     while index < lines.len() && py_strip(lines[index]).is_empty() {
@@ -336,9 +346,10 @@ fn split_pem_headers(body: &str) -> (Vec<&str>, String) {
         index += 1;
     }
     if headers.is_empty() {
-        return (headers, body.to_owned());
+        return (headers, Zeroizing::new(body.to_owned()));
     }
-    (headers, lines[index..].join("\n"))
+    // `join` allocates the exact length once.
+    (headers, Zeroizing::new(lines[index..].join("\n")))
 }
 
 /// c2 `_rewrap_pem`: every block kept in order, RFC 1421 headers preserved (plus one blank
@@ -352,7 +363,8 @@ fn rewrap_pem(text: &str) -> Result<Zeroizing<Vec<u8>>> {
                 .with_hint("a PEM block is '-----BEGIN <LABEL>----- … -----END <LABEL>-----'"),
         );
     }
-    let mut blocks: Vec<String> = Vec::with_capacity(blocks_found.len());
+    // Every intermediate holds the secret's text: wiped on drop, allocated once.
+    let mut blocks: Vec<Zeroizing<String>> = Vec::with_capacity(blocks_found.len());
     for block in blocks_found {
         let begin_label = py_strip(block.begin_label);
         let end_label = py_strip(block.end_label);
@@ -390,11 +402,18 @@ fn rewrap_pem(text: &str) -> Result<Zeroizing<Vec<u8>>> {
         }
         let end = format!("-----END {begin_label}-----");
         lines.push(&end);
-        blocks.push(lines.join("\n"));
+        blocks.push(Zeroizing::new(lines.join("\n")));
     }
-    let mut out = blocks.join("\n");
-    out.push('\n');
-    Ok(Zeroizing::new(out.into_bytes()))
+    let total = blocks.iter().map(|block| block.len() + 1).sum();
+    let mut out = Zeroizing::new(Vec::with_capacity(total));
+    for (index, block) in blocks.iter().enumerate() {
+        if index > 0 {
+            out.push(b'\n');
+        }
+        out.extend_from_slice(block.as_bytes());
+    }
+    out.push(b'\n');
+    Ok(out)
 }
 
 #[cfg(test)]

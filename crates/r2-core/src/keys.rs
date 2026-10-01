@@ -350,7 +350,7 @@ pub struct KeyInfo {
 }
 
 /// Parsed key material in a §4.3 canonical format. `Debug` is implemented by hand and
-/// prints `data` as "<N bytes>" (key bytes never reach logs or panic messages).
+/// prints `data` as `"<N bytes>"` (key bytes never reach logs or panic messages).
 #[derive(Clone, PartialEq, Eq)]
 pub struct KeyMaterial {
     pub algorithm: KeyAlgorithm,
@@ -419,8 +419,8 @@ pub fn class_selector(token: &str) -> Option<KeyClass> {
 }
 
 /// THE ref-grammar parser (never reimplemented; ProviderRegistry::resolve_ref and the
-/// `--kek` resolver use it). 'prov:label#0a1b:priv@7' →
-/// ParsedRef{provider:"prov", label:"label", key_id:Some([0x0a,0x1b]), key_class:Some(Private), handle:Some(7)}.
+/// `--kek` resolver use it). `'prov:label#0a1b:priv@7'` →
+/// `ParsedRef{provider:"prov", label:"label", key_id:Some([0x0a,0x1b]), key_class:Some(Private), handle:Some(7)}`.
 pub fn parse_ref(reference: &str) -> Result<ParsedRef> {
     let error = |message: String, pos: usize| ConsoleError::parse(message, reference, pos);
     let Some(colon) = reference.find(':') else {

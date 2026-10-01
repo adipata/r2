@@ -1016,7 +1016,6 @@ dependencies = [
  "comfy-table",
  "const-oid",
  "der",
- "difflib",
  "hex",
  "indexmap",
  "openssl",
@@ -1025,7 +1024,6 @@ dependencies = [
  "spki",
  "tempfile",
  "tracing",
- "unicode-width",
  "x509-cert",
  "zeroize",
 ]

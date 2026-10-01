@@ -66,6 +66,110 @@ fn hex_panel_matches_rich_vectors() {
     );
 }
 
+/// rich `Panel(Text(body), title=Text(t), subtitle=Text(s), expand=False)`: control codes
+/// stripped, an empty (or all-control) title/subtitle is none, a content width below 1
+/// renders no content line.
+#[test]
+fn generic_panel_matches_rich_vectors() {
+    let mut failures = Vec::new();
+    for &(title, subtitle, body, width, expected) in rich_panels::GENERIC_PANELS {
+        let panel = Renderable::Panel(PanelData {
+            title: title.map(str::to_owned),
+            subtitle: subtitle.map(str::to_owned),
+            border: Tone::Plain,
+            body: body.map_or_else(Vec::new, |body| {
+                body.split('\n')
+                    .map(|line| {
+                        vec![Span {
+                            text: line.to_owned(),
+                            tone: Tone::Plain,
+                        }]
+                    })
+                    .collect()
+            }),
+        });
+        let got = render_plain(&panel, &at(width));
+        if got != expected {
+            failures.push(format!(
+                "title {title:?} subtitle {subtitle:?} body {body:?} width {width}\n--- rich\n{expected}\n--- r2\n{got}"
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} mismatches:\n{}",
+        failures.len(),
+        failures.join("\n\n")
+    );
+}
+
+/// c2 prints a str with `console.print(s, markup=False)`: rich's Text layout (control codes
+/// stripped, tabs expanded, words wrapped and long words folded at the console width).
+#[test]
+fn text_matches_rich_vectors() {
+    let mut failures = Vec::new();
+    for &(text, width, expected) in rich_panels::TEXTS {
+        let got = render_plain(&Renderable::from(text), &at(width));
+        if got != expected {
+            failures.push(format!(
+                "text {text:?} width {width}\n--- rich\n{expected:?}\n--- r2\n{got:?}"
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} mismatches:\n{}",
+        failures.len(),
+        failures.join("\n\n")
+    );
+}
+
+/// The caret echo laid out by rich (row and caret line wrap independently), with r2's caret
+/// column (§11 D14: display width of the tab-expanded, control-stripped prefix).
+#[test]
+fn caret_matches_rich_layout_vectors() {
+    let mut failures = Vec::new();
+    for &(line, pos, width, expected) in rich_panels::CARETS {
+        let got = render_plain(&caret(line, pos), &at(width));
+        if got != expected {
+            failures.push(format!(
+                "line {line:?} pos {pos} width {width}\n--- rich\n{expected:?}\n--- r2\n{got:?}"
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} mismatches:\n{}",
+        failures.len(),
+        failures.join("\n\n")
+    );
+}
+
+/// rich 15 `cell_len` (its own Unicode 17 table, ZWJ/VS16 graphemes, C0/C1 = 0), observed
+/// through the caret column of a caret placed after the whole text.
+#[test]
+fn cell_widths_match_rich_cell_len() {
+    let mut failures = Vec::new();
+    for &(text, expected) in rich_panels::CELL_LENS {
+        let plain = render_plain(&caret(text, text.len()), &at(200));
+        let caret_line = plain.rsplit('\n').next().unwrap();
+        let got = caret_line.chars().count() - 1;
+        if got != expected {
+            let points: Vec<String> = text
+                .chars()
+                .map(|c| format!("U+{:04X}", u32::from(c)))
+                .collect();
+            failures.push(format!("{points:?}: rich {expected}, r2 {got}"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} mismatches:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
 /// c2 `rendered()`: the tests print through a width-100 console.
 fn rendered(renderable: &Renderable) -> String {
     render_plain(renderable, &at(100))
@@ -135,6 +239,27 @@ fn caret_column_is_display_width() {
     assert_eq!(render_plain(&caret("ab\ncd", 2), &at(100)), "ab\n  ^");
     assert_eq!(render_plain(&caret("ab\ncd", 3), &at(100)), "cd\n^");
     assert_eq!(render_plain(&caret("", 0), &at(100)), "\n^");
+    // The row is laid out like rich's Text (tabs expanded to 8, control codes stripped) and
+    // the caret column is measured on that layout: under the character on screen (c2 put
+    // it at the character index, §11 D14).
+    assert_eq!(
+        render_plain(&caret("a\tb:#zz", 2), &at(100)),
+        "a       b:#zz\n        ^"
+    );
+    assert_eq!(
+        render_plain(&caret("load\tmem x", 9), &at(100)),
+        "load    mem x\n            ^"
+    );
+    assert_eq!(
+        render_plain(&caret("abc\rdef", 5), &at(100)),
+        "abcdef\n    ^"
+    );
+    // A combining mark is zero-width: the caret stays under the following 'x'.
+    let combining = "key info e\u{301}x";
+    assert_eq!(
+        render_plain(&caret(combining, combining.len() - 1), &at(100)),
+        format!("{combining}\n{}^", " ".repeat(10))
+    );
     // The caret is bold red (Tone::Error).
     let Renderable::Styled(lines) = caret("ab", 1) else {
         panic!("caret is a Styled renderable");
@@ -232,6 +357,29 @@ fn table_layout_is_simple_head() {
     // … and words longer than the table fold (rich `overflow="fold"`).
     let tiny = table(Some("a long title"), &["a"], vec![vec!["1".into()]]);
     assert_eq!(rendered(&tiny), " a\nlon\n g\ntit\nle\n a\n───\n 1");
+    // rich `if self.title:` — an empty (or all-control-code) title is no title; a table
+    // with no columns renders nothing, title included.
+    let untitled = table(None, &["a"], vec![vec!["x".into()]]);
+    for title in ["", "\r", "\u{7}\u{8}"] {
+        let t = table(Some(title), &["a"], vec![vec!["x".into()]]);
+        assert_eq!(rendered(&t), rendered(&untitled), "{title:?}");
+    }
+    assert_eq!(rendered(&table(Some("t"), &[], vec![])), "");
+    // Cells, headers and title hold rich's Text: BEL/BS/VT/FF/CR stripped (a CR would
+    // otherwise move the terminal cursor and overwrite the row).
+    let t = table(
+        Some("ti\rtle"),
+        &["re\u{7}f", "class"],
+        vec![vec![
+            "softhsm:label\r".into(),
+            "sec\u{8}ret\u{b}\u{c}".into(),
+        ]],
+    );
+    let plain = rendered(&t);
+    assert_eq!(
+        plain,
+        "         title\n ref             class\n────────────────────────\n softhsm:label   secret"
+    );
     // The width caps the table (Dynamic arrangement wraps cell content).
     let wide = table(None, &["text"], vec![vec!["word ".repeat(30)]]);
     let lines = render_plain(&wide, &at(40));
@@ -242,13 +390,48 @@ fn table_layout_is_simple_head() {
     assert!(lines.lines().count() > 3);
 }
 
+/// Text and Styled are laid out like rich's Text (§4.9.2): never markup, BEL/BS/VT/FF/CR
+/// stripped, tabs expanded to 8 columns, wrapped at spaces and folded at the width (c2
+/// printed every str through `console.print`).
 #[test]
-fn text_and_styled_render_verbatim() {
+fn text_and_styled_render_like_rich_text() {
     let long = "x".repeat(300);
-    assert_eq!(render_plain(&Renderable::Text(long.clone()), &at(80)), long);
+    assert_eq!(
+        render_plain(&Renderable::Text(long.clone()), &at(80)),
+        [&long[..80], &long[80..160], &long[160..240], &long[240..]].join("\n")
+    );
+    assert_eq!(
+        render_plain(&Renderable::Text(long.clone()), &RenderConfig::CAPTURE),
+        [&long[..200], &long[200..]].join("\n")
+    );
     assert_eq!(
         render_plain(&Renderable::from("a [b] c\n  d"), &at(80)),
         "a [b] c\n  d"
+    );
+    assert_eq!(
+        render_plain(&Renderable::from("a\tb"), &at(80)),
+        "a       b"
+    );
+    assert_eq!(
+        render_plain(&Renderable::from("one\rtwo\u{7}\u{8}\u{b}\u{c}"), &at(80)),
+        "onetwo"
+    );
+    assert_eq!(
+        render_plain(&Renderable::from("usage: one two three"), &at(10)),
+        "usage: one\ntwo three"
+    );
+    // §11 D23: emoji shortcodes are data, never replaced (c2 printed "generated mem❌ok:y").
+    assert_eq!(
+        render(
+            &Renderable::from("generated mem:x:ok:y (256-bit aes)"),
+            &at(80)
+        ),
+        "generated mem:x:ok:y (256-bit aes)"
+    );
+    // ESC is not one of rich's stripped control codes (the `clear` sequence passes).
+    assert_eq!(
+        render(&Renderable::from("\u{1b}[2J\u{1b}[H"), &at(80)),
+        "\u{1b}[2J\u{1b}[H"
     );
     let styled = Renderable::Styled(vec![
         vec![
@@ -271,6 +454,14 @@ fn text_and_styled_render_verbatim() {
     assert_eq!(
         ansi,
         "load \u{1b}[1mmem\u{1b}[0m\n\u{1b}[1m\u{1b}[31m^\u{1b}[0m"
+    );
+    // A styled line folds like Text, keeping each character's tone.
+    // (rich: 'loa\nd \nmem\n^' — the fold keeps "d " whole, rstrip_end only trims beyond
+    // the width.)
+    assert_eq!(render_plain(&styled, &at(3)), "loa\nd \nmem\n^");
+    assert_eq!(
+        render(&styled, &at(3)),
+        "loa\nd \n\u{1b}[1mmem\u{1b}[0m\n\u{1b}[1m\u{1b}[31m^\u{1b}[0m"
     );
 }
 
@@ -320,7 +511,19 @@ fn generic_panel_with_title_and_subtitle() {
         border: Tone::Danger,
         body: vec![],
     });
-    assert_eq!(render_plain(&no_title, &at(80)), "╭──╮\n│  │\n╰──╯");
+    // rich: no title and a content width of 0 → no content line at all.
+    assert_eq!(render_plain(&no_title, &at(80)), "╭──╮\n╰──╯");
+    // With a title the (empty) content gets its one blank line.
+    let titled_empty = Renderable::Panel(PanelData {
+        title: Some("t".into()),
+        subtitle: None,
+        border: Tone::Plain,
+        body: vec![],
+    });
+    assert_eq!(
+        render_plain(&titled_empty, &at(80)),
+        "╭─ t ─╮\n│     │\n╰─────╯"
+    );
 }
 
 #[test]

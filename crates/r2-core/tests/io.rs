@@ -1,13 +1,45 @@
-//! Interaction-trait tests (spec §4.9.1) — the c2 `tests/unit/core/test_io_protocols.py`
-//! layering case. (Its two structural Protocol checks are compiler-enforced in Rust:
-//! `impl ConsoleIo for ScriptedIo` / `impl TemplateEditor for IdentityTemplateEditor`, ledger
-//! n/a; the identity editor's behavior is pinned in scripted_io.rs.)
+//! Interaction-trait tests (spec §4.9.1) — port of c2 `tests/unit/core/test_io_protocols.py`.
+//! The structural half of its two Protocol cases is compiler-enforced in Rust (`impl
+//! ConsoleIo for ScriptedIo`, `impl TemplateEditor for IdentityTemplateEditor`); their
+//! behavioral assertions are ported below, through `&dyn` trait objects.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::print_stdout,
     clippy::print_stderr
 )]
+
+use r2_core::io::{ConsoleIo, IdentityTemplateEditor, Renderable, TemplateEditor};
+use r2_core::template::{AttrKind, AttrValue, KeyTemplate, TemplateAttr};
+use r2_testkit::ScriptedIo;
+
+fn use_io(io: &dyn ConsoleIo) {
+    io.print(Renderable::from("via protocol"));
+}
+
+fn use_editor(editor: &dyn TemplateEditor, template: KeyTemplate) -> KeyTemplate {
+    editor.edit(template, "Edit template").unwrap()
+}
+
+#[test]
+fn test_scripted_io_passes_as_console_io_argument() {
+    let io = ScriptedIo::empty();
+    use_io(&io); // ScriptedIo accepted where a ConsoleIo is required
+    assert_eq!(io.output(), ["via protocol"]);
+}
+
+#[test]
+fn test_identity_editor_satisfies_template_editor_protocol() {
+    let template = KeyTemplate::new(vec![TemplateAttr::new(
+        "CKA_TOKEN",
+        AttrKind::Bool,
+        AttrValue::Bool(true),
+    )]);
+    assert_eq!(
+        use_editor(&IdentityTemplateEditor, template.clone()),
+        template
+    );
+}
 
 /// The `[dependencies]` keys of r2-core's manifest.
 fn core_dependencies() -> Vec<String> {
@@ -30,8 +62,8 @@ fn core_dependencies() -> Vec<String> {
 
 /// c2 §3.1: core never imports prompt_toolkit/rich/console. In r2 the crate graph enforces
 /// layering (§4.1.2): r2-core depends on exactly its third-party list — no terminal or
-/// line-editor crate and no workspace crate (the renderer's comfy-table/anstream/anstyle/
-/// unicode-width are permitted there because ScriptedIo stores rendered text, §4.1.2).
+/// line-editor crate and no workspace crate (the renderer's comfy-table/anstream/anstyle
+/// are permitted there because ScriptedIo stores rendered text, §4.1.2).
 #[test]
 fn test_core_stays_console_free() {
     let mut deps = core_dependencies();
@@ -47,11 +79,9 @@ fn test_core_stays_console_free() {
         "indexmap",
         "hex",
         "base64",
-        "difflib",
         "comfy-table",
         "anstream",
         "anstyle",
-        "unicode-width",
         "tracing",
     ];
     allowed.sort_unstable();

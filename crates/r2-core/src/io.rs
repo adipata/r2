@@ -155,9 +155,10 @@ pub struct PanelData {
 /// cannot happen).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Renderable {
-    /// Verbatim text (may contain newlines).
+    /// Plain text (may contain newlines); never markup. Laid out like rich's `Text`
+    /// (control codes stripped, tabs expanded, fold-wrapped at the width; §4.9.2).
     Text(String),
-    /// Pre-styled lines (caret echo, banners).
+    /// Pre-styled lines (caret echo, banners); laid out like `Text`.
     Styled(Vec<Line>),
     Table(TableData),
     /// Grouped hex dump panel; grouping/width from RenderConfig at render time.
@@ -200,8 +201,9 @@ pub fn error_panel(message: &str, hint: Option<&str>) -> Renderable {
     })
 }
 /// The physical row of `line` containing byte offset `pos` (clamped to 0..=len), then a
-/// row of spaces + "^" (Tone::Error) whose column is the unicode-width display width of
-/// the row prefix before `pos`.
+/// row of spaces + "^" (Tone::Error) whose column is the display width of the row prefix
+/// before `pos` as the renderer lays the row out (rich cell widths, control codes stripped,
+/// tabs expanded to 8 columns; §4.9.2, §11 D14).
 pub fn caret(line: &str, pos: usize) -> Renderable {
     let mut pos = pos.min(line.len());
     while !line.is_char_boundary(pos) {
@@ -209,7 +211,7 @@ pub fn caret(line: &str, pos: usize) -> Renderable {
     }
     let row_start = line[..pos].rfind('\n').map_or(0, |i| i + 1);
     let row_end = line[pos..].find('\n').map_or(line.len(), |i| pos + i);
-    let column = crate::render::display_width(&line[row_start..pos]);
+    let column = crate::render::caret_column(&line[row_start..pos]);
     Renderable::Styled(vec![
         vec![Span {
             text: line[row_start..row_end].to_owned(),
@@ -227,7 +229,8 @@ pub fn caret(line: &str, pos: usize) -> Renderable {
         ],
     ])
 }
-/// Uniform table used by every command (cells verbatim).
+/// Uniform table used by every command (cells are data, never markup; control codes
+/// stripped as in rich).
 pub fn table(title: Option<&str>, columns: &[&str], rows: Vec<Vec<String>>) -> Renderable {
     Renderable::Table(TableData {
         title: title.map(str::to_owned),

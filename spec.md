@@ -210,7 +210,7 @@ Rules (summary of §4.1.2/§4.1.3):
   `r2-cli` (review rule).
 - **Interaction traits and the renderer live in `r2-core`.** `ConsoleIo`, `TemplateEditor`
   and `Renderable` are defined in `r2_core::io`, and `render`/`render_plain` in
-  `r2_core::render` (comfy-table, anstyle, unicode-width, anstream's `strip_str`; comfy-table's
+  `r2_core::render` (comfy-table, anstyle, anstream's `strip_str`; comfy-table's
   default `tty` feature pulls crossterm in transitively, but r2-core does no terminal I/O).
   The reedline/rpassword/crossterm/indicatif implementations, the Sink and the
   TerminalIo/PlainIo switch (`r2_console::io::open_console_io`) live in `r2-console`.
@@ -705,7 +705,7 @@ Third-party dependencies per crate (normal dependencies; versions in §4.1.4):
 
 | crate | third-party dependencies |
 |---|---|
-| r2-core | `openssl`, `der`, `spki`, `x509-cert`, `const-oid`, `secrecy`, `zeroize`, `indexmap`, `hex`, `base64`, `difflib`, `comfy-table`, `anstream`, `anstyle`, `unicode-width`, `tracing` |
+| r2-core | `openssl`, `der`, `spki`, `x509-cert`, `const-oid`, `secrecy`, `zeroize`, `indexmap`, `hex`, `base64`, `comfy-table`, `anstream`, `anstyle`, `tracing` |
 | r2-config | `serde_yaml_ng`, `yaml-rust2`, `indexmap`, `tracing` |
 | r2-provider | `openssl`, `secrecy`, `zeroize`, `tracing` |
 | r2-ops | `indexmap`, `tracing` |
@@ -727,7 +727,8 @@ reviews can check a new line quickly):
 | `der`, `spki`, `x509-cert`, `const-oid` | `r2-core` only |
 | `serde_yaml_ng`, `yaml-rust2` | `r2-config` only (other crates use `r2_config::yaml`, §4.8.5) |
 | `reedline`, `crossterm`, `nu-ansi-term`, `rpassword`, `indicatif`, `console` | `r2-console` only (`nu-ansi-term` is reedline 0.49's `Style` type: `StyledText`, `DefaultHinter::with_style`; reedline does not re-export it) |
-| `comfy-table`, `anstyle`, `unicode-width` | `r2-core` (renderer), `r2-console` |
+| `comfy-table`, `anstyle` | `r2-core` (renderer), `r2-console` |
+| `unicode-width` | `r2-console` (r2-core's renderer measures with rich's own cell table, §4.9.2) |
 | `anstream` | `r2-core` (`strip_str` only), `r2-console` (Sink) |
 | `clap`, `ctrlc`, `tracing-subscriber`, `file-rotate`, `regex` | `r2-cli` only |
 | `tracing` | any crate |
@@ -841,7 +842,6 @@ serde_yaml_ng  = "0.10"             # Value / Mapping tree only (r2 parses and e
 yaml-rust2     = { version = "0.13", default-features = false }   # event parser (scalar styles)
 hex            = "0.4"
 base64         = "0.22"
-difflib        = "0.4"
 reedline       = "=0.49.0"
 crossterm      = { version = "=0.29.0", features = ["use-dev-tty"] }   # burst-stall fix, S0 spike 3
 nu-ansi-term   = "0.50"             # reedline 0.49's Style type (StyledText, DefaultHinter::with_style)
@@ -1281,7 +1281,7 @@ pub struct KeyInfo {
 }
 
 /// Parsed key material in a §4.3 canonical format. `Debug` is implemented by hand and
-/// prints `data` as "<N bytes>" (key bytes never reach logs or panic messages).
+/// prints `data` as `"<N bytes>"` (key bytes never reach logs or panic messages).
 #[derive(Clone, PartialEq, Eq)]
 pub struct KeyMaterial {
     pub algorithm: KeyAlgorithm,
@@ -1324,8 +1324,8 @@ pub const CLASS_SELECTORS: [(&str, KeyClass); 8] = [
 pub fn class_selector(token: &str) -> Option<KeyClass> { .. }
 
 /// THE ref-grammar parser (never reimplemented; ProviderRegistry::resolve_ref and the
-/// `--kek` resolver use it). 'prov:label#0a1b:priv@7' →
-/// ParsedRef{provider:"prov", label:"label", key_id:Some([0x0a,0x1b]), key_class:Some(Private), handle:Some(7)}.
+/// `--kek` resolver use it). `'prov:label#0a1b:priv@7'` →
+/// `ParsedRef{provider:"prov", label:"label", key_id:Some([0x0a,0x1b]), key_class:Some(Private), handle:Some(7)}`.
 pub fn parse_ref(reference: &str) -> Result<ParsedRef> { .. }
 
 /// Listing refs made unambiguous; see rules below.
@@ -1484,7 +1484,9 @@ impl fmt::Display for OutFormat { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> f
 /// Exact tokens; else Generic "unknown format {s!r}".
 impl FromStr for OutFormat { type Err = ConsoleError; fn from_str(s: &str) -> Result<Self> { .. } }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// `Debug` by hand: `token` (the pasted payload — possibly key material or plaintext) is
+/// shown as `Some("<N chars>")`.
+#[derive(Clone, PartialEq, Eq)]
 pub struct DataInput {
     /// "inline" | the file path as displayed — for messages.
     pub origin: String,
@@ -3900,9 +3902,10 @@ pub struct PanelData {
 /// cannot happen).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Renderable {
-    /// Verbatim text (may contain newlines).
+    /// Plain text (may contain newlines); never markup. Laid out like rich's `Text`
+    /// (control codes stripped, tabs expanded, fold-wrapped at the width; §4.9.2).
     Text(String),
-    /// Pre-styled lines (caret echo, banners).
+    /// Pre-styled lines (caret echo, banners); laid out like `Text`.
     Styled(Vec<Line>),
     Table(TableData),
     /// Grouped hex dump panel; grouping/width from RenderConfig at render time.
@@ -3916,10 +3919,12 @@ impl From<String> for Renderable { fn from(text: String) -> Self { Renderable::T
 /// (Tone::Dim) when given.
 pub fn error_panel(message: &str, hint: Option<&str>) -> Renderable { .. }
 /// The physical row of `line` containing byte offset `pos` (clamped to 0..=len), then a
-/// row of spaces + "^" (Tone::Error) whose column is the unicode-width display width of
-/// the row prefix before `pos`.
+/// row of spaces + "^" (Tone::Error) whose column is the display width of the row prefix
+/// before `pos` as the renderer lays the row out (rich cell widths, control codes stripped,
+/// tabs expanded to 8 columns; §4.9.2, §11 D14).
 pub fn caret(line: &str, pos: usize) -> Renderable { .. }
-/// Uniform table used by every command (cells verbatim).
+/// Uniform table used by every command (cells are data, never markup; control codes
+/// stripped as in rich).
 pub fn table(title: Option<&str>, columns: &[&str], rows: Vec<Vec<String>>) -> Renderable { .. }
 /// Hex dump panel (c2 `render.hex_panel`).
 pub fn hex(data: &[u8], title: Option<&str>) -> Renderable { .. }
@@ -3944,19 +3949,32 @@ pub fn render_plain(renderable: &Renderable, cfg: &RenderConfig) -> String { .. 
 
 Rendering rules (normative; layout differences from rich are D1):
 
+- **rich Text model** (everything c2 held in a rich `Text`: printed strings, the caret
+  echo, panel bodies, titles and subtitles, table cells, headers and title): BEL, BS, VT,
+  FF and CR are stripped (rich `strip_control_codes`; ESC is kept); widths are rich 15
+  cell widths — rich's own Unicode 17.0.0 table (C0/C1 controls 0), a ZWJ joins the next
+  character into the preceding grapheme (adding no width), VS16 widens rich's
+  `narrow_to_wide` characters to 2; tabs
+  expand to the next multiple of 8 cells; wrapping is rich `Text.wrap` (greedy at
+  whitespace, words wider than the width folded, `rstrip_end`, truncate).
 - **Table**: comfy-table `TableStyle` with only a header separator (fill/junction `─`,
   rich `box.SIMPLE_HEAD` look), `force_no_tty()` + `enforce_styling()` +
   `set_width(cfg.width)` + `ContentArrangement::Dynamic`, bold header cells, `trim_fmt()`;
-  the title is rendered by r2 as a centered italic line over the table body.
+  the title is rendered by r2 as a centered italic line over the table body; an empty
+  title is none, and a table with no columns and no rows renders "" (title included).
 - **Panel**: own renderer — rounded box (`╭─╮│╰╯`), title in the top border
   (`╭─ title ───╮`), subtitle right-aligned in the bottom border (`── 40 bytes ─╯`), width =
-  unwrapped content width capped at `cfg.width - 4` (rich `expand=False`), greedy word wrap
-  measured in unicode-width columns. Error panel: Danger border, bold red message, dim
-  hint — its text equals rich's.
+  unwrapped content width capped at `cfg.width - 4` (rich `expand=False`), the body laid
+  out by the rich Text model; an empty title or subtitle is none (rich `if self.title:`),
+  a content width below 1 renders no body line. Error panel: Danger border, bold red
+  message, dim hint — its text equals rich's.
 - **Hex**: Panel with `format_hex(data, cfg.hex_group, cfg.hex_width)` body, the given
   title, subtitle "{n} bytes"; empty data → body "(empty — 0 bytes)", no subtitle.
   Byte-identical to c2/rich at 80 columns.
-- **Text**: verbatim. **Styled**: spans concatenated per line.
+- **Text** and **Styled** (spans per line, their tones kept): laid out by the rich Text
+  model at `cfg.width`, i.e. exactly what c2's `console.print(str, markup=False)` /
+  `console.print(Text)` printed apart from §11 D1's highlighting and D23's emoji codes (a
+  width of 0 — never produced by the width rule below — leaves the lines unwrapped).
 - Width (rich 15 `Console.size`, recomputed per print): when the sink is a terminal
   (§4.9.7 `is_terminal`) and `TERM` is `dumb`/`unknown` (case-insensitive) → 80, unless
   BOTH `$COLUMNS` and `$LINES` are all ASCII digits (then `$COLUMNS`); otherwise `$COLUMNS`
@@ -7117,20 +7135,32 @@ names the test or harness check that pins the deviation.
 
 **D1 — Rendering glyphs and layout.**
 - *Description*: tables are drawn by comfy-table with a header rule only (c2: rich
-  `box.SIMPLE_HEAD`): same columns, same cell content, but no outer edge spaces or blank edge
-  rows, the header rule spans the computed width, and a table title is an r2-rendered,
-  centered italic line. Panels (error panel, hex dump) are an own renderer whose output
-  equals rich's at 80 columns; other panel layouts and wrapping may differ in spacing. The
-  colour/terminal decision and the width rule are NOT deviations: they reproduce rich 15
-  exactly (§4.9.7 `resolve_color`: `never`/`NO_COLOR` keep bold/dim/italic, `TTY_COMPATIBLE`,
-  `FORCE_COLOR` incl. set-but-empty, `TERM` dumb/unknown in any case, `CLICOLOR*` ignored;
-  §4.9.2 width: `$COLUMNS` first). The one remaining styling difference: on a legacy
-  Windows console without VT support, rich used its Win32 renderer while anstream falls back
-  to wincon colours.
+  `box.SIMPLE_HEAD`): same columns, same cell content (control codes stripped as rich did),
+  but no outer edge spaces or blank edge rows, the header rule spans the computed width, a
+  table title is an r2-rendered, centered italic line, and comfy-table measures cells with
+  unicode-width (column widths may differ where that differs from rich's cell table).
+  Printed text, the caret echo and panels (error panel, hex dump, any `PanelData`) are an
+  own port of rich 15's Text/Panel layout (§4.9.2) and equal rich's output at every console
+  width of 2 or more; residuals: cell widths are rich's Unicode 17.0.0 table (rich's
+  `UNICODE_VERSION` environment override is not honoured), and below width 2 (never
+  produced by the width rule) rich cropped to the console. The colour/terminal decision and
+  the width rule are NOT deviations: they reproduce rich 15 exactly (§4.9.7 `resolve_color`:
+  `never`/`NO_COLOR` keep bold/dim/italic, `TTY_COMPATIBLE`, `FORCE_COLOR` incl.
+  set-but-empty, `TERM` dumb/unknown in any case, `CLICOLOR*` ignored; §4.9.2 width:
+  `$COLUMNS` first). The remaining styling differences: (a) c2 printed every plain string
+  with rich's default `highlight=True`, so on a colour terminal rich's `ReprHighlighter`
+  coloured numbers, quoted strings, `True`/`False`/`None`, paths, URLs, UUIDs and brackets
+  inside ordinary output lines; r2 prints plain text unstyled (rich measured each
+  highlighted segment on its own, so a ZWJ or combining mark right at a highlight boundary
+  could also shift a line break or crop a character in c2 — layout otherwise identical);
+  (b) on a legacy Windows console without VT support, rich used its Win32 renderer while
+  anstream falls back to wincon colours.
 - *Reason*: different renderer (decision PLAN §3/§13).
 - *Verified by*: `insta` snapshots; the parity harness compares content after normalizing
-  table glyphs; the error-panel and hex-panel unit tests assert rich-identical text;
-  `resolve_color` unit tests over the rich 15 truth table.
+  table glyphs; the R1 renderer tests assert rich-identical text for error, hex and generic
+  panels, printed text, caret layouts and `cell_len` (vectors generated with rich 15,
+  `crates/r2-core/tests/support/gen_rich_panels.py`); `resolve_color` unit tests over the
+  rich 15 truth table.
 
 **D2 — Plain line I/O for non-terminal and degraded sessions, on every OS.**
 - *Description*: when stdin or stdout is not a terminal (crossterm `IsTty`), or
@@ -7327,10 +7357,15 @@ merges).**
 
 **D14 — Parse-error caret column measured in display width.**
 - *Description*: `ParseError.pos` and token positions are byte offsets into the UTF-8 line;
-  the caret is placed at the unicode display width of the text before the offset. c2 used
-  the character index. The caret lands in the same column for ASCII and for narrow
-  non-ASCII text (e.g. Cyrillic labels); it differs only when wide characters (CJK, emoji)
-  precede the error, where r2's caret is the correctly aligned one.
+  the caret is placed at the display width of the row text before the offset as the
+  echoed row is laid out (rich cell widths, BEL/BS/VT/FF/CR stripped, tabs expanded to 8
+  columns; the row itself is echoed exactly as c2's rich did). c2 used the character
+  index. The caret lands in the same column wherever every preceding character is one
+  cell wide (ASCII text, Cyrillic labels); it differs when wide characters (CJK, emoji:
+  2 cells), zero-width ones (combining marks, ZWJ/VS16 sequences, ZWSP, C0/C1 controls
+  incl. the stripped CR) or a TAB (expanded to the next multiple of 8) precede the error —
+  in every such case r2's caret sits under the offending character on screen, c2's did
+  not.
 - *Reason*: byte offsets are the native Rust string index; display width is the correct
   column (S0 terminal spike).
 - *Verified by*: R7 parser/render tests; ported c2 vectors with non-ASCII text are converted
@@ -7458,6 +7493,18 @@ merges).**
 - *Verified by*: R1 `py_path` unit tests (POSIX vectors generated with CPython; Windows
   vectors under `cfg(windows)` for the plain cases).
 
+**D23 — Emoji shortcodes in printed text are not replaced.**
+- *Description*: c2 printed every plain string with rich's default `emoji=True`, so any
+  `:name:` that is a rich emoji code was replaced in the output — on terminals and in
+  piped sessions alike (e.g. `generate mem aes --label x:ok:y` printed `generated mem❌ok:y
+  (256-bit aes)`; `:key:`, `:id:`, `:lock:`, `:a:` … are emoji codes too). Labels, refs,
+  paths and data are data: r2 prints them verbatim. Panels, tables, titles and the caret
+  echo were never affected in c2 (they were rich `Text`).
+- *Reason*: a c2 bug — output must not alter labels or refs the operator copies back into
+  commands.
+- *Verified by*: R1 renderer tests (`Renderable::Text` keeps `:x:`; the generated
+  plain-text vectors assert that no input depends on emoji replacement).
+
 **Resolved without deviation** (recorded so they are not mistaken for gaps):
 
 - `DEK-Info: DES-CBC` traditional encrypted PEM: OpenSSL with the legacy provider could load
@@ -7487,5 +7534,8 @@ merges).**
   `CKA_KEY_TYPE` cells and template dumps name exactly what c2 names (codes PyKCS11 cannot
   name keep c2's `CKR_0x%08X` / `0x%08x` fallbacks).
 - Terminal/colour detection and console width follow rich 15 exactly (§4.9.2, §4.9.7); only
-  the legacy-Windows-console renderer differs (D1).
+  plain-text highlighting and the legacy-Windows-console renderer differ (D1).
+- Text layout (control-code stripping, tab expansion, fold wrapping at the console width)
+  and rich's cell widths (ZWJ/VS16 graphemes) are reproduced for printed strings, the caret
+  echo and panels (§4.9.2).
 - `difflib` suggestions match CPython including tie order (§4.2).

@@ -353,3 +353,54 @@ fn format_tokens_display_and_parse() {
         "unknown format 'HEX'"
     );
 }
+
+/// The inline token may be key material or plaintext: `Debug` (logs, panic messages,
+/// assert failures) shows only its length (§4.4.2, like `KeyMaterial`'s "<N bytes>").
+#[test]
+fn data_input_debug_never_shows_the_token() {
+    let secret = "hex:000102030405060708090a0b0c0d0e0f";
+    let shown = format!("{:?}", DataInput::inline(secret));
+    assert!(!shown.contains("000102"), "{shown}");
+    assert_eq!(
+        shown,
+        "DataInput { origin: \"inline\", token: Some(\"<36 chars>\"), path: None, fmt: Auto }"
+    );
+    let file = format!("{:?}", DataInput::file("k.bin", InFormat::Hex));
+    assert_eq!(
+        file,
+        "DataInput { origin: \"k.bin\", token: None, path: Some(\"k.bin\"), fmt: Hex }"
+    );
+    // Clone/PartialEq still compare the token itself.
+    assert_ne!(DataInput::inline("hex:00"), DataInput::inline("hex:01"));
+}
+
+/// The hex/base64 file payload is encoded straight into one wiped buffer; the bytes are
+/// unchanged (empty data → just the newline, as c2's f"{...}\n").
+#[test]
+fn file_write_encodings_of_edge_lengths() {
+    let dir = tempfile::tempdir().unwrap();
+    for (fmt, data, expected) in [
+        (OutFormat::Hex, &b""[..], &b"\n"[..]),
+        (OutFormat::B64, b"", b"\n"),
+        (OutFormat::B64, b"a", b"YQ==\n"),
+        (OutFormat::B64, b"ab", b"YWI=\n"),
+        (OutFormat::Hex, b"\x00\xff", b"00ff\n"),
+    ] {
+        let path = dir.path().join("out");
+        DataOutput::file(&path, fmt)
+            .write(data, &ScriptedIo::empty())
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), expected, "{fmt} {data:?}");
+    }
+    let data = binary().repeat(3);
+    for (fmt, expected) in [
+        (OutFormat::Hex, format!("{}\n", hex::encode(&data))),
+        (OutFormat::B64, format!("{}\n", STANDARD.encode(&data))),
+    ] {
+        let path = dir.path().join("big");
+        DataOutput::file(&path, fmt)
+            .write(&data, &ScriptedIo::empty())
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes(), "{fmt}");
+    }
+}
