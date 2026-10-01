@@ -402,14 +402,14 @@ tests/unit/console/test_providers_cmd.py::test_login_other_provider_never_consul
 tests/unit/console/test_providers_cmd.py::test_logout_drops_session_capabilities,1,R8,todo,,
 tests/unit/console/test_providers_cmd.py::test_logout_memory_unsupported,1,R8,todo,,
 tests/unit/console/test_providers_cmd.py::test_list_keys_after_logout_requires_auth,1,R8,todo,,
-tests/unit/console/test_render.py::test_error_panel_message_and_hint,1,R1,todo,,renderer moved to R1 (spec §4.1.1): r2_core::render::error_panel
-tests/unit/console/test_render.py::test_error_panel_without_hint,1,R1,todo,,renderer moved to R1 (spec §4.1.1): r2_core::render::error_panel
-tests/unit/console/test_render.py::test_caret_text_single_line,1,R1,todo,,renderer moved to R1 (spec §4.1.1): r2_core::render::caret_text
-tests/unit/console/test_render.py::test_caret_text_lands_on_the_right_physical_row,1,R1,todo,,renderer moved to R1 (spec §4.1.1): r2_core::render::caret_text
-tests/unit/console/test_render.py::test_caret_text_clamps_out_of_range_pos,1,R1,todo,,renderer moved to R1 (spec §4.1.1): r2_core::render::caret_text
-tests/unit/console/test_render.py::test_hex_panel_groups_and_length,1,R1,todo,,renderer moved to R1 (spec §4.1.1): r2_core::render::hex_panel
-tests/unit/console/test_render.py::test_hex_panel_empty,1,R1,todo,,renderer moved to R1 (spec §4.1.1): r2_core::render::hex_panel
-tests/unit/console/test_render.py::test_make_table_cells_are_stringified,1,R1,todo,,renderer moved to R1 (spec §4.1.1): r2_core::render::make_table
+tests/unit/console/test_render.py::test_error_panel_message_and_hint,1,R1,ported,r2-core::render test_error_panel_message_and_hint ; r2-core::render error_panel_matches_rich_vectors ; r2-core::render render_emits_ansi_and_render_plain_strips_it,"renderer moved to R1 (spec §4.1.1): r2_core::render::error_panel | R1: + rich-15 byte vectors (238 panels, widths 9..200)"
+tests/unit/console/test_render.py::test_error_panel_without_hint,1,R1,ported,r2-core::render test_error_panel_without_hint ; r2-core::render error_panel_matches_rich_vectors,renderer moved to R1 (spec §4.1.1): r2_core::render::error_panel
+tests/unit/console/test_render.py::test_caret_text_single_line,1,R1,ported,r2-core::render test_caret_text_single_line ; r2-core::render caret_column_is_display_width,renderer moved to R1 (spec §4.1.1): r2_core::render::caret_text
+tests/unit/console/test_render.py::test_caret_text_lands_on_the_right_physical_row,1,R1,ported,r2-core::render test_caret_text_lands_on_the_right_physical_row,renderer moved to R1 (spec §4.1.1): r2_core::render::caret_text
+tests/unit/console/test_render.py::test_caret_text_clamps_out_of_range_pos,1,R1,ported,r2-core::render test_caret_text_clamps_out_of_range_pos,renderer moved to R1 (spec §4.1.1): r2_core::render::caret_text | R1: c2 pos=-5 is unrepresentable (usize); 0 checked as the lower clamp
+tests/unit/console/test_render.py::test_hex_panel_groups_and_length,1,R1,ported,r2-core::render test_hex_panel_groups_and_length ; r2-core::render hex_panel_matches_rich_vectors,renderer moved to R1 (spec §4.1.1): r2_core::render::hex_panel
+tests/unit/console/test_render.py::test_hex_panel_empty,1,R1,ported,r2-core::render test_hex_panel_empty ; r2-core::render hex_panel_matches_rich_vectors,renderer moved to R1 (spec §4.1.1): r2_core::render::hex_panel
+tests/unit/console/test_render.py::test_make_table_cells_are_stringified,1,R1,ported,r2-core::render test_make_table_cells_are_stringified ; r2-core::render table_layout_is_simple_head,renderer moved to R1 (spec §4.1.1): r2_core::render::make_table
 tests/unit/console/test_render.py::test_suggest_close_match_and_none,1,R7,todo,,
 tests/unit/console/test_repl.py::test_help_then_exit,1,R7,todo,,
 tests/unit/console/test_repl.py::test_exit_via_repl_exit_ends_the_session,1,R7,todo,,
@@ -472,100 +472,100 @@ tests/unit/console/test_wizard.py::TestHelpers::test_write_softhsm_conf_failure_
 tests/unit/console/test_wizard.py::TestHelpers::test_append_rejects_non_mapping_file,1,R11,todo,,
 tests/unit/console/test_wizard.py::TestHelpers::test_append_to_empty_file,1,R11,todo,,
 tests/unit/console/test_wizard.py::TestHelpers::test_append_treats_null_sections_as_empty,2,R11,todo,,
-tests/unit/core/test_codec.py::test_decode_matrix,30,R1,todo,,
-tests/unit/core/test_codec.py::test_decode_malformed_raises_codec_error,20,R1,todo,,
-tests/unit/core/test_codec.py::test_unrecognized_input_message_and_hint_are_frozen,1,R1,todo,,
-tests/unit/core/test_codec.py::test_prefix_failure_never_falls_back,1,R1,todo,,
-tests/unit/core/test_codec.py::test_pem_returns_rewrapped_text_not_der,1,R1,todo,,
-tests/unit/core/test_codec.py::test_pem_multi_block_bundle_survives_as_text,1,R1,todo,,
-tests/unit/core/test_codec.py::test_real_pyca_pem_survives_mangling_and_reloads,1,R1,todo,,
-tests/unit/core/test_codec.py::test_format_hex_empty,1,R1,todo,,
-tests/unit/core/test_codec.py::test_format_hex_default_grouping,1,R1,todo,,
-tests/unit/core/test_codec.py::test_format_hex_group_and_width,1,R1,todo,,
-tests/unit/core/test_codec.py::test_format_hex_group_zero_is_continuous,1,R1,todo,,
-tests/unit/core/test_codec.py::test_format_hex_partial_tail_group,1,R1,todo,,
-tests/unit/core/test_codec.py::test_format_hex_is_lowercase,1,R1,todo,,
-tests/unit/core/test_datainput.py::test_inline_hex,1,R1,todo,,
-tests/unit/core/test_datainput.py::test_inline_goes_through_decode_data_prefixes,1,R1,todo,,
-tests/unit/core/test_datainput.py::test_inline_malformed_raises_codec_error,1,R1,todo,,
-tests/unit/core/test_datainput.py::test_file_defaults_to_auto_and_origin_is_path,1,R1,todo,,
-tests/unit/core/test_datainput.py::test_file_raw_is_verbatim,1,R1,todo,,
-tests/unit/core/test_datainput.py::test_file_raw_even_for_decodable_text,1,R1,todo,,
-tests/unit/core/test_datainput.py::test_file_auto_decodes_hex_text,1,R1,todo,,
-tests/unit/core/test_datainput.py::test_file_auto_decodes_base64_text,1,R1,todo,,
-tests/unit/core/test_datainput.py::test_file_auto_pem_returns_rewrapped_text_bytes,1,R1,todo,,
-tests/unit/core/test_datainput.py::test_file_auto_binary_falls_back_to_raw,1,R1,todo,,
-tests/unit/core/test_datainput.py::test_file_auto_undecodable_text_falls_back_to_raw,1,R1,todo,,
-tests/unit/core/test_datainput.py::test_file_forced_hex,1,R1,todo,,
-tests/unit/core/test_datainput.py::test_file_forced_b64,1,R1,todo,,
-tests/unit/core/test_datainput.py::test_file_forced_hex_garbage_raises_codec_error,1,R1,todo,,
-tests/unit/core/test_datainput.py::test_file_forced_hex_on_binary_raises_codec_error,1,R1,todo,,
-tests/unit/core/test_datainput.py::test_file_missing_raises_data_io_error,1,R1,todo,,
-tests/unit/core/test_datainput.py::test_console_write_renders_grouped_hex,1,R1,todo,,
-tests/unit/core/test_datainput.py::test_console_defaults,1,R1,todo,,
-tests/unit/core/test_datainput.py::test_file_write_raw,1,R1,todo,,
-tests/unit/core/test_datainput.py::test_file_write_hex_is_continuous_with_newline,1,R1,todo,,
-tests/unit/core/test_datainput.py::test_file_write_b64_with_newline,1,R1,todo,,
-tests/unit/core/test_datainput.py::test_file_write_failure_raises_data_io_error,1,R1,todo,,
-tests/unit/core/test_errors.py::test_hierarchy,22,R1,todo,,isinstance hierarchy -> ErrorKind family predicates (is_provider/is_key_lookup/is_operation)
-tests/unit/core/test_errors.py::test_console_error_message_and_hint,1,R1,todo,,
-tests/unit/core/test_errors.py::test_console_error_hint_defaults_to_none,1,R1,todo,,
+tests/unit/core/test_codec.py::test_decode_matrix,30,R1,ported,r2-core::codec test_decode_matrix ; r2-core::codec decode_data_matches_c2_on_differential_vectors,R1: + 62 differential vectors generated from c2 decode_data
+tests/unit/core/test_codec.py::test_decode_malformed_raises_codec_error,20,R1,ported,r2-core::codec test_decode_malformed_raises_codec_error ; r2-core::codec codec_messages_and_hints_are_c2_verbatim ; r2-core::codec decode_data_matches_c2_on_differential_vectors,
+tests/unit/core/test_codec.py::test_unrecognized_input_message_and_hint_are_frozen,1,R1,ported,r2-core::codec test_unrecognized_input_message_and_hint_are_frozen,
+tests/unit/core/test_codec.py::test_prefix_failure_never_falls_back,1,R1,ported,r2-core::codec test_prefix_failure_never_falls_back,
+tests/unit/core/test_codec.py::test_pem_returns_rewrapped_text_not_der,1,R1,ported,r2-core::codec test_pem_returns_rewrapped_text_not_der,
+tests/unit/core/test_codec.py::test_pem_multi_block_bundle_survives_as_text,1,R1,ported,r2-core::codec test_pem_multi_block_bundle_survives_as_text,
+tests/unit/core/test_codec.py::test_real_pyca_pem_survives_mangling_and_reloads,1,R1,ported,r2-core::codec test_real_pyca_pem_survives_mangling_and_reloads,
+tests/unit/core/test_codec.py::test_format_hex_empty,1,R1,ported,r2-core::codec test_format_hex_empty,
+tests/unit/core/test_codec.py::test_format_hex_default_grouping,1,R1,ported,r2-core::codec test_format_hex_default_grouping,
+tests/unit/core/test_codec.py::test_format_hex_group_and_width,1,R1,ported,r2-core::codec test_format_hex_group_and_width,
+tests/unit/core/test_codec.py::test_format_hex_group_zero_is_continuous,1,R1,ported,r2-core::codec test_format_hex_group_zero_is_continuous,
+tests/unit/core/test_codec.py::test_format_hex_partial_tail_group,1,R1,ported,r2-core::codec test_format_hex_partial_tail_group,
+tests/unit/core/test_codec.py::test_format_hex_is_lowercase,1,R1,ported,r2-core::codec test_format_hex_is_lowercase,
+tests/unit/core/test_datainput.py::test_inline_hex,1,R1,ported,r2-core::datainput test_inline_hex,
+tests/unit/core/test_datainput.py::test_inline_goes_through_decode_data_prefixes,1,R1,ported,r2-core::datainput test_inline_goes_through_decode_data_prefixes,
+tests/unit/core/test_datainput.py::test_inline_malformed_raises_codec_error,1,R1,ported,r2-core::datainput test_inline_malformed_raises_codec_error,
+tests/unit/core/test_datainput.py::test_file_defaults_to_auto_and_origin_is_path,1,R1,ported,r2-core::datainput test_file_defaults_to_auto_and_origin_is_path,
+tests/unit/core/test_datainput.py::test_file_raw_is_verbatim,1,R1,ported,r2-core::datainput test_file_raw_is_verbatim,
+tests/unit/core/test_datainput.py::test_file_raw_even_for_decodable_text,1,R1,ported,r2-core::datainput test_file_raw_even_for_decodable_text,
+tests/unit/core/test_datainput.py::test_file_auto_decodes_hex_text,1,R1,ported,r2-core::datainput test_file_auto_decodes_hex_text,
+tests/unit/core/test_datainput.py::test_file_auto_decodes_base64_text,1,R1,ported,r2-core::datainput test_file_auto_decodes_base64_text,
+tests/unit/core/test_datainput.py::test_file_auto_pem_returns_rewrapped_text_bytes,1,R1,ported,r2-core::datainput test_file_auto_pem_returns_rewrapped_text_bytes,
+tests/unit/core/test_datainput.py::test_file_auto_binary_falls_back_to_raw,1,R1,ported,r2-core::datainput test_file_auto_binary_falls_back_to_raw,
+tests/unit/core/test_datainput.py::test_file_auto_undecodable_text_falls_back_to_raw,1,R1,ported,r2-core::datainput test_file_auto_undecodable_text_falls_back_to_raw,
+tests/unit/core/test_datainput.py::test_file_forced_hex,1,R1,ported,r2-core::datainput test_file_forced_hex,
+tests/unit/core/test_datainput.py::test_file_forced_b64,1,R1,ported,r2-core::datainput test_file_forced_b64,
+tests/unit/core/test_datainput.py::test_file_forced_hex_garbage_raises_codec_error,1,R1,ported,r2-core::datainput test_file_forced_hex_garbage_raises_codec_error,
+tests/unit/core/test_datainput.py::test_file_forced_hex_on_binary_raises_codec_error,1,R1,ported,r2-core::datainput test_file_forced_hex_on_binary_raises_codec_error,
+tests/unit/core/test_datainput.py::test_file_missing_raises_data_io_error,1,R1,ported,r2-core::datainput test_file_missing_raises_data_io_error,
+tests/unit/core/test_datainput.py::test_console_write_renders_grouped_hex,1,R1,ported,r2-core::datainput test_console_write_renders_grouped_hex,
+tests/unit/core/test_datainput.py::test_console_defaults,1,R1,ported,r2-core::datainput test_console_defaults,
+tests/unit/core/test_datainput.py::test_file_write_raw,1,R1,ported,r2-core::datainput test_file_write_raw,
+tests/unit/core/test_datainput.py::test_file_write_hex_is_continuous_with_newline,1,R1,ported,r2-core::datainput test_file_write_hex_is_continuous_with_newline,
+tests/unit/core/test_datainput.py::test_file_write_b64_with_newline,1,R1,ported,r2-core::datainput test_file_write_b64_with_newline,
+tests/unit/core/test_datainput.py::test_file_write_failure_raises_data_io_error,1,R1,ported,r2-core::datainput test_file_write_failure_raises_data_io_error,
+tests/unit/core/test_errors.py::test_hierarchy,22,R1,ported,r2-core::errors test_hierarchy ; r2-core::errors constructors_build_their_kind_and_accessors_are_kind_specific,isinstance hierarchy -> ErrorKind family predicates (is_provider/is_key_lookup/is_operation)
+tests/unit/core/test_errors.py::test_console_error_message_and_hint,1,R1,ported,r2-core::errors test_console_error_message_and_hint,
+tests/unit/core/test_errors.py::test_console_error_hint_defaults_to_none,1,R1,ported,r2-core::errors test_console_error_hint_defaults_to_none,
 tests/unit/core/test_errors.py::test_console_error_hint_is_keyword_only,1,R1,n/a:python-call-signature,,keyword-only TypeError; Rust constructors fix the signature at compile time
-tests/unit/core/test_errors.py::test_parse_error_extras,1,R1,todo,,
+tests/unit/core/test_errors.py::test_parse_error_extras,1,R1,ported,r2-core::errors test_parse_error_extras,
 tests/unit/core/test_errors.py::test_parse_error_extras_are_required_keyword_only,1,R1,n/a:python-call-signature,,"keyword-only/required TypeError; ErrorKind::Parse{line,pos} fields are required by type"
-tests/unit/core/test_errors.py::test_pkcs11_error_extras,1,R1,todo,,port the positive asserts; the missing-kwarg TypeError part is Python-only
-tests/unit/core/test_errors.py::test_ambiguous_key_error_extras,1,R1,todo,,port the positive asserts; the missing-kwarg TypeError part is Python-only
-tests/unit/core/test_errors.py::test_param_error_extras,1,R1,todo,,port the positive asserts; the missing-kwarg TypeError part is Python-only
-tests/unit/core/test_errors.py::test_everything_catchable_as_console_error,1,R1,todo,,every error is a ConsoleError by type in Rust; port as kind/predicate checks
+tests/unit/core/test_errors.py::test_pkcs11_error_extras,1,R1,ported,r2-core::errors test_pkcs11_error_extras,port the positive asserts; the missing-kwarg TypeError part is Python-only
+tests/unit/core/test_errors.py::test_ambiguous_key_error_extras,1,R1,ported,r2-core::errors test_ambiguous_key_error_extras,port the positive asserts; the missing-kwarg TypeError part is Python-only
+tests/unit/core/test_errors.py::test_param_error_extras,1,R1,ported,r2-core::errors test_param_error_extras,port the positive asserts; the missing-kwarg TypeError part is Python-only
+tests/unit/core/test_errors.py::test_everything_catchable_as_console_error,1,R1,ported,r2-core::errors test_everything_catchable_as_console_error,every error is a ConsoleError by type in Rust; port as kind/predicate checks
 tests/unit/core/test_io_protocols.py::test_scripted_io_passes_as_console_io_argument,1,R1,n/a:protocol-conformance,,mypy structural Protocol check; Rust `impl Trait for T` is compiler-checked
 tests/unit/core/test_io_protocols.py::test_identity_editor_satisfies_template_editor_protocol,1,R1,n/a:protocol-conformance,,mypy structural Protocol check; Rust `impl Trait for T` is compiler-checked
-tests/unit/core/test_io_protocols.py::test_core_stays_console_free,1,R1,todo,,"layering is enforced by the crate graph; port as a cargo-metadata check that r2-core has no reedline/comfy-table/anstream/r2-console dependency, or n/a if R0's deny.toml bans cover it"
-tests/unit/core/test_keys.py::test_key_class_values,1,R1,todo,,
-tests/unit/core/test_keys.py::test_key_algorithm_values,1,R1,todo,,
-tests/unit/core/test_keys.py::test_display_without_id,1,R1,todo,,
-tests/unit/core/test_keys.py::test_display_with_id_is_lowercase_hex,1,R1,todo,,
-tests/unit/core/test_keys.py::test_parse_ref_valid,24,R1,todo,,
-tests/unit/core/test_keys.py::test_parse_ref_malformed,14,R1,todo,,
-tests/unit/core/test_keys.py::test_display_parse_ref_round_trip,5,R1,todo,,
-tests/unit/core/test_keys.py::test_display_refs_plain_when_unique,1,R1,todo,,
-tests/unit/core/test_keys.py::test_display_refs_suffixes_colliding_family,1,R1,todo,,
+tests/unit/core/test_io_protocols.py::test_core_stays_console_free,1,R1,ported,r2-core::io test_core_stays_console_free,"layering is enforced by the crate graph; port as a cargo-metadata check that r2-core has no reedline/comfy-table/anstream/r2-console dependency, or n/a if R0's deny.toml bans cover it | R1: manifest check — r2-core [dependencies] == the §4.1.2 list exactly (comfy-table/anstream/anstyle/unicode-width are permitted there since the renderer moved to r2-core); no terminal/line-editor or workspace crate"
+tests/unit/core/test_keys.py::test_key_class_values,1,R1,ported,r2-core::keys test_key_class_values ; r2-core::keys enum_tokens_symbols_and_curves,
+tests/unit/core/test_keys.py::test_key_algorithm_values,1,R1,ported,r2-core::keys test_key_algorithm_values ; r2-core::keys enum_tokens_symbols_and_curves,
+tests/unit/core/test_keys.py::test_display_without_id,1,R1,ported,r2-core::keys test_display_without_id,
+tests/unit/core/test_keys.py::test_display_with_id_is_lowercase_hex,1,R1,ported,r2-core::keys test_display_with_id_is_lowercase_hex,
+tests/unit/core/test_keys.py::test_parse_ref_valid,24,R1,ported,r2-core::keys test_parse_ref_valid ; r2-core::keys parse_ref_handle_out_of_range,
+tests/unit/core/test_keys.py::test_parse_ref_malformed,14,R1,ported,r2-core::keys test_parse_ref_malformed ; r2-core::keys parse_ref_messages_and_hints_are_c2_verbatim ; r2-core::keys parse_ref_positions_are_byte_offsets,
+tests/unit/core/test_keys.py::test_display_parse_ref_round_trip,5,R1,ported,r2-core::keys test_display_parse_ref_round_trip,
+tests/unit/core/test_keys.py::test_display_refs_plain_when_unique,1,R1,ported,r2-core::keys test_display_refs_plain_when_unique,
+tests/unit/core/test_keys.py::test_display_refs_suffixes_colliding_family,1,R1,ported,r2-core::keys test_display_refs_suffixes_colliding_family,
 tests/unit/core/test_keys.py::test_handle_int_never_calls_str_or_repr,1,R1,n/a:pykcs11-repr-hazard,,PyKCS11 handle repr/coercion hazard; KeyInfo.handle is Option<u64> (PLAN §5)
 tests/unit/core/test_keys.py::test_handle_int_accepts_index_protocol,1,R1,n/a:pykcs11-repr-hazard,,PyKCS11 handle repr/coercion hazard; KeyInfo.handle is Option<u64> (PLAN §5); Python __index__ coercion
-tests/unit/core/test_keys.py::test_display_refs_appends_handle_for_same_class_duplicates,1,R1,todo,,
-tests/unit/core/test_keys.py::test_key_info_is_frozen_with_defaults,1,R1,todo,,port the default-value asserts; the frozen-assignment part is Python-only
-tests/unit/core/test_keys.py::test_key_material_defaults,1,R1,todo,,port the default-value asserts; the frozen-assignment part is Python-only
-tests/unit/core/test_keys_objects.py::test_data_selector_parses_case_insensitively,1,R1,todo,,
-tests/unit/core/test_keys_objects.py::test_class_tokens_and_selectors_cover_every_class,1,R1,todo,,
-tests/unit/core/test_keys_objects.py::test_display_refs_suffixes_data_objects_on_collision,1,R1,todo,,
-tests/unit/core/test_keys_objects.py::test_new_algorithm_members,1,R1,todo,,
-tests/unit/core/test_params.py::test_verb_values,1,R1,todo,,
-tests/unit/core/test_params.py::test_param_kind_values,1,R1,todo,,
-tests/unit/core/test_params.py::test_param_spec_defaults,1,R1,todo,,
+tests/unit/core/test_keys.py::test_display_refs_appends_handle_for_same_class_duplicates,1,R1,ported,r2-core::keys test_display_refs_appends_handle_for_same_class_duplicates,
+tests/unit/core/test_keys.py::test_key_info_is_frozen_with_defaults,1,R1,ported,r2-core::keys test_key_info_is_frozen_with_defaults,port the default-value asserts; the frozen-assignment part is Python-only | R1: default-value asserts only (frozen dataclass = immutability by &)
+tests/unit/core/test_keys.py::test_key_material_defaults,1,R1,ported,r2-core::keys test_key_material_defaults ; r2-core::keys key_material_debug_hides_the_bytes,port the default-value asserts; the frozen-assignment part is Python-only | R1: default-value asserts only
+tests/unit/core/test_keys_objects.py::test_data_selector_parses_case_insensitively,1,R1,ported,r2-core::keys_objects test_data_selector_parses_case_insensitively,
+tests/unit/core/test_keys_objects.py::test_class_tokens_and_selectors_cover_every_class,1,R1,ported,r2-core::keys_objects test_class_tokens_and_selectors_cover_every_class,
+tests/unit/core/test_keys_objects.py::test_display_refs_suffixes_data_objects_on_collision,1,R1,ported,r2-core::keys_objects test_display_refs_suffixes_data_objects_on_collision,
+tests/unit/core/test_keys_objects.py::test_new_algorithm_members,1,R1,ported,r2-core::keys_objects test_new_algorithm_members,
+tests/unit/core/test_params.py::test_verb_values,1,R1,ported,r2-core::params test_verb_values,
+tests/unit/core/test_params.py::test_param_kind_values,1,R1,ported,r2-core::params test_param_kind_values,
+tests/unit/core/test_params.py::test_param_spec_defaults,1,R1,ported,r2-core::params test_param_spec_defaults,
 tests/unit/core/test_params.py::test_param_spec_is_frozen,1,R1,n/a:frozen-dataclass,,FrozenInstanceError/AttributeError on assignment; Rust value objects are immutable behind & (no interior mutability)
-tests/unit/core/test_params.py::test_param_spec_full_construction,1,R1,todo,,
-tests/unit/core/test_params.py::test_param_spec_default_from_mirror,1,R1,todo,,
+tests/unit/core/test_params.py::test_param_spec_full_construction,1,R1,ported,r2-core::params test_param_spec_full_construction ; r2-core::params param_validator_identity_and_debug,
+tests/unit/core/test_params.py::test_param_spec_default_from_mirror,1,R1,ported,r2-core::params test_param_spec_default_from_mirror,
 tests/unit/core/test_scripted_io.py::test_scripted_io_satisfies_console_io_protocol,1,R1,n/a:protocol-conformance,,mypy structural Protocol check; Rust `impl Trait for T` is compiler-checked
-tests/unit/core/test_scripted_io.py::test_scripted_flow_runs_off_queued_answers,1,R1,todo,,
-tests/unit/core/test_scripted_io.py::test_scripted_flow_abort_path,1,R1,todo,,
-tests/unit/core/test_scripted_io.py::test_prompt_answers_pop_in_order,1,R1,todo,,
-tests/unit/core/test_scripted_io.py::test_exhausted_queue_raises_assertion_error,1,R1,todo,,
-tests/unit/core/test_scripted_io.py::test_select_matches_by_option_text,1,R1,todo,,
-tests/unit/core/test_scripted_io.py::test_select_matches_by_index,1,R1,todo,,
-tests/unit/core/test_scripted_io.py::test_select_prefers_option_text_over_index,1,R1,todo,,
-tests/unit/core/test_scripted_io.py::test_select_rejects_unknown_answer,1,R1,todo,,
-tests/unit/core/test_scripted_io.py::test_confirm_answers,1,R1,todo,,
-tests/unit/core/test_scripted_io.py::test_prompt_secret_and_multiline_pop_answers,1,R1,todo,,
-tests/unit/core/test_scripted_io.py::test_print_collects_plain_strings,1,R1,todo,,
-tests/unit/core/test_scripted_io.py::test_print_error_collects_message_and_hint,1,R1,todo,,
-tests/unit/core/test_templates.py::test_attr_kind_values,1,R1,todo,,
-tests/unit/core/test_templates.py::test_template_attr_defaults,1,R1,todo,,
-tests/unit/core/test_templates.py::test_get_returns_attr_or_none,1,R1,todo,,
-tests/unit/core/test_templates.py::test_set_updates_value_in_place,1,R1,todo,,
-tests/unit/core/test_templates.py::test_set_unknown_name_raises_param_error,1,R1,todo,,
-tests/unit/core/test_templates.py::test_set_does_not_flip_enabled_or_locked,1,R1,todo,,
-tests/unit/core/test_templates.py::test_enabled_attrs_omits_disabled_preserving_order,1,R1,todo,,
-tests/unit/core/test_templates.py::test_disable_then_reenable_roundtrip,1,R1,todo,,
-tests/unit/core/test_templates.py::test_locked_flag_is_carried_not_enforced_by_model,1,R1,todo,,
+tests/unit/core/test_scripted_io.py::test_scripted_flow_runs_off_queued_answers,1,R1,ported,r2-core::scripted_io test_scripted_flow_runs_off_queued_answers,
+tests/unit/core/test_scripted_io.py::test_scripted_flow_abort_path,1,R1,ported,r2-core::scripted_io test_scripted_flow_abort_path,
+tests/unit/core/test_scripted_io.py::test_prompt_answers_pop_in_order,1,R1,ported,r2-core::scripted_io test_prompt_answers_pop_in_order,
+tests/unit/core/test_scripted_io.py::test_exhausted_queue_raises_assertion_error,1,R1,ported,r2-core::scripted_io test_exhausted_queue_raises_assertion_error,"R1: AssertionError → panic (catch_unwind), message asserted verbatim"
+tests/unit/core/test_scripted_io.py::test_select_matches_by_option_text,1,R1,ported,r2-core::scripted_io test_select_matches_by_option_text,
+tests/unit/core/test_scripted_io.py::test_select_matches_by_index,1,R1,ported,r2-core::scripted_io test_select_matches_by_index,
+tests/unit/core/test_scripted_io.py::test_select_prefers_option_text_over_index,1,R1,ported,r2-core::scripted_io test_select_prefers_option_text_over_index,
+tests/unit/core/test_scripted_io.py::test_select_rejects_unknown_answer,1,R1,ported,r2-core::scripted_io test_select_rejects_unknown_answer,R1: AssertionError → panic (catch_unwind)
+tests/unit/core/test_scripted_io.py::test_confirm_answers,1,R1,ported,r2-core::scripted_io test_confirm_answers,R1: AssertionError → panic (catch_unwind)
+tests/unit/core/test_scripted_io.py::test_prompt_secret_and_multiline_pop_answers,1,R1,ported,r2-core::scripted_io test_prompt_secret_and_multiline_pop_answers,
+tests/unit/core/test_scripted_io.py::test_print_collects_plain_strings,1,R1,ported,r2-core::scripted_io test_print_collects_plain_strings ; r2-core::scripted_io print_renders_plain_text_at_capture_width,
+tests/unit/core/test_scripted_io.py::test_print_error_collects_message_and_hint,1,R1,ported,r2-core::scripted_io test_print_error_collects_message_and_hint,
+tests/unit/core/test_templates.py::test_attr_kind_values,1,R1,ported,r2-core::template test_attr_kind_values ; r2-core::template attr_value_text_helpers,
+tests/unit/core/test_templates.py::test_template_attr_defaults,1,R1,ported,r2-core::template test_template_attr_defaults,
+tests/unit/core/test_templates.py::test_get_returns_attr_or_none,1,R1,ported,r2-core::template test_get_returns_attr_or_none,
+tests/unit/core/test_templates.py::test_set_updates_value_in_place,1,R1,ported,r2-core::template test_set_updates_value_in_place,
+tests/unit/core/test_templates.py::test_set_unknown_name_raises_param_error,1,R1,ported,r2-core::template test_set_unknown_name_raises_param_error,
+tests/unit/core/test_templates.py::test_set_does_not_flip_enabled_or_locked,1,R1,ported,r2-core::template test_set_does_not_flip_enabled_or_locked,
+tests/unit/core/test_templates.py::test_enabled_attrs_omits_disabled_preserving_order,1,R1,ported,r2-core::template test_enabled_attrs_omits_disabled_preserving_order,
+tests/unit/core/test_templates.py::test_disable_then_reenable_roundtrip,1,R1,ported,r2-core::template test_disable_then_reenable_roundtrip,
+tests/unit/core/test_templates.py::test_locked_flag_is_carried_not_enforced_by_model,1,R1,ported,r2-core::template test_locked_flag_is_carried_not_enforced_by_model,
 tests/unit/pkcs11/test_attributes.py::TestCatalog::test_frozen_shape,1,R5a,todo,,
 tests/unit/pkcs11/test_attributes.py::TestCatalog::test_read_only,1,R5a,n/a:python-readonly-mapping,,MappingProxyType assignment TypeError; the Rust CKA_CATALOG is an immutable static
 tests/unit/pkcs11/test_attributes.py::TestCatalog::test_every_entry_well_formed,1,R5a,todo,,
@@ -1019,8 +1019,8 @@ tests/unit/test_keyparse.py::test_pkcs12_with_corrupt_chain_cert_spki,1,R6,todo,
 tests/unit/test_keyparse.py::test_p12_shaped_garbage_without_callback_hedges_corruption,1,R6,todo,,
 tests/unit/test_l13_hardening.py::test_encrypted_traditional_pem_paste_keeps_headers,1,R6,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; decode_data (R1) + parse_key_material (R6)
 tests/unit/test_l13_hardening.py::test_encrypted_traditional_pem_survives_indented_paste,1,R6,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; decode_data (R1) + parse_key_material (R6)
-tests/unit/test_l13_hardening.py::test_headerless_pem_rewrap_unchanged_by_header_support,1,R1,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; codec
-tests/unit/test_l13_hardening.py::test_headers_without_body_raise_codec_error,1,R1,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; codec
+tests/unit/test_l13_hardening.py::test_headerless_pem_rewrap_unchanged_by_header_support,1,R1,ported,r2-core::codec test_headerless_pem_rewrap_unchanged_by_header_support,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; codec
+tests/unit/test_l13_hardening.py::test_headers_without_body_raise_codec_error,1,R1,ported,r2-core::codec test_headers_without_body_raise_codec_error,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; codec
 tests/unit/test_l13_hardening.py::test_complete_paths_lists_directory,1,R7,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; completer::complete_paths
 tests/unit/test_l13_hardening.py::test_complete_paths_partial_and_hidden,1,R7,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; completer::complete_paths
 tests/unit/test_l13_hardening.py::test_complete_paths_never_raises,1,R7,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; completer::complete_paths
@@ -1031,8 +1031,8 @@ tests/unit/test_l13_hardening.py::test_public_half_fallback_prefers_public_then_
 tests/unit/test_l13_hardening.py::test_public_half_fallback_honors_key_id,1,R9,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; verify fallback
 tests/unit/test_l13_hardening.py::test_verify_on_keypair_ref_offers_mechanisms_and_verifies,1,R9,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; verify fallback
 tests/unit/test_l13_hardening.py::test_prompttoolkitio_print_does_not_eat_markup_lookalikes,1,R7,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; rich markup hazard: keep as a verbatim-render assertion on the r2 renderer (D1)
-tests/unit/test_l13_hardening.py::test_make_table_cells_render_verbatim,1,R1,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; rich markup hazard: '[x]'/'[ ]' cells must render verbatim (D1)
-tests/unit/test_l13_hardening.py::test_hex_panel_title_renders_verbatim,1,R1,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; rich markup hazard: panel title renders verbatim (D1)
+tests/unit/test_l13_hardening.py::test_make_table_cells_render_verbatim,1,R1,ported,r2-core::render test_make_table_cells_render_verbatim,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; rich markup hazard: '[x]'/'[ ]' cells must render verbatim (D1)
+tests/unit/test_l13_hardening.py::test_hex_panel_title_renders_verbatim,1,R1,ported,r2-core::render test_hex_panel_title_renders_verbatim,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; rich markup hazard: panel title renders verbatim (D1)
 tests/unit/test_memory_objects.py::test_hmac_matches_stdlib_for_every_hash,5,R4,todo,,
 tests/unit/test_memory_objects.py::test_hmac_rfc4231_case2_sha256_vector,1,R4,todo,,
 tests/unit/test_memory_objects.py::test_hmac_defaults_to_sha256_and_truncates_by_mac_len,1,R4,todo,,

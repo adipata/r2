@@ -1067,7 +1067,8 @@ pub fn py_strip(text: &str) -> &str { .. }
 /// BETWEEN pairs only ("0a 1b" ok, "0 a" invalid); None on any error. c2 uses it in
 /// `--id` parsing, config/template-file `0x…` values and the template editor.
 pub fn py_fromhex(text: &str) -> Option<Vec<u8>> { .. }
-/// Python `int(text, radix)` for radix 10 or 16: `py_strip` first, optional `+`/`-`, for
+/// Python `int(text, radix)` for radix 10 or 16: strip CPython `int()`'s whitespace first
+/// (`py_strip`'s set minus U+001C..=U+001F, which `int()` keeps), optional `+`/`-`, for
 /// radix 16 an optional `0x`/`0X` prefix (which may be followed by one `_`), digits with
 /// single `_` separators between digits; ASCII digits only (CPython also accepts other
 /// Unicode decimal digits — D18). None on any error or outside i128.
@@ -7302,9 +7303,16 @@ merges).**
   - (d) config discovery in a deleted working directory: c2's `Path.cwd()` raised
     `FileNotFoundError` out of startup; r2 skips the `./r2.yaml` candidate and continues
     with the user config dir (§4.8.1).
+  - (e) a non-ASCII character inside a pasted PEM block (`decode_data`, §4.4.1): in the
+    base64 body, c2's `b64decode` raised a bare `ValueError` (only `binascii.Error` was
+    caught); r2 raises CodecError `malformed PEM: body of the <label> block is not valid
+    base64`. In an RFC 1421 header line, c2's final `.encode("ascii")` raised
+    `UnicodeEncodeError`; r2 keeps the line and returns the re-wrapped text as UTF-8
+    (the key parser then rejects the block).
 - *Reason*: every expected failure must be a `ConsoleError`; OpenSSL would reject the CN
   with a different text anyway.
-- *Verified by*: R8 certops test (a), R6 keyparse fixtures (b), R7 repl test (c).
+- *Verified by*: R8 certops test (a), R6 keyparse fixtures (b), R7 repl test (c), R1 codec
+  differential vectors (e).
 
 **D13 — Ctrl-C while a command runs is honored at step boundaries.**
 - *Description*: c2's `KeyboardInterrupt` surfaced at the next Python bytecode after the
