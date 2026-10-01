@@ -3435,9 +3435,15 @@ hint "$R2_CONFIG must point to an existing file"; "cannot read config file {path
 {os_error_text}"; "invalid YAML in config file {path}: {parser text}" (`yaml::parse`'s
 message; the parser text differs from PyYAML's — §11 D17); "config file {path} must
 contain a top-level mapping"; "config
-file {path}: top-level keys must be strings, got {key!r}". An empty file means "no
-overrides". When an external file is in play, every decode error is re-raised as
-"{message} (config file: {path})" with the hint kept. `LoadedConfig.origins` maps each
+file {path}: top-level keys must be strings, got {key!r}"; a file that is not valid UTF-8 →
+"cannot read config file {path}: {CPython UnicodeDecodeError text}" (e.g. "'utf-8' codec
+can't decode byte 0xff in position 19: invalid start byte"; c2 crashed, §11 D12 (f)); the
+text is read with Python's universal newlines (`\r\n`/`\r` → `\n`). An empty file means "no
+overrides". `config_from_yaml` uses the same texts with "config text" in place of "config
+file {path}" ("invalid YAML in config text: …", "config text must contain a top-level
+mapping", "config text: top-level keys must be strings, got …"). When an external file is
+in play, every decode error is re-raised as "{message} (config file: {path})" with the hint
+kept. `LoadedConfig.origins` maps each
 top-level section of the defaults, in defaults order, to `str(source_path)` when the
 external file defines it, else "default".
 
@@ -3662,6 +3668,7 @@ is "template class key"); never printed to stdout. Problems:
 | identifiers (memory.name, pkcs11[].name, softhsm.provider_name) | "invalid provider name {name!r}" (hint "provider names match [A-Za-z_][A-Za-z0-9_-]*") |
 | app.log.max_bytes, app.log.backups, custom_attributes.*.code, custom_mechanisms[].ckm, pkcs11[].slot | "must not be negative" (for `pkcs11[].slot` an r2 addition — c2 accepted a negative slot, §11 D18) |
 | ui.hex_group / ui.hex_width | "must not be negative (0 = continuous)" / "must be at least 1" |
+| integers above the field's Rust type (app.log.backups > u32, ui.hex_group/hex_width > usize, an INT/ENUM `params[].default` > i64) | "must be at most {max}" (r2 only: c2's int is unbounded — §11 D18; every other integer field is u64 and YAML ints stop at 2^64-1, §4.8.4) |
 | empty strings (params[].name, custom_mechanisms[].id, cli_name) | "must not be empty" |
 | ENUM param without choices | "{path}.choices: required for kind 'enum'" |
 | template values | "invalid hex bytes {raw!r}" (hint "0x… values hold whole hex bytes"); "template attribute values must be bool, int or string, got {T}" (hint 'bool → BOOL, int → ULONG, "0x…" → BYTES, other string → STR (§4.7)'); negative int → "must not be negative" (r2: ULONG is unsigned; c2 failed later, at the first create flow, with "template attribute {name} must not be negative" — §11 D18) |
@@ -7354,10 +7361,19 @@ merges).**
     base64`. In an RFC 1421 header line, c2's final `.encode("ascii")` raised
     `UnicodeEncodeError`; r2 keeps the line and returns the re-wrapped text as UTF-8
     (the key parser then rejects the block).
+  - (f) a config file that is not valid UTF-8 (`Path.read_text` raised
+    `UnicodeDecodeError`), or whose YAML construction raised a plain `ValueError` (an
+    impossible timestamp such as `2001-02-30` or `2001-13-01`, a malformed explicit
+    `!!int`/`!!float`/`!!bool` scalar): c2's `_read_external` caught only `OSError` and
+    `yaml.YAMLError`, so startup crashed with a traceback. r2 raises Config `cannot read
+    config file <path>: <CPython UnicodeDecodeError text>` resp. `invalid YAML in config
+    file <path>: <Python's ValueError text>` (`day is out of range for month`, `month must
+    be in 1..12`, `invalid literal for int() with base 10: 'x'`, …; §4.8.1).
 - *Reason*: every expected failure must be a `ConsoleError`; OpenSSL would reject the CN
   with a different text anyway.
 - *Verified by*: R8 certops test (a), R6 keyparse fixtures (b), R7 repl test (c), R1 codec
-  differential vectors (e).
+  differential vectors (e), R2 loader tests (d, f: `invalid_utf8_is_a_read_error`,
+  `deleted_working_directory_skips_the_cwd_candidate`, the `LOAD` vectors).
 
 **D13 — Ctrl-C while a command runs is honored at step boundaries.**
 - *Description*: c2's `KeyboardInterrupt` surfaced at the next Python bytecode after the
@@ -7427,11 +7443,23 @@ merges).**
   only one of the two parsers rejects (exotic or malformed syntax: tabs in indentation,
   YAML-1.2-only escapes, directives) may load in one and fail in the other; (c) an integer
   literal outside -2^63..=2^64-1 is a parse error `integer out of range: <text>`, where
-  Python's int is unbounded.
+  Python's int is unbounded; (d) the explicit collection tags `!!set`, `!!omap` and
+  `!!pairs` (which PyYAML's SafeLoader constructs as `set` / list of pairs) are rejected
+  with `could not determine a constructor for the tag 'tag:yaml.org,2002:set'` (resp.
+  `omap`, `pairs`); (e) aliases are expanded into copies: a recursive alias (an anchored
+  collection that contains its own alias) is an error, a duplicate anchor name silently
+  rebinds (PyYAML: `found duplicate anchor`), and a document is rejected beyond a nesting
+  depth of 400 (PyYAML hits CPython's recursion limit, a crash in c2, between 400 and 500)
+  or beyond 1,000,000 values after alias expansion (PyYAML shares the aliased object, so a
+  "billion laughs" document loads there); consequently `yaml::dump` never emits the
+  `&id001`/`*id001` anchors that PyYAML writes for a collection object shared twice — this
+  is visible only when the wizard's structural rewrite (§5.13) re-dumps a user config that
+  aliases a mapping or list (r2 writes the copies).
 - *Reason*: no maintained Rust YAML 1.1 parser exists; the event parser is the only way to
   see scalar styles (§4.8.4).
-- *Verified by*: R2 loader tests (typing vectors generated with PyYAML, the three cases
-  above), R14 template-file tests, the R13 config interop check.
+- *Verified by*: R2 loader tests (typing vectors generated with PyYAML, the cases above:
+  `yaml::tests::load_r2_errors`, `yaml::tests::alias_expansion_rules`), R14 template-file
+  tests, the R13 config interop check.
 
 **D18 — Numeric range and load-time typing guards.**
 - *Description*: Rust's fixed-width integers and typed config make r2 reject some values
@@ -7449,6 +7477,10 @@ merges).**
   - a numeric builtin param read through `params::param_int` whose text is outside i64
     → `parameter '<name>' must be an integer, got <text!r>` (c2: unbounded int);
   - `providers.pkcs11[].slot` must not be negative (c2 accepted it);
+  - an integer config value above its field's Rust type — `app.log.backups` above
+    4294967295, `ui.hex_group`/`ui.hex_width` above `usize::MAX`, an INT or ENUM
+    `params[].default` above 9223372036854775807 — is a load error `<path>: must be at most
+    <max>` (c2 accepted any int; §4.8.3);
   - a custom-mechanism parameter declared `required: false` without a default is ABSENT
     when not given, so the packer default applies (c2 stored `None` and the packer raised
     `custom mechanism parameter <name!r> must be …`, §4.6.3);
