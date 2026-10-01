@@ -1,0 +1,27 @@
+# clippy configuration (spec §4.1.3; owner R0). The test exemptions let
+# `cargo clippy --workspace --all-targets -- -D warnings` pass on #[test] fns and #[cfg(test)]
+# modules; integration-test files and r2-testkit's lib.rs carry their own #![allow(...)].
+# disallowed-methods: each entry names the one sanctioned site (an #[allow] + comment) or none.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-print-in-tests = true
+disallowed-methods = [
+    { path = "std::thread::spawn", reason = "single-threaded invariant (spec §6)" },
+    { path = "std::env::set_var", reason = "only r2_pkcs11::env (production) and r2_testkit::env (tests)" },
+    { path = "std::env::remove_var", reason = "only r2_pkcs11::env (production) and r2_testkit::env (tests)" },
+    { path = "openssl::pkey::PKey::private_key_from_pem", reason = "prompts on the TTY" },
+    { path = "openssl::rsa::Rsa::private_key_from_pem", reason = "prompts on the TTY" },
+    { path = "openssl::ec::EcKey::private_key_from_pem", reason = "prompts on the TTY" },
+    { path = "openssl::pkey::PKey::private_key_from_pem_passphrase", reason = "panics on NUL" },
+    { path = "openssl::rsa::Rsa::private_key_from_pem_passphrase", reason = "panics on NUL" },
+    { path = "openssl::ec::EcKey::private_key_from_pem_passphrase", reason = "panics on NUL" },
+    { path = "openssl::pkey::PKey::public_key_from_pem_passphrase", reason = "panics on NUL (every *_from_pem_passphrase, spec 4.1.3)" },
+    { path = "openssl::pkey::PKey::private_key_from_pkcs8_passphrase", reason = "panics on NUL" },
+    { path = "openssl::aes::wrap_key", reason = "deprecated; KWP is EVP-only" },
+    { path = "openssl::aes::unwrap_key", reason = "deprecated; KWP is EVP-only" },
+    { path = "openssl::memcmp::eq", reason = "panics on a length mismatch; only r2_core::crypto::ct_eq" },
+    { path = "cryptoki::context::Pkcs11::get_mechanism_list", reason = "drops unknown CKMs; use RawFns::mechanism_list" },
+    { path = "cryptoki::session::Session::get_attributes", reason = "fails whole calls / omits refusals; use RawFns::get_attr" },
+    { path = "cryptoki::session::Session::wrap_key", reason = "no truncation; use RawFns::wrap" },
+    { path = "std::io::IsTerminal::is_terminal", reason = "use crossterm::tty::IsTty (one allowed site: open_console_io)" },
+]

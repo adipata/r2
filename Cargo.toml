@@ -1,0 +1,83 @@
+# r2 workspace manifest (spec §4.1; owner R0 — except the [profile.release] table, R12).
+[workspace]
+resolver = "3"
+members = [
+    "crates/r2-core",
+    "crates/r2-config",
+    "crates/r2-provider",
+    "crates/r2-ops",
+    "crates/r2-memory",
+    "crates/r2-pkcs11",
+    "crates/r2-services",
+    "crates/r2-console",
+    "crates/r2-cli",
+    "crates/r2-testkit",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94.1"
+publish = false
+license = "GPL-3.0-only"
+
+# Pinned third-party dependencies: spec §4.1.4 verbatim. Which crate may use which is
+# §4.1.2 (an edge or dependency not listed there is a §4.11 change).
+[workspace.dependencies]
+openssl        = "0.10.81"          # minimum (KW-pad overflow fixes 0.10.79/80, unwrap assert fix
+                                    # 0.10.78, mul_generator2, Asn1StringRef::to_string)
+cryptoki       = "=0.12.1"          # any bump re-runs the S0 spike checks G1/G3/G4/G5 + repr(transparent)
+cryptoki-sys   = "=0.5.0"
+libloading     = "0.8"
+der            = { version = "0.8.2", features = ["std", "pem", "oid"] }
+spki           = { version = "0.8.0", features = ["std", "pem"] }
+x509-cert      = { version = "0.3.0", features = ["std", "pem"] }
+const-oid      = { version = "0.10.2", features = ["db"] }
+secrecy        = "0.10"             # cryptoki::types::AuthPin = secrecy 0.10 SecretString
+zeroize        = "1.8"
+indexmap       = "2"
+serde_yaml_ng  = "0.10"             # Value / Mapping tree only (r2 parses and emits itself, §4.8.4)
+yaml-rust2     = { version = "0.13", default-features = false }   # event parser (scalar styles)
+hex            = "0.4"
+base64         = "0.22"
+difflib        = "0.4"
+reedline       = "=0.49.0"
+crossterm      = { version = "=0.29.0", features = ["use-dev-tty"] }   # burst-stall fix, S0 spike 3
+nu-ansi-term   = "0.50"             # reedline 0.49's Style type (StyledText, DefaultHinter::with_style)
+rpassword      = "=7.5.4"
+comfy-table    = "=8.0.1"
+anstream       = "1.0"
+anstyle        = "1.0"
+unicode-width  = "0.2"
+indicatif      = "0.18"             # provisional (spinner, §4.9.8)
+console        = "0.16"             # provisional (indicatif TermLike target)
+ctrlc          = "3.5"
+clap           = { version = "4", features = ["derive"] }
+tracing        = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "registry", "std"] }
+file-rotate    = "0.8"
+regex          = "1"              # r2-cli log redaction only
+# dev
+tempfile       = "3"
+assert_cmd     = "2"
+insta          = "1"
+# workspace crates
+r2-core = { path = "crates/r2-core" }
+r2-config = { path = "crates/r2-config" }
+r2-provider = { path = "crates/r2-provider" }
+r2-ops = { path = "crates/r2-ops" }
+r2-memory = { path = "crates/r2-memory" }
+r2-pkcs11 = { path = "crates/r2-pkcs11" }
+r2-services = { path = "crates/r2-services" }
+r2-console = { path = "crates/r2-console" }
+r2-cli = { path = "crates/r2-cli" }
+r2-testkit = { path = "crates/r2-testkit" }
+
+# spec §4.1.3. todo/unimplemented: allow until R13 (the skeleton's stubs), deny from R13.
+[workspace.lints.clippy]
+print_stdout = "deny"
+print_stderr = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+todo = "allow"
+unimplemented = "allow"

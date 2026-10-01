@@ -1,0 +1,29 @@
+[package]
+name = "r2-pkcs11"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+softhsm = ["r2-testkit/softhsm"]
+
+[dependencies]
+r2-provider = { workspace = true }
+r2-config = { workspace = true }
+r2-core = { workspace = true }
+cryptoki = { workspace = true }
+cryptoki-sys = { workspace = true }
+libloading = { workspace = true }
+openssl = { workspace = true }
+secrecy = { workspace = true }
+zeroize = { workspace = true }
+indexmap = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+r2-testkit = { workspace = true }

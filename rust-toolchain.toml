@@ -1,0 +1,5 @@
+# Pinned stable toolchain = MSRV (spec §4.1.1; owner R0). Keep `rust-version` in the root
+# Cargo.toml equal to this channel.
+[toolchain]
+channel = "1.94.1"
+components = ["rustfmt", "clippy"]

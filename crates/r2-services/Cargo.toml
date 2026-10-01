@@ -1,0 +1,28 @@
+[package]
+name = "r2-services"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+softhsm = []
+
+[dependencies]
+r2-ops = { workspace = true }
+r2-provider = { workspace = true }
+r2-config = { workspace = true }
+r2-core = { workspace = true }
+secrecy = { workspace = true }
+zeroize = { workspace = true }
+indexmap = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+r2-testkit = { workspace = true }
+r2-memory = { workspace = true }
+r2-pkcs11 = { workspace = true }

@@ -1,0 +1,40 @@
+[package]
+name = "r2-console"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[lints]
+workspace = true
+
+[features]
+softhsm = ["r2-testkit/softhsm"]
+
+[dependencies]
+r2-services = { workspace = true }
+r2-ops = { workspace = true }
+r2-pkcs11 = { workspace = true }
+r2-provider = { workspace = true }
+r2-config = { workspace = true }
+r2-core = { workspace = true }
+reedline = { workspace = true }
+crossterm = { workspace = true }
+nu-ansi-term = { workspace = true }
+rpassword = { workspace = true }
+indicatif = { workspace = true }
+console = { workspace = true }
+comfy-table = { workspace = true }
+anstream = { workspace = true }
+anstyle = { workspace = true }
+unicode-width = { workspace = true }
+indexmap = { workspace = true }
+secrecy = { workspace = true }
+zeroize = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+r2-testkit = { workspace = true }
+r2-memory = { workspace = true }
