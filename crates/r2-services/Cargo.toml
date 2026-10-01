@@ -10,7 +10,7 @@ license.workspace = true
 workspace = true
 
 [features]
-softhsm = []
+softhsm = ["r2-testkit/softhsm"]
 
 [dependencies]
 r2-ops = { workspace = true }

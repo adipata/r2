@@ -2,7 +2,11 @@
 //! exactly as their §4 doc comments state, so loops that call them before R5a/R6 merge get
 //! the real behavior: `crypto::{ct_eq, random_bytes}`, `der::{curve_oid_der,
 //! curve_from_oid_der, wrap_octet_string}` (§4.4.7/§4.4.8) and `catalog::{cka, cka_by_code}`
-//! (§4.5.5).
+//! (§4.5.5), plus the `ConsoleError` constructors every stub's `Err(not_implemented(..))`
+//! goes through (§4.2).
+//!
+//! Ownership: R0 seeds this file; the cases pass to the owners of the code they cover
+//! (R1: ConsoleError; R6: crypto/der; R5a: catalog), who may edit, move or delete them.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -116,4 +120,50 @@ fn catalog_lookups_find_entries_by_name_and_code() {
         CKA_CATALOG[CKA_CATALOG.len() - 1].name,
         "CKA_WRAP_WITH_TRUSTED"
     );
+}
+
+#[test]
+fn random_bytes_reports_oversized_requests_as_crypto_error() {
+    use r2_core::error::ErrorKind;
+    // openssl::rand::rand_bytes asserts len <= c_int::MAX; no allocation happens here.
+    let Some(len) = usize::try_from(i32::MAX)
+        .ok()
+        .and_then(|m| m.checked_add(1))
+    else {
+        return;
+    };
+    let err = random_bytes(len).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Crypto);
+    assert_eq!(err.message, "random number generation failed");
+    assert_eq!(err.hint, None);
+}
+
+#[test]
+fn not_implemented_is_a_generic_error_not_a_panic() {
+    use r2_core::error::{ConsoleError, ErrorKind};
+    let err = ConsoleError::not_implemented("R4");
+    assert_eq!(err.kind, ErrorKind::Generic);
+    assert_eq!(err.message, "not implemented (R4)");
+    assert_eq!(err.hint, None);
+    assert_eq!(err.to_string(), "not implemented (R4)");
+    // A stub of another loop reaches it through the Err path (§4.1.1 handoff 1).
+    let err = r2_core::der::ecdsa_rs_to_der(&[1, 2]).unwrap_err();
+    assert_eq!(err.message, "not implemented (R6)");
+}
+
+#[test]
+fn console_error_constructors_and_hint_builders() {
+    use r2_core::error::{ConsoleError, ErrorKind};
+    let err = ConsoleError::new(ErrorKind::Config, "bad").with_hint("fix it");
+    assert_eq!(err.kind, ErrorKind::Config);
+    assert_eq!(err.message, "bad");
+    assert_eq!(err.hint.as_deref(), Some("fix it"));
+    let err = err.with_hint("other").with_hint_opt(None);
+    assert_eq!(err.hint, None);
+    let err = ConsoleError::generic("g").with_hint_opt(Some("h".to_owned()));
+    assert_eq!(
+        (err.kind, err.hint.as_deref()),
+        (ErrorKind::Generic, Some("h"))
+    );
+    assert_eq!(ConsoleError::crypto("c").kind, ErrorKind::Crypto);
 }

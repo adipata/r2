@@ -22,6 +22,8 @@ ignore = []
 [licenses]
 version = 2
 confidence-threshold = 0.93
+# The allow list is forward-looking; entries no current dependency uses are not warnings.
+unused-allowed-license = "allow"
 # Permissive licenses that are compatible with GPL-3.0 (plus r2's own license).
 allow = [
     "GPL-3.0-only",

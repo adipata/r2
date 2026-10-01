@@ -100,25 +100,30 @@ impl ErrorKind {
 }
 
 impl ConsoleError {
+    // R0 mandated working bodies (§4.1.1): `new`, `with_hint`, `with_hint_opt`, `generic`,
+    // `crypto` and `not_implemented`, so skeleton stubs return Err instead of panicking.
     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
-        let _ = (kind, message);
-        unimplemented!("R1")
+        Self {
+            kind,
+            message: message.into(),
+            hint: None,
+        }
     }
     /// Builder: sets the hint (replaces an existing one).
     pub fn with_hint(self, hint: impl Into<String>) -> Self {
-        let _ = hint;
-        unimplemented!("R1")
+        Self {
+            hint: Some(hint.into()),
+            ..self
+        }
     }
     /// Builder: sets or clears the hint.
     pub fn with_hint_opt(self, hint: Option<String>) -> Self {
-        let _ = hint;
-        unimplemented!("R1")
+        Self { hint, ..self }
     }
 
     // One constructor per kind (all take `impl Into<String>` for the message):
     pub fn generic(message: impl Into<String>) -> Self {
-        let _ = message;
-        unimplemented!("R1")
+        Self::new(ErrorKind::Generic, message)
     }
     pub fn config(message: impl Into<String>) -> Self {
         let _ = message;
@@ -205,8 +210,7 @@ impl ConsoleError {
         unimplemented!("R1")
     }
     pub fn crypto(message: impl Into<String>) -> Self {
-        let _ = message;
-        unimplemented!("R1")
+        Self::new(ErrorKind::Crypto, message)
     }
     pub fn user_abort(message: impl Into<String>) -> Self {
         let _ = message;
@@ -214,8 +218,7 @@ impl ConsoleError {
     }
     /// R0 skeleton stub error: Generic, message `not implemented (<loop>)`, e.g. "not implemented (R4)".
     pub fn not_implemented(owner_loop: &str) -> Self {
-        let _ = owner_loop;
-        unimplemented!("R1")
+        Self::generic(format!("not implemented ({owner_loop})"))
     }
 
     // Field accessors (None when the kind does not carry the field):

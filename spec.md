@@ -377,6 +377,7 @@ Cargo.lock                    R0 creates; any loop may let cargo update it, but 
                               for dependencies already declared in §4.1.4
 rust-toolchain.toml           pinned stable 1.94.1 (= MSRV), components rustfmt+clippy R0
 clippy.toml  deny.toml  justfile  .config/nextest.toml                             R0
+.gitignore  .gitattributes    `/target`; `* text=auto eol=lf` + binary fixtures    R0
 LICENSE                       GPL-3.0 (c2's license, §9)                           R0
 .github/workflows/ci.yml                                                           R0
 .github/workflows/release.yml                                                      R12
@@ -588,6 +589,10 @@ another loop's test file, loops.md rule 6):
    - `create_template_editor` (§4.9.3), `token_needs_init` / `run_softhsm_wizard`
      (§4.9.9), `templatefile::build_seed` and `EditorSeeding::edit` (§4.9.10), and the
      trivial bodies written out in §4 (trait default methods, `IdentityTemplateEditor`);
+   - `ConsoleError::{new, with_hint, with_hint_opt, generic, crypto, not_implemented}`
+     (§4.2; `new` sets `hint: None`, `not_implemented(l)` = `generic(format!("not
+     implemented ({l})"))`), so a stub's `Err(not_implemented(..))` — and `random_bytes`'s
+     Crypto error — is an error, not a panic, before R1 merges;
    - every command module's `pub fn commands() -> Vec<Box<dyn Command>>` returns `vec![]`
      until its owner fills it (R7's `discover_commands`/`run_line` iterate every module and
      merge before R8–R10);
@@ -5364,7 +5369,8 @@ determines the slot from "reassigned to slot N" (fallback: `--show-slots`, the s
 Label is R2TEST); prints `export VAR=value` lines (shell-quoted) for SOFTHSM2_CONF and the
 five R2_TEST_SOFTHSM_* variables, or appends `VAR=value` lines to `$GITHUB_ENV` with
 `--github-env`; exits non-zero with a message on stderr when SoftHSM, softhsm2-util or the
-slot cannot be found. CI: `eval "$(scripts/softhsm-init.sh)"` then `cargo nextest run
+slot cannot be found, and when `DIR/tokens` already exists and is not empty (a second
+R2TEST token in one store would make the slot ambiguous). CI: `eval "$(scripts/softhsm-init.sh)"` then `cargo nextest run
 --workspace --features softhsm`. `.config/nextest.toml` puts every test whose name contains
 `softhsm` into a test group with `max-threads = 1` (shared token; R0 may relax once
 verified). Wizard e2e tests spawn the binary with their own fresh SOFTHSM2_CONF.

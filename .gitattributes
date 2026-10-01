@@ -1,0 +1,11 @@
+# R0: LF everywhere, on every platform (the Windows CI runner defaults to core.autocrlf=true).
+# `include_str!` embeds files byte-for-byte (spec §7: `config show --defaults` prints
+# defaults.yaml verbatim), and snapshot/vector files are compared byte-for-byte.
+* text=auto eol=lf
+
+# Binary test fixtures and vectors: never converted.
+*.der binary
+*.p12 binary
+*.pfx binary
+*.bin binary
+*.png binary

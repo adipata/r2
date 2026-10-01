@@ -12,6 +12,12 @@ pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 /// `openssl::rand::rand_bytes` into a zeroizing buffer (CKA_IDs, transport keys, AES/generic
 /// keygen). Failure → Crypto "random number generation failed".
 pub fn random_bytes(len: usize) -> Result<Zeroizing<Vec<u8>>> {
+    // openssl::rand::rand_bytes asserts len <= c_int::MAX; report that as the Crypto error.
+    if i32::try_from(len).is_err() {
+        return Err(crate::error::ConsoleError::crypto(
+            "random number generation failed",
+        ));
+    }
     let mut buf = Zeroizing::new(vec![0u8; len]);
     openssl::rand::rand_bytes(&mut buf)
         .map_err(|_| crate::error::ConsoleError::crypto("random number generation failed"))?;

@@ -4,16 +4,45 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
+/// Rust keywords (strict + reserved, 2024 edition) — not usable as a `pub mod` name.
+const KEYWORDS: &[&str] = &[
+    "Self", "abstract", "as", "async", "await", "become", "box", "break", "const", "continue",
+    "crate", "do", "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "gen", "if",
+    "impl", "in", "let", "loop", "macro", "match", "mod", "move", "mut", "override", "priv", "pub",
+    "ref", "return", "self", "static", "struct", "super", "trait", "true", "try", "type", "typeof",
+    "unsafe", "unsized", "use", "virtual", "where", "while", "yield",
+];
+
+/// A file stem is a module only if it is a plain Rust identifier (ASCII letter or `_`, then
+/// ASCII alphanumerics or `_`; not `_` alone, not a keyword — which also excludes `mod`).
+/// Editor lock/backup files (`.#keys.rs`), dotfiles and names like `key-template.rs` or
+/// `2fa.rs` are skipped, as c2's `pkgutil.iter_modules` skips dotted names.
+pub(crate) fn is_module_stem(stem: &str) -> bool {
+    let mut chars = stem.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && stem != "_"
+        && !KEYWORDS.contains(&stem)
+}
+
 fn stems(dir: &Path) -> Vec<String> {
     let mut out = Vec::new();
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("rs")
-                && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
-                && stem != "mod"
-            {
-                out.push(stem.to_owned());
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            match path.file_stem().and_then(|s| s.to_str()) {
+                Some(stem) if is_module_stem(stem) => out.push(stem.to_owned()),
+                Some("mod") => {}
+                _ => println!(
+                    "cargo::warning=skipping {}: not a Rust module name",
+                    path.display()
+                ),
             }
         }
     }
