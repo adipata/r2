@@ -90,8 +90,8 @@ tests/integration/test_softhsm_fixture.py::test_softhsm_token_is_initialized_and
 tests/integration/test_softhsm_fixture.py::test_unique_label_is_fresh_per_use,1,R0,todo,,softhsm
 tests/integration/test_wizard.py::test_wizard_yields_working_provider,1,R11,todo,,softhsm
 tests/integration/test_wizard.py::test_wizard_falls_back_to_softhsm2_util,1,R11,todo,,softhsm
-tests/unit/console/test_app.py::test_build_operation_registry_registers_builtins_and_customs,1,R7,todo,,
-tests/unit/console/test_app.py::test_custom_op_resolves_via_cli_name,1,R7,todo,,
+tests/unit/console/test_app.py::test_build_operation_registry_registers_builtins_and_customs,1,R3,todo,,build_operation_registry moved to R3 (spec §4.1.1): r2_ops::registry
+tests/unit/console/test_app.py::test_custom_op_resolves_via_cli_name,1,R3,todo,,build_operation_registry + resolve_cli moved to R3 (spec §4.1.1): r2_ops::registry
 tests/unit/console/test_app.py::test_custom_ckm_map,1,R7,todo,,
 tests/unit/console/test_app.py::test_template_editor_wiring_matches_l10_presence,1,R7,n/a:lazy-import-wiring,,importlib.find_spec optional-module wiring; r2 constructs the editor directly (covered by test_template_editor.py::test_bootstrap_picks_up_the_real_editor)
 tests/unit/console/test_app.py::test_template_editor_uses_factory_when_module_present,1,R7,n/a:lazy-import-wiring,,sys.modules factory injection; r2 constructs the editor directly
@@ -402,14 +402,14 @@ tests/unit/console/test_providers_cmd.py::test_login_other_provider_never_consul
 tests/unit/console/test_providers_cmd.py::test_logout_drops_session_capabilities,1,R8,todo,,
 tests/unit/console/test_providers_cmd.py::test_logout_memory_unsupported,1,R8,todo,,
 tests/unit/console/test_providers_cmd.py::test_list_keys_after_logout_requires_auth,1,R8,todo,,
-tests/unit/console/test_render.py::test_error_panel_message_and_hint,1,R7,todo,,
-tests/unit/console/test_render.py::test_error_panel_without_hint,1,R7,todo,,
-tests/unit/console/test_render.py::test_caret_text_single_line,1,R7,todo,,
-tests/unit/console/test_render.py::test_caret_text_lands_on_the_right_physical_row,1,R7,todo,,
-tests/unit/console/test_render.py::test_caret_text_clamps_out_of_range_pos,1,R7,todo,,
-tests/unit/console/test_render.py::test_hex_panel_groups_and_length,1,R7,todo,,
-tests/unit/console/test_render.py::test_hex_panel_empty,1,R7,todo,,
-tests/unit/console/test_render.py::test_make_table_cells_are_stringified,1,R7,todo,,
+tests/unit/console/test_render.py::test_error_panel_message_and_hint,1,R1,todo,,renderer moved to R1 (spec §4.1.1): r2_core::render::error_panel
+tests/unit/console/test_render.py::test_error_panel_without_hint,1,R1,todo,,renderer moved to R1 (spec §4.1.1): r2_core::render::error_panel
+tests/unit/console/test_render.py::test_caret_text_single_line,1,R1,todo,,renderer moved to R1 (spec §4.1.1): r2_core::render::caret_text
+tests/unit/console/test_render.py::test_caret_text_lands_on_the_right_physical_row,1,R1,todo,,renderer moved to R1 (spec §4.1.1): r2_core::render::caret_text
+tests/unit/console/test_render.py::test_caret_text_clamps_out_of_range_pos,1,R1,todo,,renderer moved to R1 (spec §4.1.1): r2_core::render::caret_text
+tests/unit/console/test_render.py::test_hex_panel_groups_and_length,1,R1,todo,,renderer moved to R1 (spec §4.1.1): r2_core::render::hex_panel
+tests/unit/console/test_render.py::test_hex_panel_empty,1,R1,todo,,renderer moved to R1 (spec §4.1.1): r2_core::render::hex_panel
+tests/unit/console/test_render.py::test_make_table_cells_are_stringified,1,R1,todo,,renderer moved to R1 (spec §4.1.1): r2_core::render::make_table
 tests/unit/console/test_render.py::test_suggest_close_match_and_none,1,R7,todo,,
 tests/unit/console/test_repl.py::test_help_then_exit,1,R7,todo,,
 tests/unit/console/test_repl.py::test_exit_via_repl_exit_ends_the_session,1,R7,todo,,
@@ -593,18 +593,18 @@ tests/unit/pkcs11/test_attributes.py::TestTemplateIdentity::test_conflicting_lab
 tests/unit/pkcs11/test_attributes.py::TestTemplateIdentity::test_empty_id_rejected,1,R5a,todo,,
 tests/unit/pkcs11/test_attributes.py::TestTemplateIdentity::test_empty_label_rejected,1,R5a,todo,,
 tests/unit/pkcs11/test_attributes.py::TestTemplateIdentity::test_bytearray_id_normalized,1,R5a,n/a:python-bytearray,,bytes vs bytearray normalization; Rust has one byte type (Vec<u8>)
-tests/unit/pkcs11/test_mechanisms.py::TestFolding::test_hash_variants_fold,1,R5b,todo,,
-tests/unit/pkcs11/test_mechanisms.py::TestFolding::test_cbc_and_cbc_pad_fold_to_one_name,1,R5b,todo,,
-tests/unit/pkcs11/test_mechanisms.py::TestFolding::test_gmac_advertised_via_gcm_fallback,1,R5b,todo,,
-tests/unit/pkcs11/test_mechanisms.py::TestFolding::test_wrap_and_derive_names,1,R5b,todo,,
-tests/unit/pkcs11/test_mechanisms.py::TestFolding::test_rsa_aes_key_wrap_not_advertised,1,R5b,todo,,
-tests/unit/pkcs11/test_mechanisms.py::TestFolding::test_empty_codes_fold_to_nothing,1,R5b,todo,,
-tests/unit/pkcs11/test_mechanisms.py::TestEddsaProbe::test_standard_ckm_wins,1,R5b,todo,,
-tests/unit/pkcs11/test_mechanisms.py::TestEddsaProbe::test_vendor_probe_is_advisory,1,R5b,todo,,
-tests/unit/pkcs11/test_mechanisms.py::TestEddsaProbe::test_default_candidates_only_when_token_lists_them,1,R5b,todo,,
-tests/unit/pkcs11/test_mechanisms.py::TestCustomMerge::test_custom_ckm_advertised_when_token_lists_it,1,R5b,todo,,
-tests/unit/pkcs11/test_mechanisms.py::TestCustomMerge::test_custom_and_builtin_coexist,1,R5b,todo,,
-tests/unit/pkcs11/test_mechanisms.py::TestNormalize::test_names_and_ints_mix,1,R5b,todo,,
+tests/unit/pkcs11/test_mechanisms.py::TestFolding::test_hash_variants_fold,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (folding)
+tests/unit/pkcs11/test_mechanisms.py::TestFolding::test_cbc_and_cbc_pad_fold_to_one_name,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (folding)
+tests/unit/pkcs11/test_mechanisms.py::TestFolding::test_gmac_advertised_via_gcm_fallback,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (folding)
+tests/unit/pkcs11/test_mechanisms.py::TestFolding::test_wrap_and_derive_names,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (folding)
+tests/unit/pkcs11/test_mechanisms.py::TestFolding::test_rsa_aes_key_wrap_not_advertised,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (folding)
+tests/unit/pkcs11/test_mechanisms.py::TestFolding::test_empty_codes_fold_to_nothing,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (folding)
+tests/unit/pkcs11/test_mechanisms.py::TestEddsaProbe::test_standard_ckm_wins,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (EdDSA probe)
+tests/unit/pkcs11/test_mechanisms.py::TestEddsaProbe::test_vendor_probe_is_advisory,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (EdDSA probe)
+tests/unit/pkcs11/test_mechanisms.py::TestEddsaProbe::test_default_candidates_only_when_token_lists_them,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (EdDSA probe)
+tests/unit/pkcs11/test_mechanisms.py::TestCustomMerge::test_custom_ckm_advertised_when_token_lists_it,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (custom merge)
+tests/unit/pkcs11/test_mechanisms.py::TestCustomMerge::test_custom_and_builtin_coexist,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (custom merge)
+tests/unit/pkcs11/test_mechanisms.py::TestNormalize::test_names_and_ints_mix,1,R5a,todo,,unfiltered mechanism-list normalization feeding the fold (R5a accept: unknown CKMs survive the unfiltered mechanism list)
 tests/unit/pkcs11/test_mechanisms.py::TestHashHelpers::test_digest_info_sha256_prefix,1,R5b,todo,,
 tests/unit/pkcs11/test_mechanisms.py::TestHashHelpers::test_unknown_hash_rejected,1,R5b,todo,,
 tests/unit/pkcs11/test_mechanisms.py::TestPackers::test_none_packer,1,R5b,todo,,
@@ -618,9 +618,9 @@ tests/unit/pkcs11/test_mechanisms.py::TestPackers::test_raw_packer_prefers_raw_p
 tests/unit/pkcs11/test_mechanisms.py::TestPackers::test_raw_packer_falls_back_to_mechparam,1,R5b,todo,,
 tests/unit/pkcs11/test_mechanisms.py::TestPackers::test_raw_packer_requires_bytes,1,R5b,todo,,
 tests/unit/pkcs11/test_mechanisms.py::TestPackers::test_missing_raw_ckm_is_a_bug,1,R5b,todo,,
-tests/unit/pkcs11/test_mechanisms.py::TestCmacFolding::test_cmac_general_alone_is_not_advertised,1,R5b,todo,,
-tests/unit/pkcs11/test_mechanisms.py::TestCmacFolding::test_cmac_advertised_with_plain_ckm,1,R5b,todo,,
-tests/unit/pkcs11/test_objects.py::TestGenericSecrets::test_mechanisms_fold_hmac,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (mechanisms folding)
+tests/unit/pkcs11/test_mechanisms.py::TestCmacFolding::test_cmac_general_alone_is_not_advertised,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (folding)
+tests/unit/pkcs11/test_mechanisms.py::TestCmacFolding::test_cmac_advertised_with_plain_ckm,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (folding)
+tests/unit/pkcs11/test_objects.py::TestGenericSecrets::test_mechanisms_fold_hmac,1,R5a,todo,,"HMAC CKM folding in mechanisms() (capability.rs, spec §4.1.1)"
 tests/unit/pkcs11/test_objects.py::TestGenericSecrets::test_generate_uses_generic_keygen_and_value_len,1,R5a,todo,,
 tests/unit/pkcs11/test_objects.py::TestGenericSecrets::test_generic_import_reads_back_as_generic,1,R5a,todo,,
 tests/unit/pkcs11/test_objects.py::TestGenericSecrets::test_hmac_key_types_fold_into_generic,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (read_key_template; the CKK fold on read is R5a)
@@ -684,8 +684,8 @@ tests/unit/pkcs11/test_provider_objects.py::TestCkrMapping::test_attribute_inval
 tests/unit/pkcs11/test_provider_objects.py::TestCkrMapping::test_user_not_logged_in_maps_to_auth_required,1,R5a,todo,,
 tests/unit/pkcs11/test_provider_objects.py::TestCkrMapping::test_unknown_ckr_keeps_code_and_name,1,R5a,todo,,
 tests/unit/pkcs11/test_provider_objects.py::TestCkrMapping::test_key_handle_invalid_message,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestCustomMechanisms::test_custom_ckm_advertised,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (custom ckm->id merge)
-tests/unit/pkcs11/test_provider_objects.py::TestCustomMechanisms::test_custom_ckm_not_advertised_without_token_support,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (custom ckm->id merge)
+tests/unit/pkcs11/test_provider_objects.py::TestCustomMechanisms::test_custom_ckm_advertised,1,R5a,todo,,"custom ckm->id merge in mechanisms()/supports() (capability.rs, spec §4.1.1)"
+tests/unit/pkcs11/test_provider_objects.py::TestCustomMechanisms::test_custom_ckm_not_advertised_without_token_support,1,R5a,todo,,"custom ckm->id merge in mechanisms() (capability.rs, spec §4.1.1)"
 tests/unit/pkcs11/test_provider_objects.py::TestCustomMechanisms::test_custom_dispatch_uses_raw_ckm,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (raw packer dispatch)
 tests/unit/pkcs11/test_provider_objects.py::TestCustomMechanisms::test_unadvertised_mechanism_rejected,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (encrypt path)
 tests/unit/pkcs11/test_provider_objects.py::TestWrapUnwrap::test_wrap_pad_prefers_kwp_when_advertised,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (KWP preference)
@@ -751,8 +751,8 @@ tests/unit/pkcs11/test_wrap_kek.py::TestValueLenInjection::test_not_injected_for
 tests/unit/pkcs11/test_wrap_kek.py::TestValueLenInjection::test_operator_template_row_wins,1,R5b,todo,,
 tests/unit/pkcs11/test_wrap_kek.py::TestValueLenInjection::test_private_results_never_get_a_value_len,1,R5b,todo,,
 tests/unit/pkcs11/test_wrap_kek.py::TestValueLenInjection::test_retries_once_without_value_len_when_the_token_objects,1,R5b,todo,,
-tests/unit/services/test_certops.py::test_certificate_details_rows,1,R8,todo,,
-tests/unit/services/test_certops.py::test_certificate_details_garbage,1,R8,todo,,
+tests/unit/services/test_certops.py::test_certificate_details_rows,1,R6,todo,,certificate_details moved to R6 (spec §4.1.1): r2_core::x509info
+tests/unit/services/test_certops.py::test_certificate_details_garbage,1,R6,todo,,certificate_details moved to R6 (spec §4.1.1): r2_core::x509info
 tests/unit/services/test_certops.py::test_find_certificate_prefers_shared_id_over_label,1,R8,todo,,
 tests/unit/services/test_certops.py::test_find_certificate_by_label_when_no_id_match,1,R8,todo,,
 tests/unit/services/test_certops.py::test_find_certificate_none,1,R8,todo,,
@@ -762,8 +762,8 @@ tests/unit/services/test_certops.py::test_pkcs12_explicit_cert_der_wins,1,R8,tod
 tests/unit/services/test_certops.py::test_pkcs12_non_exportable_key_refused_before_export,1,R8,todo,,
 tests/unit/services/test_certops.py::test_pkcs12_needs_a_private_key,1,R8,todo,,
 tests/unit/services/test_certops.py::test_pkcs12_empty_password_rejected,1,R8,todo,,
-tests/unit/services/test_certops.py::test_rs_to_der_round_trip,1,R8,todo,,
-tests/unit/services/test_certops.py::test_rs_to_der_rejects_non_even_input,2,R8,todo,,
+tests/unit/services/test_certops.py::test_rs_to_der_round_trip,1,R6,todo,,ecdsa_rs_to_der moved to R6 (spec §4.1.1): r2_core::der
+tests/unit/services/test_certops.py::test_rs_to_der_rejects_non_even_input,2,R6,todo,,ecdsa_rs_to_der moved to R6 (spec §4.1.1): r2_core::der
 tests/unit/services/test_certops.py::test_csr_ecdsa_signature_is_der_converted_rs,1,R8,todo,,
 tests/unit/services/test_certops.py::test_csr_ecdsa_real_crypto_verifies,1,R8,todo,,
 tests/unit/services/test_certops.py::test_csr_rsa_real_crypto_verifies,1,R8,todo,,
@@ -776,16 +776,16 @@ tests/unit/services/test_keyexport.py::test_refusal_message_and_hint,1,R8,todo,,
 tests/unit/services/test_keyexport.py::test_refusal_applies_to_secret_keys_too,1,R8,todo,,
 tests/unit/services/test_keyexport.py::test_secret_auto_is_raw_bytes,1,R8,todo,,
 tests/unit/services/test_keyexport.py::test_secret_rejects_pem,1,R8,todo,,
-tests/unit/services/test_keyexport.py::test_private_auto_is_pem_pkcs8,1,R8,todo,,
-tests/unit/services/test_keyexport.py::test_private_der_round_trips,1,R8,todo,,
-tests/unit/services/test_keyexport.py::test_private_password_encrypts_pkcs8,1,R8,todo,,
+tests/unit/services/test_keyexport.py::test_private_auto_is_pem_pkcs8,1,R6,todo,,keyexport serializer moved to R6 (spec §4.1.1): port the byte assertions against r2_core::formats; the export_bytes format-resolution part is R8's keyexport dispatch (private_key_bytes)
+tests/unit/services/test_keyexport.py::test_private_der_round_trips,1,R6,todo,,keyexport serializer moved to R6 (spec §4.1.1): port the byte assertions against r2_core::formats; the export_bytes format-resolution part is R8's keyexport dispatch (private_key_bytes)
+tests/unit/services/test_keyexport.py::test_private_password_encrypts_pkcs8,1,R6,todo,,"keyexport serializer moved to R6 (spec §4.1.1): port the byte assertions against r2_core::formats; the export_bytes format-resolution part is R8's keyexport dispatch (private_key_bytes, encrypted PKCS#8)"
 tests/unit/services/test_keyexport.py::test_private_raw_rejected,1,R8,todo,,
-tests/unit/services/test_keyexport.py::test_public_auto_is_pem_spki,1,R8,todo,,
+tests/unit/services/test_keyexport.py::test_public_auto_is_pem_spki,1,R6,todo,,keyexport serializer moved to R6 (spec §4.1.1): port the byte assertions against r2_core::formats; the export_bytes format-resolution part is R8's keyexport dispatch (public_key_bytes)
 tests/unit/services/test_keyexport.py::test_public_rejects_password,1,R8,todo,,
 tests/unit/services/test_keyexport.py::test_public_flag_rejects_password,1,R8,todo,,
 tests/unit/services/test_keyexport.py::test_secret_raw_rejects_password,1,R8,todo,,
 tests/unit/services/test_keyexport.py::test_certificate_rejects_password,1,R8,todo,,
-tests/unit/services/test_keyexport.py::test_certificate_pem_and_der,1,R8,todo,,
+tests/unit/services/test_keyexport.py::test_certificate_pem_and_der,1,R6,todo,,keyexport serializer moved to R6 (spec §4.1.1): port the byte assertions against r2_core::formats; the export_bytes format-resolution part is R8's keyexport dispatch (certificate_bytes)
 tests/unit/services/test_keyexport.py::test_p12_format_is_not_handled_here,1,R8,todo,,
 tests/unit/services/test_keyexport.py::test_unknown_format_rejected,1,R8,todo,,
 tests/unit/services/test_keyexport.py::test_public_flag_prefers_public_object_sharing_id,1,R8,todo,,
@@ -1031,8 +1031,8 @@ tests/unit/test_l13_hardening.py::test_public_half_fallback_prefers_public_then_
 tests/unit/test_l13_hardening.py::test_public_half_fallback_honors_key_id,1,R9,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; verify fallback
 tests/unit/test_l13_hardening.py::test_verify_on_keypair_ref_offers_mechanisms_and_verifies,1,R9,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; verify fallback
 tests/unit/test_l13_hardening.py::test_prompttoolkitio_print_does_not_eat_markup_lookalikes,1,R7,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; rich markup hazard: keep as a verbatim-render assertion on the r2 renderer (D1)
-tests/unit/test_l13_hardening.py::test_make_table_cells_render_verbatim,1,R7,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; rich markup hazard: '[x]'/'[ ]' cells must render verbatim (D1)
-tests/unit/test_l13_hardening.py::test_hex_panel_title_renders_verbatim,1,R7,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; rich markup hazard: panel title renders verbatim (D1)
+tests/unit/test_l13_hardening.py::test_make_table_cells_render_verbatim,1,R1,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; rich markup hazard: '[x]'/'[ ]' cells must render verbatim (D1)
+tests/unit/test_l13_hardening.py::test_hex_panel_title_renders_verbatim,1,R1,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; rich markup hazard: panel title renders verbatim (D1)
 tests/unit/test_memory_objects.py::test_hmac_matches_stdlib_for_every_hash,5,R4,todo,,
 tests/unit/test_memory_objects.py::test_hmac_rfc4231_case2_sha256_vector,1,R4,todo,,
 tests/unit/test_memory_objects.py::test_hmac_defaults_to_sha256_and_truncates_by_mac_len,1,R4,todo,,

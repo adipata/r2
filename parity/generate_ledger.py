@@ -171,6 +171,11 @@ _POBJ = "tests/unit/pkcs11/test_provider_objects.py::"
 _PKOBJ = "tests/unit/pkcs11/test_objects.py::"
 _L13 = "tests/unit/test_l13_hardening.py::"
 _PROV = "tests/unit/console/test_providers_cmd.py::"
+_REND = "tests/unit/console/test_render.py::"
+_APP = "tests/unit/console/test_app.py::"
+_CERT = "tests/unit/services/test_certops.py::"
+_KEXP = "tests/unit/services/test_keyexport.py::"
+_MECH = "tests/unit/pkcs11/test_mechanisms.py::"
 
 _TEMPLATE_FILE = "--template / key template / templatefile -> R14"
 _SEED = (
@@ -178,6 +183,12 @@ _SEED = (
     "R14 ports it into its own test file"
 )
 _R5B_MOVED = "moved from the R5a test file: exercises R5b-owned provider code"
+_R1_RENDER = "renderer moved to R1 (spec §4.1.1): r2_core::render"
+_R6_FORMATS = (
+    "keyexport serializer moved to R6 (spec §4.1.1): port the byte assertions against "
+    "r2_core::formats; the export_bytes format-resolution part is R8's keyexport dispatch"
+)
+_R5A_CAPABILITY = "moved to R5a (spec §4.1.1): capability.rs"
 _CKEYS_EDITOR = (
     "drives the real checklist editor ('ok' answers, R10): port once R10 merges "
     "or script an accept-all editor until then"
@@ -287,12 +298,12 @@ OVERRIDES: dict[str, tuple[str, str]] = {
         _R5B_MOVED + " (encrypt path; CKR table itself is R5a)",
     ),
     _POBJ + "TestCustomMechanisms::test_custom_ckm_advertised": (
-        "R5b",
-        _R5B_MOVED + " (custom ckm->id merge)",
+        "R5a",
+        "custom ckm->id merge in mechanisms()/supports() (capability.rs, spec §4.1.1)",
     ),
     _POBJ + "TestCustomMechanisms::test_custom_ckm_not_advertised_without_token_support": (
-        "R5b",
-        _R5B_MOVED + " (custom ckm->id merge)",
+        "R5a",
+        "custom ckm->id merge in mechanisms() (capability.rs, spec §4.1.1)",
     ),
     _POBJ + "TestCustomMechanisms::test_custom_dispatch_uses_raw_ckm": (
         "R5b",
@@ -342,8 +353,8 @@ OVERRIDES: dict[str, tuple[str, str]] = {
     ),
     # --- unit/pkcs11/test_objects: HMAC/verbs/edit surfaces -> R5b -------------------
     _PKOBJ + "TestGenericSecrets::test_mechanisms_fold_hmac": (
-        "R5b",
-        _R5B_MOVED + " (mechanisms folding)",
+        "R5a",
+        "HMAC CKM folding in mechanisms() (capability.rs, spec §4.1.1)",
     ),
     _PKOBJ + "TestGenericSecrets::test_hmac_key_types_fold_into_generic": (
         "R5b",
@@ -416,12 +427,108 @@ OVERRIDES: dict[str, tuple[str, str]] = {
         "rich markup hazard: keep as a verbatim-render assertion on the r2 renderer (D1)",
     ),
     _L13 + "test_make_table_cells_render_verbatim": (
-        "R7",
+        "R1",
         "rich markup hazard: '[x]'/'[ ]' cells must render verbatim (D1)",
     ),
     _L13 + "test_hex_panel_title_renders_verbatim": (
-        "R7",
+        "R1",
         "rich markup hazard: panel title renders verbatim (D1)",
+    ),
+    # --- spec §4.1.1 code moves: test_render renderer cases -> R1 -------------------
+    _REND + "test_error_panel_message_and_hint": ("R1", _R1_RENDER + "::error_panel"),
+    _REND + "test_error_panel_without_hint": ("R1", _R1_RENDER + "::error_panel"),
+    _REND + "test_caret_text_single_line": ("R1", _R1_RENDER + "::caret_text"),
+    _REND + "test_caret_text_lands_on_the_right_physical_row": (
+        "R1",
+        _R1_RENDER + "::caret_text",
+    ),
+    _REND + "test_caret_text_clamps_out_of_range_pos": ("R1", _R1_RENDER + "::caret_text"),
+    _REND + "test_hex_panel_groups_and_length": ("R1", _R1_RENDER + "::hex_panel"),
+    _REND + "test_hex_panel_empty": ("R1", _R1_RENDER + "::hex_panel"),
+    _REND + "test_make_table_cells_are_stringified": ("R1", _R1_RENDER + "::make_table"),
+    # --- spec §4.1.1: app.build_operation_registry -> R3 ---------------------------
+    _APP + "test_build_operation_registry_registers_builtins_and_customs": (
+        "R3",
+        "build_operation_registry moved to R3 (spec §4.1.1): r2_ops::registry",
+    ),
+    _APP + "test_custom_op_resolves_via_cli_name": (
+        "R3",
+        "build_operation_registry + resolve_cli moved to R3 (spec §4.1.1): r2_ops::registry",
+    ),
+    # --- spec §4.1.1: certops.certificate_details / ecdsa_rs_to_der -> R6 -----------
+    _CERT + "test_certificate_details_rows": (
+        "R6",
+        "certificate_details moved to R6 (spec §4.1.1): r2_core::x509info",
+    ),
+    _CERT + "test_certificate_details_garbage": (
+        "R6",
+        "certificate_details moved to R6 (spec §4.1.1): r2_core::x509info",
+    ),
+    _CERT + "test_rs_to_der_round_trip": (
+        "R6",
+        "ecdsa_rs_to_der moved to R6 (spec §4.1.1): r2_core::der",
+    ),
+    _CERT + "test_rs_to_der_rejects_non_even_input": (
+        "R6",
+        "ecdsa_rs_to_der moved to R6 (spec §4.1.1): r2_core::der",
+    ),
+    # --- spec §4.1.1: keyexport's pyca serializers -> R6 ----------------------------
+    _KEXP + "test_private_auto_is_pem_pkcs8": ("R6", _R6_FORMATS + " (private_key_bytes)"),
+    _KEXP + "test_private_der_round_trips": ("R6", _R6_FORMATS + " (private_key_bytes)"),
+    _KEXP + "test_private_password_encrypts_pkcs8": (
+        "R6",
+        _R6_FORMATS + " (private_key_bytes, encrypted PKCS#8)",
+    ),
+    _KEXP + "test_public_auto_is_pem_spki": ("R6", _R6_FORMATS + " (public_key_bytes)"),
+    _KEXP + "test_certificate_pem_and_der": ("R6", _R6_FORMATS + " (certificate_bytes)"),
+    # --- spec §4.1.1: CKM folding / custom merge / EdDSA probe -> R5a ---------------
+    _MECH + "TestFolding::test_hash_variants_fold": ("R5a", _R5A_CAPABILITY + " (folding)"),
+    _MECH + "TestFolding::test_cbc_and_cbc_pad_fold_to_one_name": (
+        "R5a",
+        _R5A_CAPABILITY + " (folding)",
+    ),
+    _MECH + "TestFolding::test_gmac_advertised_via_gcm_fallback": (
+        "R5a",
+        _R5A_CAPABILITY + " (folding)",
+    ),
+    _MECH + "TestFolding::test_wrap_and_derive_names": ("R5a", _R5A_CAPABILITY + " (folding)"),
+    _MECH + "TestFolding::test_rsa_aes_key_wrap_not_advertised": (
+        "R5a",
+        _R5A_CAPABILITY + " (folding)",
+    ),
+    _MECH + "TestFolding::test_empty_codes_fold_to_nothing": (
+        "R5a",
+        _R5A_CAPABILITY + " (folding)",
+    ),
+    _MECH + "TestEddsaProbe::test_standard_ckm_wins": ("R5a", _R5A_CAPABILITY + " (EdDSA probe)"),
+    _MECH + "TestEddsaProbe::test_vendor_probe_is_advisory": (
+        "R5a",
+        _R5A_CAPABILITY + " (EdDSA probe)",
+    ),
+    _MECH + "TestEddsaProbe::test_default_candidates_only_when_token_lists_them": (
+        "R5a",
+        _R5A_CAPABILITY + " (EdDSA probe)",
+    ),
+    _MECH + "TestCustomMerge::test_custom_ckm_advertised_when_token_lists_it": (
+        "R5a",
+        _R5A_CAPABILITY + " (custom merge)",
+    ),
+    _MECH + "TestCustomMerge::test_custom_and_builtin_coexist": (
+        "R5a",
+        _R5A_CAPABILITY + " (custom merge)",
+    ),
+    _MECH + "TestNormalize::test_names_and_ints_mix": (
+        "R5a",
+        "unfiltered mechanism-list normalization feeding the fold (R5a accept: unknown CKMs "
+        "survive the unfiltered mechanism list)",
+    ),
+    _MECH + "TestCmacFolding::test_cmac_general_alone_is_not_advertised": (
+        "R5a",
+        _R5A_CAPABILITY + " (folding)",
+    ),
+    _MECH + "TestCmacFolding::test_cmac_advertised_with_plain_ckm": (
+        "R5a",
+        _R5A_CAPABILITY + " (folding)",
     ),
 }
 
