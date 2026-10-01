@@ -28,25 +28,45 @@ impl RenderConfig {
         hex_width: 32,
     };
 }
-/// ALWAYS emits ANSI SGR styling (the Sink decides whether it reaches the terminal). Lines
-/// joined with "\n", no trailing newline.
+/// ALWAYS emits ANSI SGR styling (the Full sink). Lines joined with "\n", no trailing
+/// newline.
 pub fn render(renderable: &Renderable, cfg: &RenderConfig) -> String {
+    render_with(renderable, cfg, Sgr::Full)
+}
+/// The same layout with no SGR at all (tones ignored) — rich's output to a non-terminal:
+/// content bytes (ESC, NUL, DEL, other C0 controls kept by the rich Text model) pass
+/// unchanged. Tests, ScriptedIo, snapshots and the Plain sink.
+pub fn render_plain(renderable: &Renderable, cfg: &RenderConfig) -> String {
+    render_with(renderable, cfg, Sgr::Off)
+}
+/// The same layout with colour-free SGR (bold/dim/italic only; rich `no_color`) — the
+/// NoColor sink. Content bytes pass unchanged.
+pub fn render_no_color(renderable: &Renderable, cfg: &RenderConfig) -> String {
+    render_with(renderable, cfg, Sgr::NoColor)
+}
+
+/// Which SGR the renderer emits for the tones. Styling is decided here, never by stripping
+/// escape sequences afterwards (which cannot tell the renderer's SGR from content bytes).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Sgr {
+    Full,
+    NoColor,
+    Off,
+}
+
+fn render_with(renderable: &Renderable, cfg: &RenderConfig, sgr: Sgr) -> String {
     match renderable {
-        Renderable::Text(text) => render_text(&[to_cells(text, Tone::Plain)], cfg.width),
+        Renderable::Text(text) => render_text(&[to_cells(text, Tone::Plain)], cfg.width, sgr),
         Renderable::Styled(lines) => {
             let lines: Vec<Cells> = lines.iter().map(line_cells).collect();
-            render_text(&lines, cfg.width)
+            render_text(&lines, cfg.width, sgr)
         }
-        Renderable::Table(data) => render_table(data, cfg),
+        Renderable::Table(data) => render_table(data, cfg, sgr),
         Renderable::Hex { data, title } => {
-            render_panel(&hex_panel(data, title.as_deref(), cfg), cfg.width)
+            render_panel(&hex_panel(data, title.as_deref(), cfg), cfg.width, sgr)
         }
-        Renderable::Panel(panel) => render_panel(panel, cfg.width),
+        Renderable::Panel(panel) => render_panel(panel, cfg.width, sgr),
     }
-}
-/// `anstream::adapter::strip_str(&render(r, cfg))` — tests, ScriptedIo, snapshots.
-pub fn render_plain(renderable: &Renderable, cfg: &RenderConfig) -> String {
-    anstream::adapter::strip_str(&render(renderable, cfg)).to_string()
 }
 
 // ---- cells (rich 15 `rich.cells`) ----------------------------------------------------
@@ -293,19 +313,24 @@ fn line_cells(line: &Line) -> Cells {
         .collect()
 }
 
-fn tone_style(tone: Tone) -> Style {
-    match tone {
+fn tone_style(tone: Tone, sgr: Sgr) -> Style {
+    let style = match tone {
         Tone::Plain => Style::new(),
         Tone::Bold => Style::new().bold(),
         Tone::Dim => Style::new().dimmed(),
         Tone::Italic => Style::new().italic(),
         Tone::Error => Style::new().bold().fg_color(Some(AnsiColor::Red.into())),
         Tone::Danger => Style::new().fg_color(Some(AnsiColor::Red.into())),
+    };
+    match sgr {
+        Sgr::Full => style,
+        Sgr::NoColor => style.fg_color(None).bg_color(None),
+        Sgr::Off => Style::new(),
     }
 }
 
 /// SGR-styled text of one line: each run of equal tone wrapped in its style + reset.
-fn styled(cells: &[(char, Tone)]) -> String {
+fn styled(cells: &[(char, Tone)], sgr: Sgr) -> String {
     let mut out = String::new();
     let mut index = 0;
     while index < cells.len() {
@@ -315,7 +340,7 @@ fn styled(cells: &[(char, Tone)]) -> String {
             .position(|&(_, t)| t != tone)
             .map_or(cells.len(), |offset| index + offset);
         let text: String = cells[index..run_end].iter().map(|&(c, _)| c).collect();
-        let style = tone_style(tone);
+        let style = tone_style(tone, sgr);
         if style.is_plain() {
             out.push_str(&text);
         } else {
@@ -470,7 +495,7 @@ fn wrap_lines(lines: &[Cells], width: usize) -> Vec<Cells> {
 /// rich `console.print(Text)`: every '\n'-separated line wrapped at the console width.
 /// (A 0 width never reaches the renderer from a console — §4.9.2 maps it to 80 — and
 /// leaves the lines unwrapped.)
-fn render_text(lines: &[Cells], width: usize) -> String {
+fn render_text(lines: &[Cells], width: usize, sgr: Sgr) -> String {
     let laid_out: Vec<Cells> = if width == 0 {
         lines
             .iter()
@@ -481,7 +506,7 @@ fn render_text(lines: &[Cells], width: usize) -> String {
     };
     laid_out
         .iter()
-        .map(|line| styled(line))
+        .map(|line| styled(line, sgr))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -542,7 +567,7 @@ fn align_annotation(text: Cells, width: usize, left: bool, fill: (char, Tone)) -
 
 /// rich 15 `Panel(Text, box=ROUNDED, padding=(0, 1), expand=False, title_align="left",
 /// subtitle_align="right")` rendered at console width `width`.
-fn render_panel(panel: &PanelData, width: usize) -> String {
+fn render_panel(panel: &PanelData, width: usize, sgr: Sgr) -> String {
     let border = panel.border;
     // An empty body is rich's empty Text: one blank line.
     let mut body: Vec<Cells> = panel.body.iter().map(line_cells).collect();
@@ -583,20 +608,21 @@ fn render_panel(panel: &PanelData, width: usize) -> String {
     // width below 1 rich renders no content line at all.
     let text_width = child_width.saturating_sub(2);
     let mut rows: Vec<String> = Vec::new();
-    let side = |c: char| styled(&[(c, border)]);
+    let side = |c: char| styled(&[(c, border)], sgr);
     let top = match title {
         Some(title) if panel_width > 4 => {
             let aligned = align_annotation(title, panel_width - 4, true, ('─', border));
             format!(
                 "{}{}{}",
-                side_str("╭─", border),
-                styled(&aligned),
-                side_str("─╮", border)
+                side_str("╭─", border, sgr),
+                styled(&aligned, sgr),
+                side_str("─╮", border, sgr)
             )
         }
         _ => side_str(
             &format!("╭{}╮", "─".repeat(panel_width.saturating_sub(2))),
             border,
+            sgr,
         ),
     };
     rows.push(top);
@@ -606,7 +632,7 @@ fn render_panel(panel: &PanelData, width: usize) -> String {
             let fill = text_width.saturating_sub(cells_len(&line));
             cells.extend(line);
             cells.extend(std::iter::repeat_n((' ', Tone::Plain), fill + 1));
-            rows.push(format!("{}{}{}", side('│'), styled(&cells), side('│')));
+            rows.push(format!("{}{}{}", side('│'), styled(&cells, sgr), side('│')));
         }
     }
     let subtitle = panel
@@ -618,22 +644,23 @@ fn render_panel(panel: &PanelData, width: usize) -> String {
             let aligned = align_annotation(subtitle, panel_width - 4, false, ('─', border));
             format!(
                 "{}{}{}",
-                side_str("╰─", border),
-                styled(&aligned),
-                side_str("─╯", border)
+                side_str("╰─", border, sgr),
+                styled(&aligned, sgr),
+                side_str("─╯", border, sgr)
             )
         }
         _ => side_str(
             &format!("╰{}╯", "─".repeat(panel_width.saturating_sub(2))),
             border,
+            sgr,
         ),
     };
     rows.push(bottom);
     rows.join("\n")
 }
 
-fn side_str(text: &str, tone: Tone) -> String {
-    styled(&to_cells(text, tone))
+fn side_str(text: &str, tone: Tone, sgr: Sgr) -> String {
+    styled(&to_cells(text, tone), sgr)
 }
 
 // ---- tables -------------------------------------------------------------------------------
@@ -658,23 +685,30 @@ fn table_cell_text(text: &str) -> String {
         .join("\n")
 }
 
-fn render_table(data: &TableData, cfg: &RenderConfig) -> String {
-    // rich renders a table without columns as nothing at all, its title included.
-    if data.columns.is_empty() && data.rows.is_empty() {
-        return String::new();
-    }
+/// The comfy-table body lines (`trim_fmt`), header cells bold when `bold_header` (then
+/// SGR is enforced; otherwise comfy-table emits none).
+fn comfy_lines(data: &TableData, cfg: &RenderConfig, bold_header: bool) -> Vec<String> {
     let mut table = ComfyTable::new();
     table
         .load_style(SIMPLE_HEAD)
         .force_no_tty()
-        .enforce_styling()
         .set_width(u16::try_from(cfg.width).unwrap_or(u16::MAX))
         .set_content_arrangement(ContentArrangement::Dynamic);
+    if bold_header {
+        table.enforce_styling();
+    }
     if !data.columns.is_empty() {
         table.set_header(
             data.columns
                 .iter()
-                .map(|column| Cell::new(table_cell_text(column)).add_attribute(Attribute::Bold))
+                .map(|column| {
+                    let cell = Cell::new(table_cell_text(column));
+                    if bold_header {
+                        cell.add_attribute(Attribute::Bold)
+                    } else {
+                        cell
+                    }
+                })
                 .collect::<Vec<_>>(),
         );
     }
@@ -685,14 +719,47 @@ fn render_table(data: &TableData, cfg: &RenderConfig) -> String {
                 .collect::<Vec<_>>(),
         );
     }
-    // `trim_fmt()` cannot see the padding inside a styled (bold) header cell, which ends
-    // with its SGR reset: trim the trailing blanks before such sequences too.
-    let body = table
-        .trim_fmt()
-        .lines()
-        .map(trim_styled_end)
-        .collect::<Vec<_>>()
-        .join("\n");
+    table.trim_fmt().lines().map(str::to_owned).collect()
+}
+
+fn render_table(data: &TableData, cfg: &RenderConfig, sgr: Sgr) -> String {
+    // rich renders a table without columns as nothing at all, its title included.
+    if data.columns.is_empty() && data.rows.is_empty() {
+        return String::new();
+    }
+    // Layout and measurement happen on the unstyled rendering, where cell content (ESC and
+    // all) is plain text. The styled rendering only replaces the header lines (the bold
+    // header cells are the only SGR comfy-table emits); `trim_fmt()` cannot see the padding
+    // inside a styled header cell, which ends with its SGR reset, so those lines get their
+    // trailing blanks before such sequences trimmed too. Row lines (data) are never parsed
+    // for escape sequences.
+    let plain = comfy_lines(data, cfg, false);
+    let body_lines: Vec<String> = if sgr == Sgr::Off || data.columns.is_empty() {
+        plain.clone()
+    } else {
+        let styled_lines = comfy_lines(data, cfg, true);
+        let header_count = plain
+            .iter()
+            .position(|line| !line.is_empty() && line.chars().all(|c| c == '─'))
+            .unwrap_or(0);
+        if styled_lines.len() == plain.len() {
+            plain
+                .iter()
+                .zip(&styled_lines)
+                .enumerate()
+                .map(|(index, (plain_line, styled_line))| {
+                    if index < header_count {
+                        trim_styled_end(styled_line)
+                    } else {
+                        plain_line.clone()
+                    }
+                })
+                .collect()
+        } else {
+            plain.clone()
+        }
+    };
+    let body = body_lines.join("\n");
     // rich `if self.title:` — an empty title (after control-code stripping) is none.
     let Some(title) = data
         .title
@@ -703,9 +770,9 @@ fn render_table(data: &TableData, cfg: &RenderConfig) -> String {
         return body;
     };
     // The title: an italic line (rich wraps it at the table width), centered over the body.
-    let table_width = body
-        .lines()
-        .map(|line| str_cell_len(&anstream::adapter::strip_str(line).to_string()))
+    let table_width = plain
+        .iter()
+        .map(|line| str_cell_len(line))
         .max()
         .unwrap_or(0);
     let title_width = if table_width == 0 {
@@ -722,7 +789,7 @@ fn render_table(data: &TableData, cfg: &RenderConfig) -> String {
             }
             let line = &line[..end];
             let left = title_width.saturating_sub(cells_len(line)) / 2;
-            format!("{}{}", " ".repeat(left), styled(line))
+            format!("{}{}", " ".repeat(left), styled(line, sgr))
         })
         .collect();
     if !body.is_empty() {

@@ -218,7 +218,9 @@ fn print_renders_plain_text_at_capture_width() {
     let rendered = table(None, &["#", "name"], vec![vec!["1".into(), "k".into()]]);
     io.print(rendered.clone());
     io.print(r2_core::io::hex(&[0xde, 0xad], Some("data")));
-    io.clear(); // the trait default prints the clear sequence, which strips to ""
+    // The trait default prints the clear sequence as content, recorded verbatim (c2
+    // `test_clear_falls_back_to_ansi_for_plain_io`: output == ["\x1b[2J\x1b[H"]).
+    io.clear();
     let output = io.output();
     assert!(!output[0].contains('\u{1b}'));
     assert!(output[0].contains("name") && output[0].contains('k'));
@@ -234,7 +236,7 @@ fn print_renders_plain_text_at_capture_width() {
         "{}",
         output[1]
     );
-    assert_eq!(output[2], "");
+    assert_eq!(output[2], "\u{1b}[2J\u{1b}[H");
     assert_eq!(io.renderables()[0], rendered);
 }
 

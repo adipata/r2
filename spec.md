@@ -210,7 +210,7 @@ Rules (summary of §4.1.2/§4.1.3):
   `r2-cli` (review rule).
 - **Interaction traits and the renderer live in `r2-core`.** `ConsoleIo`, `TemplateEditor`
   and `Renderable` are defined in `r2_core::io`, and `render`/`render_plain` in
-  `r2_core::render` (comfy-table, anstyle, anstream's `strip_str`; comfy-table's
+  `r2_core::render` (comfy-table, anstyle; comfy-table's
   default `tty` feature pulls crossterm in transitively, but r2-core does no terminal I/O).
   The reedline/rpassword/crossterm/indicatif implementations, the Sink and the
   TerminalIo/PlainIo switch (`r2_console::io::open_console_io`) live in `r2-console`.
@@ -705,7 +705,7 @@ Third-party dependencies per crate (normal dependencies; versions in §4.1.4):
 
 | crate | third-party dependencies |
 |---|---|
-| r2-core | `openssl`, `der`, `spki`, `x509-cert`, `const-oid`, `secrecy`, `zeroize`, `indexmap`, `hex`, `base64`, `comfy-table`, `anstream`, `anstyle`, `tracing` |
+| r2-core | `openssl`, `der`, `spki`, `x509-cert`, `const-oid`, `secrecy`, `zeroize`, `indexmap`, `hex`, `base64`, `comfy-table`, `anstyle`, `tracing` |
 | r2-config | `serde_yaml_ng`, `yaml-rust2`, `indexmap`, `tracing` |
 | r2-provider | `openssl`, `secrecy`, `zeroize`, `tracing` |
 | r2-ops | `indexmap`, `tracing` |
@@ -729,7 +729,7 @@ reviews can check a new line quickly):
 | `reedline`, `crossterm`, `nu-ansi-term`, `rpassword`, `indicatif`, `console` | `r2-console` only (`nu-ansi-term` is reedline 0.49's `Style` type: `StyledText`, `DefaultHinter::with_style`; reedline does not re-export it) |
 | `comfy-table`, `anstyle` | `r2-core` (renderer), `r2-console` |
 | `unicode-width` | `r2-console` (r2-core's renderer measures with rich's own cell table, §4.9.2) |
-| `anstream` | `r2-core` (`strip_str` only), `r2-console` (Sink) |
+| `anstream` | `r2-console` (Sink) only |
 | `clap`, `ctrlc`, `tracing-subscriber`, `file-rotate`, `regex` | `r2-cli` only |
 | `tracing` | any crate |
 
@@ -3940,18 +3940,30 @@ impl RenderConfig {
     /// c2's test rendering console (rich, width 200) — used by ScriptedIo.
     pub const CAPTURE: RenderConfig = RenderConfig { width: 200, hex_group: 2, hex_width: 32 };
 }
-/// ALWAYS emits ANSI SGR styling (the Sink decides whether it reaches the terminal). Lines
-/// joined with "\n", no trailing newline.
+/// ALWAYS emits ANSI SGR styling (the Full sink). Lines joined with "\n", no trailing
+/// newline.
 pub fn render(renderable: &Renderable, cfg: &RenderConfig) -> String { .. }
-/// `anstream::adapter::strip_str(&render(r, cfg))` — tests, ScriptedIo, snapshots.
+/// The same layout with no SGR at all (tones ignored; rich writing to a non-terminal):
+/// content bytes the rich Text model keeps (ESC, NUL, DEL, other C0) pass unchanged —
+/// tests, ScriptedIo, snapshots, the Plain sink.
 pub fn render_plain(renderable: &Renderable, cfg: &RenderConfig) -> String { .. }
+/// The same layout with colour-free SGR (bold/dim/italic only; rich `no_color`) — the
+/// NoColor sink. Content bytes pass unchanged.
+pub fn render_no_color(renderable: &Renderable, cfg: &RenderConfig) -> String { .. }
 ```
+
+Styling is chosen by the renderer per tone, never by stripping escape sequences from
+rendered text afterwards (a stripper cannot tell the renderer's SGR from content bytes:
+c2/rich wrote a label's ESC, NUL, DEL or a whole `ESC[…m`/OSC run verbatim, and layout
+counted those characters with rich cell widths, so borders stay aligned).
 
 Rendering rules (normative; layout differences from rich are D1):
 
 - **rich Text model** (everything c2 held in a rich `Text`: printed strings, the caret
   echo, panel bodies, titles and subtitles, table cells, headers and title): BEL, BS, VT,
-  FF and CR are stripped (rich `strip_control_codes`; ESC is kept); widths are rich 15
+  FF and CR are stripped (rich `strip_control_codes`); every other character — ESC and
+  whole escape sequences in the content, NUL, other C0, DEL — is kept and written verbatim
+  by every rendering (`render`, `render_no_color`, `render_plain`); widths are rich 15
   cell widths — rich's own Unicode 17.0.0 table (C0/C1 controls 0), a ZWJ joins the next
   character into the preceding grapheme (adding no width), VS16 widens rich's
   `narrow_to_wide` characters to 2; tabs
@@ -4438,11 +4450,13 @@ pub fn install_line_assist(assist: Rc<dyn LineAssist>) -> AssistGuard { .. }
   component. Highlighting (`reedline::StyledText` of `nu_ansi_term::Style`s): known command
   green bold, unknown red, `provider:` refs of registered providers cyan, `--options` blue,
   `name=value` magenta, quoted strings (incl. an open quote) yellow.
-- Sink: `anstream::AutoStream<Stdout>` with `ColorChoice::Always` for Full and NoColor (the
-  NoColor text has its colour SGR parameters — 30–39, 40–49, 90–97, 100–107 and the
-  38/48 extended forms — removed first, dropping sequences that become empty) and
-  `ColorChoice::Never` for Plain. It is the only place output styling is decided; every
-  print uses `std::io::Write` on it (never the print macros).
+- Sink: the text is rendered per style by `r2_core::render` — Full → `render`, NoColor →
+  `render_no_color`, Plain → `render_plain` — and written unchanged (never filtered or
+  stripped afterwards, so content bytes reach stdout as rich wrote them, §4.9.2): Full and
+  NoColor through `anstream::AutoStream<Stdout>` with `ColorChoice::Always` (legacy
+  Windows consoles: wincon fallback, §11 D1), Plain straight to `Stdout`. It is the only
+  place output styling is decided; every print uses `std::io::Write` on it (never the
+  print macros).
 
 #### 4.9.8 Ctrl-C flag, spinner flag, panic report (`r2_core::runtime`, R1)
 
@@ -7158,7 +7172,8 @@ names the test or harness check that pins the deviation.
 - *Reason*: different renderer (decision PLAN §3/§13).
 - *Verified by*: `insta` snapshots; the parity harness compares content after normalizing
   table glyphs; the R1 renderer tests assert rich-identical text for error, hex and generic
-  panels, printed text, caret layouts and `cell_len` (vectors generated with rich 15,
+  panels, printed text (content ESC/NUL/DEL/OSC bytes included), caret layouts and
+  `cell_len` (vectors generated with rich 15,
   `crates/r2-core/tests/support/gen_rich_panels.py`); `resolve_color` unit tests over the
   rich 15 truth table.
 

@@ -12,7 +12,7 @@ mod rich_panels;
 
 use r2_core::error::ConsoleError;
 use r2_core::io::{PanelData, Renderable, Span, TableData, Tone, caret, error_panel, hex, table};
-use r2_core::render::{RenderConfig, render, render_plain};
+use r2_core::render::{RenderConfig, render, render_no_color, render_plain};
 
 fn at(width: usize) -> RenderConfig {
     RenderConfig {
@@ -483,7 +483,7 @@ fn text_and_styled_render_like_rich_text() {
 }
 
 /// render() always styles: the error panel border is red, the message bold red, the hint
-/// dim; render_plain strips every escape sequence.
+/// dim; render_plain is the same layout without any SGR.
 #[test]
 fn render_emits_ansi_and_render_plain_strips_it() {
     let panel = error_panel("boom", Some("try"));
@@ -493,7 +493,14 @@ fn render_emits_ansi_and_render_plain_strips_it() {
     assert!(ansi.contains("\u{1b}[2mhint: try"), "{ansi:?}");
     let plain = render_plain(&panel, &at(80));
     assert!(!plain.contains('\u{1b}'));
-    assert_eq!(anstream::adapter::strip_str(&ansi).to_string(), plain);
+    assert_eq!(strip_sgr(&ansi), plain);
+    // NoColor (rich `no_color`): bold and dim stay, the colour parameters go.
+    let no_color = render_no_color(&panel, &at(80));
+    assert_eq!(strip_sgr(&no_color), plain);
+    assert_eq!(
+        no_color,
+        "╭─ error ───╮\n│ \u{1b}[1mboom\u{1b}[0m      │\n│ \u{1b}[2mhint: try\u{1b}[0m │\n╰───────────╯"
+    );
     assert_eq!(
         plain,
         "╭─ error ───╮\n│ boom      │\n│ hint: try │\n╰───────────╯"
@@ -605,4 +612,77 @@ fn tiny_widths_never_panic() {
             }
         }
     }
+}
+
+/// Removes the renderer's SGR sequences (`ESC[<digits/;>m`) — only for inputs without
+/// content escape bytes.
+fn strip_sgr(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("\u{1b}[") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let end = after
+            .find(|c: char| !(c.is_ascii_digit() || c == ';'))
+            .unwrap_or(after.len());
+        assert!(after[end..].starts_with('m'), "{text:?}");
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// R1 fix round 3 (R1-PAR3-1, R1-BUG3-1): content bytes rich keeps — ESC and whole escape
+/// sequences, NUL, other C0, DEL — pass through every rendering unchanged (c2/rich wrote
+/// them verbatim to a non-terminal); styling is the renderer's choice, never a strip of the
+/// rendered text, so no content is lost and borders stay aligned.
+#[test]
+fn content_escape_bytes_pass_through() {
+    for (text, want) in [
+        ("a\u{1b}b", "a\u{1b}b"),
+        ("a\u{1b}[31mb", "a\u{1b}[31mb"),
+        // rich strips BEL, so the OSC has no terminator: the text after it stays.
+        ("a\u{1b}]0;title\u{7}b", "a\u{1b}]0;titleb"),
+        ("a\u{0}b\u{1f}c\u{7f}d", "a\u{0}b\u{1f}c\u{7f}d"),
+    ] {
+        let r = Renderable::from(text);
+        assert_eq!(render_plain(&r, &at(80)), want, "{text:?}");
+        assert_eq!(render(&r, &at(80)), want, "{text:?}");
+        assert_eq!(render_no_color(&r, &at(80)), want, "{text:?}");
+    }
+    // Error panel (rich: same byte length per row, ESC sequence counted as its printable
+    // characters).
+    assert_eq!(
+        render_plain(&error_panel("lab\u{1b}[31mred\u{1b}[0m", None), &at(80)),
+        "╭─ error ───────╮\n│ lab\u{1b}[31mred\u{1b}[0m │\n╰───────────────╯"
+    );
+    let styled = render(&error_panel("lab\u{1b}[31mred\u{1b}[0m", None), &at(80));
+    assert!(
+        styled.contains("\u{1b}[1m\u{1b}[31mlab\u{1b}[31mred\u{1b}[0m\u{1b}[0m"),
+        "{styled:?}"
+    );
+    // Table cells and title: content kept; title centering and the header rule measure
+    // the content as rich cells; trailing content that looks like SGR is not "styling".
+    let t = table(
+        Some("ti\u{1b}[0m"),
+        &["name", "v"],
+        vec![
+            vec!["x\u{1b}]0;title\u{7}y".into(), "a\u{0}b".into()],
+            vec!["z".into(), "q  \u{1b}[0m".into()],
+        ],
+    );
+    let plain = render_plain(&t, &at(80));
+    assert_eq!(
+        plain,
+        "         ti\u{1b}[0m\n name          v\n───────────────────────\n x\u{1b}]0;titley   a\u{0}b\n z             q  \u{1b}[0m"
+    );
+    let styled = render(&t, &at(80));
+    assert!(
+        styled.ends_with("\n x\u{1b}]0;titley   a\u{0}b\n z             q  \u{1b}[0m"),
+        "{styled:?}"
+    );
+    assert!(
+        styled.contains("\u{1b}[3mti\u{1b}[0m\u{1b}[0m"),
+        "{styled:?}"
+    );
 }

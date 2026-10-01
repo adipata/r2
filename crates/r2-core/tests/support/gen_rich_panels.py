@@ -85,6 +85,13 @@ errors = [
     ("a\tb\tc", "\t\tx"),
     ("a\u2028b c\x85d", "e\u2029f"),
     ("\U0001f469\u200d\U0001f4bb" * 30, None),
+    # content bytes rich keeps (R1 fix round 3): ESC and whole escape sequences, NUL, other
+    # C0, DEL pass verbatim and are measured with rich cell widths (C0 = 0 cells)
+    ("lab\x1b[31mred\x1b[0m", None),
+    ("x\x1b]0;title\x07y", "h\x1bi"),
+    ("a\x00b\x1fc\x7fd", "\x1b"),
+    ("a\x1bb", "\x1b[0m"),
+    ("lbl\x1b[2Jx " * 12, None),
 ]
 widths = [80, 200, 40, 20, 12, 9]
 
@@ -156,6 +163,8 @@ generics = [
     ("title\twith tab", "s\nl", "first line\nsecond line"),
     ("long title " * 5, "subtitle " * 6, "short"),
     (None, None, "x\x0by\x0cz\rw"),
+    ("t\x1b[1mx", "s\x00\x1b]0;", "lab\x1b[31mred\x1b[0m\nx\x1b]0;title\x07y\na\x00b\x1fc\x7fd"),
+    ("\x1b", "\x1b", "\x1b"),
 ]
 gwidths = [80, 40, 12, 7, 6, 5, 4, 3, 2]
 print("/// (title, subtitle, body or None for no body line, console width, rich output)")
@@ -196,6 +205,11 @@ texts = [
     "\u65e5\u672c\u8a9e\u306e\u30c6\u30ad\u30b9\u30c8" * 12,
     "\U0001f469\u200d\U0001f4bb " * 40,
     "a [b] c\n  d",
+    "a\x1bb",
+    "a\x1b[31mb",
+    "a\x1b]0;title\x07b",
+    "a\x00b\x1fc\x7fd",
+    "lbl\x1b[2Jx " * 20,
 ]
 twidths = [80, 200, 40, 10, 3]
 print("/// (text, console width, rich output)")

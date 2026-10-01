@@ -1010,7 +1010,6 @@ dependencies = [
 name = "r2-core"
 version = "0.2.0"
 dependencies = [
- "anstream",
  "anstyle",
  "base64",
  "comfy-table",

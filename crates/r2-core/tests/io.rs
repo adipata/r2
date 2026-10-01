@@ -62,7 +62,7 @@ fn core_dependencies() -> Vec<String> {
 
 /// c2 §3.1: core never imports prompt_toolkit/rich/console. In r2 the crate graph enforces
 /// layering (§4.1.2): r2-core depends on exactly its third-party list — no terminal or
-/// line-editor crate and no workspace crate (the renderer's comfy-table/anstream/anstyle
+/// line-editor crate and no workspace crate (the renderer's comfy-table/anstyle
 /// are permitted there because ScriptedIo stores rendered text, §4.1.2).
 #[test]
 fn test_core_stays_console_free() {
@@ -80,7 +80,6 @@ fn test_core_stays_console_free() {
         "hex",
         "base64",
         "comfy-table",
-        "anstream",
         "anstyle",
         "tracing",
     ];
