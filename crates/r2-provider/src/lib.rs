@@ -1,4 +1,4 @@
-// R0 skeleton — owner R3 (generated from spec §4)
+// r2-provider crate root (spec §4.5, owner R3).
 #![forbid(unsafe_code)]
 pub mod lookup;
 pub mod mechanism;

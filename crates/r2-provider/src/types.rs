@@ -1,4 +1,4 @@
-// R0 skeleton — owner R3 (generated from spec §4)
+// Provider-boundary data types (spec §4.5.1, R3).
 use std::fmt;
 
 use r2_core::keys::{Curve, KeyAlgorithm, KeyClass, KeyInfo, ParsedRef};
@@ -15,7 +15,11 @@ pub enum AuthState {
 }
 impl AuthState {
     pub fn as_str(self) -> &'static str {
-        unimplemented!("R3")
+        match self {
+            AuthState::NotRequired => "not_required",
+            AuthState::LoggedOut => "logged_out",
+            AuthState::LoggedIn => "logged_in",
+        }
     }
 }
 
@@ -53,8 +57,13 @@ pub struct MechanismInvocation {
 impl MechanismInvocation {
     /// raw_ckm None, param_struct None, raw_param_bytes None.
     pub fn new(mechanism: impl Into<String>, params: Params) -> Self {
-        let _ = (mechanism, params);
-        unimplemented!("R3")
+        Self {
+            mechanism: mechanism.into(),
+            params,
+            raw_ckm: None,
+            param_struct: ParamStruct::None,
+            raw_param_bytes: None,
+        }
     }
 }
 
@@ -68,8 +77,14 @@ pub struct DeriveResult {
 }
 impl fmt::Debug for DeriveResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let _ = f;
-        unimplemented!("R3")
+        let raw = self
+            .raw
+            .as_ref()
+            .map(|raw| format!("<{} bytes>", raw.len()));
+        f.debug_struct("DeriveResult")
+            .field("key", &self.key)
+            .field("raw", &raw)
+            .finish()
     }
 }
 
@@ -101,26 +116,29 @@ pub struct KeySelector {
 }
 impl KeySelector {
     pub fn label(label: impl Into<String>) -> Self {
-        let _ = label;
-        unimplemented!("R3")
+        Self {
+            label: label.into(),
+            ..Self::default()
+        }
     }
     pub fn with_id(self, key_id: Option<Vec<u8>>) -> Self {
-        let _ = key_id;
-        unimplemented!("R3")
+        Self { key_id, ..self }
     }
     pub fn with_class(self, key_class: Option<KeyClass>) -> Self {
-        let _ = key_class;
-        unimplemented!("R3")
+        Self { key_class, ..self }
     }
     pub fn with_handle(self, handle: Option<u64>) -> Self {
-        let _ = handle;
-        unimplemented!("R3")
+        Self { handle, ..self }
     }
 }
 impl From<&ParsedRef> for KeySelector {
     fn from(parsed: &ParsedRef) -> Self {
-        let _ = parsed;
-        unimplemented!("R3")
+        Self {
+            label: parsed.label.clone(),
+            key_id: parsed.key_id.clone(),
+            key_class: parsed.key_class,
+            handle: parsed.handle,
+        }
     }
 }
 
@@ -142,8 +160,15 @@ pub struct GenerateRequest {
 }
 impl GenerateRequest {
     pub fn new(algorithm: KeyAlgorithm, label: impl Into<String>) -> Self {
-        let _ = (algorithm, label);
-        unimplemented!("R3")
+        Self {
+            algorithm,
+            size_bits: None,
+            curve: None,
+            label: label.into(),
+            key_id: None,
+            template: None,
+            public_template: None,
+        }
     }
 }
 
@@ -171,7 +196,13 @@ impl UnwrapRequest {
         result_class: KeyClass,
         label: impl Into<String>,
     ) -> Self {
-        let _ = (result_algorithm, result_class, label);
-        unimplemented!("R3")
+        Self {
+            result_algorithm,
+            result_class,
+            label: label.into(),
+            key_id: None,
+            template: None,
+            options: WrapOptions::default(),
+        }
     }
 }

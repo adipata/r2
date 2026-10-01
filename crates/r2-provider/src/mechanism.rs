@@ -1,4 +1,4 @@
-// R0 skeleton — owner R3 (generated from spec §4)
+// Canonical mechanism names (spec §4.5.3 / §4.6.5, owner R3).
 // ---- spec §4.5.3 block 3
 pub const AES_ECB: &str = "AES-ECB";
 pub const AES_CBC: &str = "AES-CBC";
