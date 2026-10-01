@@ -181,12 +181,12 @@ fn b64decode_strict(text: &str) -> Option<Zeroizing<Vec<u8>>> {
     let mut padding_started = false;
     let mut quad_pos = 0u8;
     let mut left: u8 = 0;
-    let mut pads = 0u8;
+    let mut pads = 0usize;
     for (index, &byte) in data.iter().enumerate() {
         if byte == b'=' {
             padding_started = true;
-            pads += 1;
-            if quad_pos >= 2 && quad_pos + pads >= 4 {
+            pads = pads.saturating_add(1);
+            if quad_pos >= 2 && usize::from(quad_pos) + pads >= 4 {
                 // A completing pad: strict mode refuses anything after it.
                 return (index + 1 == data.len()).then_some(out);
             }
@@ -461,6 +461,17 @@ mod tests {
         for (input, expected) in cases {
             let got = b64decode_strict(input).map(|data| hex::encode(&*data));
             assert_eq!(got.as_deref(), *expected, "input {input:?}");
+        }
+        // Long padding runs never overflow the pad counter (CPython counts in a C int).
+        let long_pads: &[(String, Option<&str>)] = &[
+            (format!("AAAA{}", "=".repeat(300)), Some("000000")),
+            (format!("A{}", "=".repeat(300)), None),
+            (format!("AA{}", "=".repeat(300)), None),
+            (format!("AAAA{}A", "=".repeat(300)), None),
+        ];
+        for (input, expected) in long_pads {
+            let got = b64decode_strict(input).map(|data| hex::encode(&*data));
+            assert_eq!(got.as_deref(), *expected, "input len {}", input.len());
         }
     }
 

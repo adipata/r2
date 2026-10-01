@@ -643,9 +643,19 @@ fn side_str(text: &str, tone: Tone) -> String {
 const SIMPLE_HEAD: TableStyle =
     TableStyle::new().header_separator(LineStyle::none().fill('─').junction('─'));
 
-/// `text` as rich's `Text(str(cell))` holds it: control codes stripped.
-fn strip_control_codes(text: &str) -> String {
-    text.chars().filter(|&c| !is_stripped_control(c)).collect()
+/// `text` as rich's `Text(str(cell))` lays it out: control codes stripped, then each
+/// '\n'-separated line's tabs expanded to the next multiple of 8 cells (counted from the
+/// start of the cell line), so no TAB reaches comfy-table.
+fn table_cell_text(text: &str) -> String {
+    text.split('\n')
+        .map(|line| {
+            expand_tabs(&to_cells(line, Tone::Plain))
+                .into_iter()
+                .map(|(c, _)| c)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn render_table(data: &TableData, cfg: &RenderConfig) -> String {
@@ -664,14 +674,14 @@ fn render_table(data: &TableData, cfg: &RenderConfig) -> String {
         table.set_header(
             data.columns
                 .iter()
-                .map(|column| Cell::new(strip_control_codes(column)).add_attribute(Attribute::Bold))
+                .map(|column| Cell::new(table_cell_text(column)).add_attribute(Attribute::Bold))
                 .collect::<Vec<_>>(),
         );
     }
     for row in &data.rows {
         table.add_row(
             row.iter()
-                .map(|cell| Cell::new(strip_control_codes(cell)))
+                .map(|cell| Cell::new(table_cell_text(cell)))
                 .collect::<Vec<_>>(),
         );
     }

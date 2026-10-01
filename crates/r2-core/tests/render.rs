@@ -331,6 +331,23 @@ fn test_hex_panel_title_renders_verbatim() {
 /// (padding + one blank vertical line), no edge spaces or blank edge rows, a centered
 /// title line; the header cells are bold, the title italic.
 #[test]
+fn table_cells_and_headers_expand_tabs() {
+    // §4.9.2 rich Text model: tabs expand to the next multiple of 8 cells, counted from
+    // the start of each cell line; no TAB byte reaches the output.
+    let t = table(
+        None,
+        &["h\tx", "b"],
+        vec![vec!["a\tb".into(), "abc\td\nq\tw".into()]],
+    );
+    let plain = render_plain(&t, &at(200));
+    assert!(!plain.contains('\t'), "{plain:?}");
+    assert!(plain.contains("a       b"), "{plain:?}");
+    assert!(plain.contains("h       x"), "{plain:?}");
+    assert!(plain.contains("abc     d"), "{plain:?}");
+    assert!(plain.contains("q       w"), "{plain:?}");
+}
+
+#[test]
 fn table_layout_is_simple_head() {
     let t = table(
         Some("things"),

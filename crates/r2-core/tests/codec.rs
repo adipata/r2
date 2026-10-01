@@ -348,6 +348,34 @@ fn test_pem_returns_rewrapped_text_not_der() {
 }
 
 #[test]
+fn pem_body_with_a_long_padding_run_rewraps_like_c2() {
+    // c2: `decode_data("-----BEGIN X-----\nAAAA" + "=" * 300 + "\n-----END X-----\n")`.
+    let input = format!(
+        "-----BEGIN X-----\nAAAA{}\n-----END X-----\n",
+        "=".repeat(300)
+    );
+    let (data, format) = decode_data(&input).unwrap();
+    assert_eq!(format, InputFormat::Pem);
+    let expected = format!(
+        "-----BEGIN X-----\nAAAA{}\n{}\n{}\n{}\n{}\n-----END X-----\n",
+        "=".repeat(60),
+        "=".repeat(64),
+        "=".repeat(64),
+        "=".repeat(64),
+        "=".repeat(48),
+    );
+    assert_eq!(std::str::from_utf8(&data).unwrap(), expected);
+    // A single data character before the run is malformed, as in c2.
+    let bad = format!("-----BEGIN X-----\nA{}\n-----END X-----\n", "=".repeat(300));
+    let err = decode_data(&bad).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Codec);
+    assert_eq!(
+        err.message,
+        "malformed PEM: body of the X block is not valid base64"
+    );
+}
+
+#[test]
 fn test_pem_multi_block_bundle_survives_as_text() {
     let (data, format) = decode_data(&bundle_pem().replace('\n', " ")).unwrap();
     assert_eq!(format, InputFormat::Pem);
