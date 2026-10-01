@@ -1,0 +1,134 @@
+# r2 CI (spec §8 "CI"; owner R0). Jobs: lint, test (ubuntu/macos/windows + doc tests),
+# softhsm (SoftHSM 2.6.1 distro + 2.7.0 built from its tag), msrv. `coverage` and `parity`
+# are added by R13; release.yml is R12's.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && cargo --version && cargo clippy --version
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Format (include!-only console modules, spec §4.9.6)
+        run: rustfmt --edition 2024 --check crates/r2-console/src/commands/*.rs crates/r2-console/src/tests/*.rs
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Clippy (feature softhsm)
+        run: cargo clippy --workspace --all-targets --features softhsm --locked -- -D warnings
+      - name: cargo deny (advisories, bans, licenses, sources)
+        run: cargo deny --locked check
+      - name: Parity ledger lint
+        run: python3 parity/generate_ledger.py --stats
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && cargo --version
+      - name: OpenSSL for the openssl crate (Windows, static via vcpkg)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          vcpkg install openssl:x64-windows-static-md
+          "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - name: Entry-point smoke test
+        run: cargo run --locked -p r2-cli -- --version
+      - name: Tests (nextest)
+        run: cargo nextest run --workspace --locked --profile ci
+      - name: Doc tests
+        run: cargo test --workspace --doc --locked
+
+  softhsm:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Ubuntu 22.04 and 24.04 both ship 2.6.1, so 2.7.0 is built from its tag (spec §8):
+        # the matrix catches the 2.6/2.7 EdDSA, AES-KW-PAD, CBC_PAD, ECDSA_SHA* and
+        # RSA-AES-KW differences.
+        softhsm: ["2.6.1", "2.7.0"]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && cargo --version
+      - name: Install SoftHSM2 (distro) + OpenSC
+        if: matrix.softhsm == '2.6.1'
+        run: sudo apt-get update && sudo apt-get install -y softhsm2 opensc
+      - name: Install OpenSC + SoftHSM build dependencies
+        if: matrix.softhsm != '2.6.1'
+        run: sudo apt-get update && sudo apt-get install -y opensc cmake g++ libssl-dev
+      - name: Cache the SoftHSM build
+        if: matrix.softhsm != '2.6.1'
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/softhsm-${{ matrix.softhsm }}
+          key: softhsm-${{ matrix.softhsm }}-${{ runner.os }}-${{ hashFiles('scripts/build-softhsm.sh') }}
+      - name: Build SoftHSM ${{ matrix.softhsm }} from its tag
+        if: matrix.softhsm != '2.6.1'
+        env:
+          SOFTHSM_VERSION: ${{ matrix.softhsm }}
+        run: |
+          module="$(scripts/build-softhsm.sh "$HOME/.local/softhsm-${SOFTHSM_VERSION}")"
+          echo "SOFTHSM2_LIB=$module" >> "$GITHUB_ENV"
+          echo "$HOME/.local/softhsm-${SOFTHSM_VERSION}/bin" >> "$GITHUB_PATH"
+      - name: Check the SoftHSM version under test
+        run: |
+          version="$(softhsm2-util --version)"
+          echo "softhsm2-util --version: $version"
+          test "$version" = "${{ matrix.softhsm }}"
+      - name: Initialize the fixture token (scripts/softhsm-init.sh)
+        run: scripts/softhsm-init.sh "$RUNNER_TEMP/softhsm" --github-env
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: softhsm-${{ matrix.softhsm }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - name: Fixture self-test (token initialized + listed by softhsm2-util)
+        run: cargo nextest run -p r2-testkit --features softhsm --locked --profile ci -E 'binary(softhsm_fixture)'
+      - name: SoftHSM test suite
+        run: cargo nextest run --workspace --features softhsm --locked --profile ci
+
+  msrv:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain (= MSRV, rust-toolchain.toml)
+        run: rustup toolchain install && cargo --version
+      - uses: Swatinem/rust-cache@v2
+      - name: Build with the pinned toolchain
+        run: cargo build --workspace --all-targets --all-features --locked
