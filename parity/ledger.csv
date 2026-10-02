@@ -35,12 +35,12 @@ tests/contract/base.py::ProviderContractTests::test_data_object_identity_and_ver
 tests/contract/base.py::ProviderContractTests::test_certificate_import_list_export_delete,4,R3,ported,r2-testkit::contract_fake fake_memory::test_certificate_import_list_export_delete ; r2-testkit::contract_fake fake_pkcs11::test_certificate_import_list_export_delete,"contract suite (provider_contract_tests!); instantiated by FakeProvider (R3), FakeProvider-as-pkcs11 (R3), MemoryProvider (R4), Pkcs11Provider@SoftHSM (R5b)"
 tests/contract/base.py::ProviderContractTests::test_read_full_template_has_no_key_type_for_cert_and_data,4,R3,ported,r2-testkit::contract_fake fake_memory::test_read_full_template_has_no_key_type_for_cert_and_data ; r2-testkit::contract_fake fake_pkcs11::test_read_full_template_has_no_key_type_for_cert_and_data,"contract suite (provider_contract_tests!); instantiated by FakeProvider (R3), FakeProvider-as-pkcs11 (R3), MemoryProvider (R4), Pkcs11Provider@SoftHSM (R5b)"
 tests/contract/test_fake_provider.py::TestFakeProviderAsPkcs11Contract,0,R3,ported,r2-testkit::contract_fake fake_pkcs11::test_certificate_acts_as_public_key ; r2-testkit::contract_fake fake_pkcs11::test_certificate_import_list_export_delete ; r2-testkit::contract_fake fake_pkcs11::test_data_object_identity_and_verbs ; r2-testkit::contract_fake fake_pkcs11::test_data_object_round_trip ; r2-testkit::contract_fake fake_pkcs11::test_delete_key ; r2-testkit::contract_fake fake_pkcs11::test_duplicate_identity_guard_exempts_families_and_certs ; r2-testkit::contract_fake fake_pkcs11::test_duplicate_identity_refused ; r2-testkit::contract_fake fake_pkcs11::test_encrypt_decrypt_round_trip ; r2-testkit::contract_fake fake_pkcs11::test_find_key_ambiguity ; r2-testkit::contract_fake fake_pkcs11::test_find_key_class_selector_picks_keypair_half ; r2-testkit::contract_fake fake_pkcs11::test_find_key_not_found ; r2-testkit::contract_fake fake_pkcs11::test_generate_generic_secret ; r2-testkit::contract_fake fake_pkcs11::test_generate_keypair_shares_label ; r2-testkit::contract_fake fake_pkcs11::test_generate_secret_key ; r2-testkit::contract_fake fake_pkcs11::test_generic_secret_round_trip ; r2-testkit::contract_fake fake_pkcs11::test_generic_secret_wrap_unwrap_where_supported ; r2-testkit::contract_fake fake_pkcs11::test_hmac_needs_a_generic_secret_and_cmac_an_aes_key ; r2-testkit::contract_fake fake_pkcs11::test_hmac_sign_verify_round_trip ; r2-testkit::contract_fake fake_pkcs11::test_import_export_round_trip_secret ; r2-testkit::contract_fake fake_pkcs11::test_imported_key_is_listed_and_found ; r2-testkit::contract_fake fake_pkcs11::test_login_rejected_when_not_required ; r2-testkit::contract_fake fake_pkcs11::test_non_exportable_key_refuses_export ; r2-testkit::contract_fake fake_pkcs11::test_pkcs11_secret_attributes_carry_flags ; r2-testkit::contract_fake fake_pkcs11::test_read_full_template_dumps_class_and_identity ; r2-testkit::contract_fake fake_pkcs11::test_read_full_template_has_no_key_type_for_cert_and_data ; r2-testkit::contract_fake fake_pkcs11::test_read_key_template_seeds_identity ; r2-testkit::contract_fake fake_pkcs11::test_sign_verify_round_trip ; r2-testkit::contract_fake fake_pkcs11::test_status_token_iff_logged_in ; r2-testkit::contract_fake fake_pkcs11::test_supports_is_consistent_with_mechanisms ; r2-testkit::contract_fake fake_pkcs11::test_update_key_duplicate_identity_refused ; r2-testkit::contract_fake fake_pkcs11::test_update_key_leaves_siblings_untouched ; r2-testkit::contract_fake fake_pkcs11::test_update_key_refusal_is_outcome_not_exception ; r2-testkit::contract_fake fake_pkcs11::test_update_key_renames_key ; r2-testkit::contract_fake fake_pkcs11::test_wrap_unwrap_round_trip_where_supported,"contract instantiation: provider_contract_tests! for FakeProvider('fakehsm', type_name='pkcs11') presentation; its 34 tests are the tests/contract/base.py rows (params=0: node IDs counted there)"
-tests/integration/test_console_crypto.py::test_aes_gcm_command_round_trip,1,R9,todo,,
-tests/integration/test_console_crypto.py::test_aes_gcm_interactive_fallbacks,1,R9,todo,,
-tests/integration/test_console_crypto.py::test_aes_gcm_tampered_tag_renders_error_at_repl_boundary,1,R9,todo,,
-tests/integration/test_console_crypto.py::test_rsa_pss_command_round_trip,1,R9,todo,,
-tests/integration/test_console_crypto.py::test_ops_table_for_memory_provider,1,R9,todo,,
-tests/integration/test_console_crypto.py::test_ops_key_filter_restricts_to_the_key,1,R9,todo,,
+tests/integration/test_console_crypto.py::test_aes_gcm_command_round_trip,1,R9,ported,r2-console tests::console_crypto::test_aes_gcm_command_round_trip,
+tests/integration/test_console_crypto.py::test_aes_gcm_interactive_fallbacks,1,R9,ported,r2-console tests::console_crypto::test_aes_gcm_interactive_fallbacks,
+tests/integration/test_console_crypto.py::test_aes_gcm_tampered_tag_renders_error_at_repl_boundary,1,R9,ported,r2-console tests::console_crypto::test_aes_gcm_tampered_tag_renders_error_at_repl_boundary,
+tests/integration/test_console_crypto.py::test_rsa_pss_command_round_trip,1,R9,ported,r2-console tests::console_crypto::test_rsa_pss_command_round_trip,
+tests/integration/test_console_crypto.py::test_ops_table_for_memory_provider,1,R9,ported,r2-console tests::console_crypto::test_ops_table_for_memory_provider,
+tests/integration/test_console_crypto.py::test_ops_key_filter_restricts_to_the_key,1,R9,ported,r2-console tests::console_crypto::test_ops_key_filter_restricts_to_the_key,
 tests/integration/test_console_keys.py::test_console_keys_end_to_end,1,R8,ported,r2-cli::e2e_console_keys softhsm::test_console_keys_end_to_end_softhsm ; r2-cli::e2e_console_keys softhsm::console_keys_end_to_end_without_signing_softhsm ; r2-cli::e2e_console_keys memory_console_keys_end_to_end,"softhsm; drives the real checklist editor ('ok' answers, R10): port once R10 merges or script an accept-all editor until then | R8: the full session (CSRs on token) is #[ignore = ""needs R5b (merge checklist)""] until R5b's C_Sign merges; the session without CSRs runs now; template-editor answers are probed at run time (identity editor vs R10)"
 tests/integration/test_console_keys.py::test_export_refusal_and_p12_self_signed,1,R8,ported,r2-cli::e2e_console_keys softhsm::test_export_refusal_and_p12_self_signed_softhsm,"softhsm; drives the real checklist editor ('ok' answers, R10): port once R10 merges or script an accept-all editor until then | R8: template-editor answers probed at run time (identity editor vs R10)"
 tests/integration/test_console_keys.py::test_generate_honors_template_editor_cka_id,1,R10,todo,,softhsm; editor `add CKA_ID=...` + identity-row note through the real checklist editor (R10); provider identity resolution is R5a
@@ -309,8 +309,8 @@ tests/unit/console/test_keys_cmd_objects.py::test_key_edit_data_prompts_label_on
 tests/unit/console/test_keys_cmd_objects.py::test_export_data_raw_and_format_refusal,1,R8,ported,r2-console tests::keys_cmd_objects::test_export_data_raw_and_format_refusal,
 tests/unit/console/test_keys_cmd_objects.py::test_copy_output_uses_table_vocabulary,1,R10,todo,,copy command output (commands/copy.rs is R10's)
 tests/unit/console/test_keys_cmd_objects.py::test_delete_data_object,1,R8,ported,r2-console tests::keys_cmd_objects::test_delete_data_object,
-tests/unit/console/test_keys_cmd_objects.py::test_ops_lists_hmac_rows,1,R9,todo,,`ops` command (commands/crypto.rs is R9's)
-tests/unit/console/test_keys_cmd_objects.py::test_sign_verify_hmac_round_trip,1,R9,todo,,`verify ... hmac` command (commands/crypto.rs is R9's)
+tests/unit/console/test_keys_cmd_objects.py::test_ops_lists_hmac_rows,1,R9,ported,r2-console tests::crypto_cmd::test_ops_lists_hmac_rows,`ops` command (commands/crypto.rs is R9's)
+tests/unit/console/test_keys_cmd_objects.py::test_sign_verify_hmac_round_trip,1,R9,ported,r2-console tests::crypto_cmd::test_sign_verify_hmac_round_trip,`verify ... hmac` command (commands/crypto.rs is R9's)
 tests/unit/console/test_load_kek.py::test_inline_blob_with_explicit_mech,1,R15,todo,,
 tests/unit/console/test_load_kek.py::test_canonical_mech_name_also_accepted,1,R15,todo,,
 tests/unit/console/test_load_kek.py::test_mech_params_travel_as_name_value_tokens,1,R15,todo,,
@@ -939,48 +939,48 @@ tests/unit/test_config_objects.py::test_template_class_key_branches,1,R2,ported,
 tests/unit/test_config_objects.py::test_default_template_locks_key_type_only_for_key_classes,1,R2,ported,r2-config::config config_objects::default_template_locks_key_type_only_for_key_classes,
 tests/unit/test_config_objects.py::test_embedded_defaults_carry_generic_and_data_sections,1,R2,ported,r2-config::config config_objects::embedded_defaults_carry_generic_and_data_sections,
 tests/unit/test_config_objects.py::test_custom_mechanism_rejects_listing_only_algorithms,1,R2,ported,r2-config::config config_objects::custom_mechanism_rejects_listing_only_algorithms,
-tests/unit/test_crypto_cmd.py::test_encrypt_one_line_renders_hex_panel,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_decrypt_round_trips_encrypt_inline,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_decrypt_raw_with_public_half_ref,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_inline_param_validation_failure,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_unknown_param_name_raises,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_unknown_option_raises,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_missing_key_ref_raises_with_usage,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_too_many_data_positionals,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_inline_data_and_in_file_conflict,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_logged_out_provider_raises_auth_required,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_unquoted_mech_name_binds_as_mechanism,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_quoted_mech_shaped_token_is_data,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_unquoted_non_mech_token_is_data_and_mech_prompted,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_quoted_data_with_whitespace_is_decoded,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_mech_select_list_filtered_by_capability,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_no_available_mechanism_raises,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_missing_required_param_is_prompted,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_missing_data_prompts_multiline_paste,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_file_in_out_round_trip,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_out_raw_is_default_and_b64_encodes,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_outformat_requires_out,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_invalid_outformat_rejected,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_hex_panel_honors_ui_config,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_verify_sig_inline_valid_and_tampered,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_verify_sig_file,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_verify_signature_prompted_when_no_source_given,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_verify_both_sig_sources_conflict,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_derive_renders_raw_secret_hex,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_derive_rejects_data_positional,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_derive_key_only_renders_resident_ref,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_derive_key_only_with_out_file_is_an_error,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_ops_lists_every_provider,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_ops_table_filtered_by_capability,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_ops_full_capability_includes_curve_bound_ops,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_ops_reflects_logged_out_provider,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_ops_key_filter_restricts_to_key_class_and_algorithm,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_ops_key_and_mismatched_provider_conflict,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_ops_unknown_provider,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_complete_ref_then_mech_then_params,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_complete_ref_selector_stages,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_complete_never_lists_keys_of_logged_out_provider,1,R9,todo,,
-tests/unit/test_crypto_cmd.py::test_complete_ops,1,R9,todo,,
+tests/unit/test_crypto_cmd.py::test_encrypt_one_line_renders_hex_panel,1,R9,ported,r2-console tests::crypto_cmd::test_encrypt_one_line_renders_hex_panel,
+tests/unit/test_crypto_cmd.py::test_decrypt_round_trips_encrypt_inline,1,R9,ported,r2-console tests::crypto_cmd::test_decrypt_round_trips_encrypt_inline,
+tests/unit/test_crypto_cmd.py::test_decrypt_raw_with_public_half_ref,1,R9,ported,r2-console tests::crypto_cmd::test_decrypt_raw_with_public_half_ref,
+tests/unit/test_crypto_cmd.py::test_inline_param_validation_failure,1,R9,ported,r2-console tests::crypto_cmd::test_inline_param_validation_failure,
+tests/unit/test_crypto_cmd.py::test_unknown_param_name_raises,1,R9,ported,r2-console tests::crypto_cmd::test_unknown_param_name_raises,
+tests/unit/test_crypto_cmd.py::test_unknown_option_raises,1,R9,ported,r2-console tests::crypto_cmd::test_unknown_option_raises,
+tests/unit/test_crypto_cmd.py::test_missing_key_ref_raises_with_usage,1,R9,ported,r2-console tests::crypto_cmd::test_missing_key_ref_raises_with_usage,
+tests/unit/test_crypto_cmd.py::test_too_many_data_positionals,1,R9,ported,r2-console tests::crypto_cmd::test_too_many_data_positionals,
+tests/unit/test_crypto_cmd.py::test_inline_data_and_in_file_conflict,1,R9,ported,r2-console tests::crypto_cmd::test_inline_data_and_in_file_conflict,
+tests/unit/test_crypto_cmd.py::test_logged_out_provider_raises_auth_required,1,R9,ported,r2-console tests::crypto_cmd::test_logged_out_provider_raises_auth_required,
+tests/unit/test_crypto_cmd.py::test_unquoted_mech_name_binds_as_mechanism,1,R9,ported,r2-console tests::crypto_cmd::test_unquoted_mech_name_binds_as_mechanism,
+tests/unit/test_crypto_cmd.py::test_quoted_mech_shaped_token_is_data,1,R9,ported,r2-console tests::crypto_cmd::test_quoted_mech_shaped_token_is_data,
+tests/unit/test_crypto_cmd.py::test_unquoted_non_mech_token_is_data_and_mech_prompted,1,R9,ported,r2-console tests::crypto_cmd::test_unquoted_non_mech_token_is_data_and_mech_prompted,
+tests/unit/test_crypto_cmd.py::test_quoted_data_with_whitespace_is_decoded,1,R9,ported,r2-console tests::crypto_cmd::test_quoted_data_with_whitespace_is_decoded,
+tests/unit/test_crypto_cmd.py::test_mech_select_list_filtered_by_capability,1,R9,ported,r2-console tests::crypto_cmd::test_mech_select_list_filtered_by_capability,
+tests/unit/test_crypto_cmd.py::test_no_available_mechanism_raises,1,R9,ported,r2-console tests::crypto_cmd::test_no_available_mechanism_raises,
+tests/unit/test_crypto_cmd.py::test_missing_required_param_is_prompted,1,R9,ported,r2-console tests::crypto_cmd::test_missing_required_param_is_prompted,
+tests/unit/test_crypto_cmd.py::test_missing_data_prompts_multiline_paste,1,R9,ported,r2-console tests::crypto_cmd::test_missing_data_prompts_multiline_paste,
+tests/unit/test_crypto_cmd.py::test_file_in_out_round_trip,1,R9,ported,r2-console tests::crypto_cmd::test_file_in_out_round_trip,
+tests/unit/test_crypto_cmd.py::test_out_raw_is_default_and_b64_encodes,1,R9,ported,r2-console tests::crypto_cmd::test_out_raw_is_default_and_b64_encodes,
+tests/unit/test_crypto_cmd.py::test_outformat_requires_out,1,R9,ported,r2-console tests::crypto_cmd::test_outformat_requires_out,
+tests/unit/test_crypto_cmd.py::test_invalid_outformat_rejected,1,R9,ported,r2-console tests::crypto_cmd::test_invalid_outformat_rejected,
+tests/unit/test_crypto_cmd.py::test_hex_panel_honors_ui_config,1,R9,ported,r2-console tests::crypto_cmd::test_hex_panel_honors_ui_config, | r2 applies ui.hex_* in the session IO: the test drives a LineIo built from config.ui and source-checks open_console_io's config.ui wiring
+tests/unit/test_crypto_cmd.py::test_verify_sig_inline_valid_and_tampered,1,R9,ported,r2-console tests::crypto_cmd::test_verify_sig_inline_valid_and_tampered,
+tests/unit/test_crypto_cmd.py::test_verify_sig_file,1,R9,ported,r2-console tests::crypto_cmd::test_verify_sig_file,
+tests/unit/test_crypto_cmd.py::test_verify_signature_prompted_when_no_source_given,1,R9,ported,r2-console tests::crypto_cmd::test_verify_signature_prompted_when_no_source_given,
+tests/unit/test_crypto_cmd.py::test_verify_both_sig_sources_conflict,1,R9,ported,r2-console tests::crypto_cmd::test_verify_both_sig_sources_conflict,
+tests/unit/test_crypto_cmd.py::test_derive_renders_raw_secret_hex,1,R9,ported,r2-console tests::crypto_cmd::test_derive_renders_raw_secret_hex,
+tests/unit/test_crypto_cmd.py::test_derive_rejects_data_positional,1,R9,ported,r2-console tests::crypto_cmd::test_derive_rejects_data_positional,
+tests/unit/test_crypto_cmd.py::test_derive_key_only_renders_resident_ref,1,R9,ported,r2-console tests::crypto_cmd::test_derive_key_only_renders_resident_ref,
+tests/unit/test_crypto_cmd.py::test_derive_key_only_with_out_file_is_an_error,1,R9,ported,r2-console tests::crypto_cmd::test_derive_key_only_with_out_file_is_an_error,
+tests/unit/test_crypto_cmd.py::test_ops_lists_every_provider,1,R9,ported,r2-console tests::crypto_cmd::test_ops_lists_every_provider,
+tests/unit/test_crypto_cmd.py::test_ops_table_filtered_by_capability,1,R9,ported,r2-console tests::crypto_cmd::test_ops_table_filtered_by_capability,
+tests/unit/test_crypto_cmd.py::test_ops_full_capability_includes_curve_bound_ops,1,R9,ported,r2-console tests::crypto_cmd::test_ops_full_capability_includes_curve_bound_ops,
+tests/unit/test_crypto_cmd.py::test_ops_reflects_logged_out_provider,1,R9,ported,r2-console tests::crypto_cmd::test_ops_reflects_logged_out_provider,
+tests/unit/test_crypto_cmd.py::test_ops_key_filter_restricts_to_key_class_and_algorithm,1,R9,ported,r2-console tests::crypto_cmd::test_ops_key_filter_restricts_to_key_class_and_algorithm,
+tests/unit/test_crypto_cmd.py::test_ops_key_and_mismatched_provider_conflict,1,R9,ported,r2-console tests::crypto_cmd::test_ops_key_and_mismatched_provider_conflict,
+tests/unit/test_crypto_cmd.py::test_ops_unknown_provider,1,R9,ported,r2-console tests::crypto_cmd::test_ops_unknown_provider,
+tests/unit/test_crypto_cmd.py::test_complete_ref_then_mech_then_params,1,R9,ported,r2-console tests::crypto_cmd::test_complete_ref_then_mech_then_params,
+tests/unit/test_crypto_cmd.py::test_complete_ref_selector_stages,1,R9,ported,r2-console tests::crypto_cmd::test_complete_ref_selector_stages,
+tests/unit/test_crypto_cmd.py::test_complete_never_lists_keys_of_logged_out_provider,1,R9,ported,r2-console tests::crypto_cmd::test_complete_never_lists_keys_of_logged_out_provider,
+tests/unit/test_crypto_cmd.py::test_complete_ops,1,R9,ported,r2-console tests::crypto_cmd::test_complete_ops,
 tests/unit/test_keyparse.py::test_pkcs8_pem_private_roundtrip,4,R6,ported,r2-core::keyparse pkcs8_pem_private_roundtrip,
 tests/unit/test_keyparse.py::test_pkcs8_der_private_roundtrip,4,R6,ported,r2-core::keyparse pkcs8_der_private_roundtrip,
 tests/unit/test_keyparse.py::test_traditional_pkcs1_rsa_roundtrip,2,R6,ported,r2-core::keyparse traditional_pkcs1_rsa_roundtrip,
@@ -1024,12 +1024,12 @@ tests/unit/test_l13_hardening.py::test_headers_without_body_raise_codec_error,1,
 tests/unit/test_l13_hardening.py::test_complete_paths_lists_directory,1,R7,ported,r2-console tests::completer::test_complete_paths_lists_directory ; r2-console tests::completer::complete_paths_keeps_the_typed_directory_part_and_expands_tilde,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; completer::complete_paths
 tests/unit/test_l13_hardening.py::test_complete_paths_partial_and_hidden,1,R7,ported,r2-console tests::completer::test_complete_paths_partial_and_hidden,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; completer::complete_paths
 tests/unit/test_l13_hardening.py::test_complete_paths_never_raises,1,R7,ported,r2-console tests::completer::test_complete_paths_never_raises,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; completer::complete_paths
-tests/unit/test_l13_hardening.py::test_crypto_file_options_complete_paths,1,R9,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; crypto command completion
+tests/unit/test_l13_hardening.py::test_crypto_file_options_complete_paths,1,R9,ported,r2-console tests::crypto_cmd::test_crypto_file_options_complete_paths,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; crypto command completion
 tests/unit/test_l13_hardening.py::test_export_and_csr_path_positionals_complete,1,R8,ported,r2-console tests::keys_cmd::test_export_and_csr_path_positionals_complete,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; export/csr completion
 tests/unit/test_l13_hardening.py::test_load_file_option_completes_paths,1,R8,ported,r2-console tests::keys_cmd::test_load_file_option_completes_paths,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; load --file completion
-tests/unit/test_l13_hardening.py::test_public_half_fallback_prefers_public_then_cert,1,R9,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; verify fallback
-tests/unit/test_l13_hardening.py::test_public_half_fallback_honors_key_id,1,R9,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; verify fallback
-tests/unit/test_l13_hardening.py::test_verify_on_keypair_ref_offers_mechanisms_and_verifies,1,R9,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; verify fallback
+tests/unit/test_l13_hardening.py::test_public_half_fallback_prefers_public_then_cert,1,R9,ported,r2-console tests::crypto_cmd::test_public_half_fallback_prefers_public_then_cert,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; verify fallback
+tests/unit/test_l13_hardening.py::test_public_half_fallback_honors_key_id,1,R9,ported,r2-console tests::crypto_cmd::test_public_half_fallback_honors_key_id,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; verify fallback
+tests/unit/test_l13_hardening.py::test_verify_on_keypair_ref_offers_mechanisms_and_verifies,1,R9,ported,r2-console tests::crypto_cmd::test_verify_on_keypair_ref_offers_mechanisms_and_verifies,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; verify fallback
 tests/unit/test_l13_hardening.py::test_prompttoolkitio_print_does_not_eat_markup_lookalikes,1,R7,ported,r2-console tests::io::test_prompttoolkitio_print_does_not_eat_markup_lookalikes,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; rich markup hazard: keep as a verbatim-render assertion on the r2 renderer (D1)
 tests/unit/test_l13_hardening.py::test_make_table_cells_render_verbatim,1,R1,ported,r2-core::render test_make_table_cells_render_verbatim,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; rich markup hazard: '[x]'/'[ ]' cells must render verbatim (D1)
 tests/unit/test_l13_hardening.py::test_hex_panel_title_renders_verbatim,1,R1,ported,r2-core::render test_hex_panel_title_renders_verbatim,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; rich markup hazard: panel title renders verbatim (D1)

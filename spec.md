@@ -4082,9 +4082,10 @@ impl TemplateEditor for IdentityTemplateEditor {
 
 ```rust
 // crates/r2-core/src/io.rs (continued)
-/// Text style. Error = bold red, Danger = red.
+/// Text style. Error = bold red, Danger = red, Success = bold green (`verify`'s
+/// `signature VALID`, c2 `Text(..., style="bold green")`; R9 §4.11 change).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Tone { #[default] Plain, Bold, Dim, Italic, Error, Danger }
+pub enum Tone { #[default] Plain, Bold, Dim, Italic, Error, Danger, Success }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Span { pub text: String, pub tone: Tone }

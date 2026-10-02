@@ -321,6 +321,7 @@ fn tone_style(tone: Tone, sgr: Sgr) -> Style {
         Tone::Italic => Style::new().italic(),
         Tone::Error => Style::new().bold().fg_color(Some(AnsiColor::Red.into())),
         Tone::Danger => Style::new().fg_color(Some(AnsiColor::Red.into())),
+        Tone::Success => Style::new().bold().fg_color(Some(AnsiColor::Green.into())),
     };
     match sgr {
         Sgr::Full => style,
