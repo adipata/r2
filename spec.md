@@ -4966,8 +4966,9 @@ pub fn dump_template_file(path: &Path, class_key: &str, template: &KeyTemplate) 
 /// NON_CREATION_ATTRS row → its 64-bit two's complement 2^64 + n (c2 dumped PyKCS11's signed
 /// C long: `CKA_KEY_GEN_MECHANISM: -1` of an imported object loads as
 /// 18446744073709551615 = CK_UNAVAILABLE_INFORMATION, what r2's own dump writes; the row
-/// arrives disabled — §11 D18), any other negative int → "template attribute {name} must
-/// not be negative" (c2 raised it later, at conversion — §11 D18); BYTES: "{name}
+/// arrives disabled — §11 D18; likewise in a CKA_CLASS/CKA_KEY_TYPE row, which build_seed
+/// drops, so c2 never converted it), any other negative int → "template attribute {name}
+/// must not be negative" (c2 raised it later, at conversion — §11 D18); BYTES: "{name}
 /// expects a 0x… hex string" | "{name} has invalid hex" (`text::py_fromhex`); STR: "{name}
 /// expects a string". Values are typed by the §4.8.4 loader, so `CKA_TOKEN: yes` is a bool
 /// and `CKA_LABEL: yes` fails "expects a string", exactly as in c2.
@@ -7844,7 +7845,8 @@ merges).**
   `softhsm_oaep_software_fallback_reports_its_own_openssl_reason`), R11 wizard tests (r:
   `util_spawn_failure_is_an_error`, `append_io_errors_are_config_errors`,
   `decline_works_on_a_provider_without_token_init_and_accept_refuses_it`), R14 templatefile
-  test (s: `non_utf8_file_is_an_unreadable_file`).
+  test (s: `non_utf8_file_is_an_unreadable_file`,
+  `value_errors_of_the_yaml_constructor_are_invalid_yaml`).
 
 **D13 — Ctrl-C while a command runs is honored at step boundaries.**
 - *Description*: c2's `KeyboardInterrupt` surfaced at the next Python bytecode after the
@@ -7965,8 +7967,11 @@ merges).**
   - an INT parameter outside i64 → `<name>: invalid integer <text!r>` (c2: unbounded);
   - a negative template ULONG → config: Config `<path>: must not be negative` at load;
     template file: Param `template attribute <name> must not be negative` at load (c2
-    raised the latter only at the first create flow), except a `NON_CREATION_ATTRS` row
-    with a value ≥ −2^63, which loads as its two's complement (next sub-entry);
+    raised it only at conversion of an enabled row in a create flow, and never for a row
+    in a section no editor of the flow used), except a `NON_CREATION_ATTRS` row with a
+    value ≥ −2^63, which loads as its two's complement (next sub-entry), and a
+    CKA_CLASS/CKA_KEY_TYPE row with such a value, which loads the same way and is then
+    dropped by `build_seed` like any file class row (c2 loaded it and never converted it);
   - `custom_mechanisms[].params[].default` is typed by its `kind` at load (`expected a
     <kind> default, got <T>`, `keyref parameters cannot have a default`, or a BYTES
     default's `decode_data` CodecError text) — also where c2 never read the default (a
@@ -8016,7 +8021,8 @@ merges).**
 - *Verified by*: R1 parse_ref/text tests, R2 decoder tests, R3 packer tests, R7 resolver
   tests, R8 providers_cmd tests, R10 editor tests, R14 template-file tests (incl. a c2 dump of an imported SoftHSM
   object, `CKA_KEY_GEN_MECHANISM: -1`, seeding a disabled 18446744073709551615 row, and
-  `-1` in a non-NON_CREATION row refused at load), R13 differential dump/seed runs over an
+  `-1` in a non-NON_CREATION row refused at load,
+  `negative_class_rows_load_and_are_dropped_like_c2`), R13 differential dump/seed runs over an
   imported object; R5b `tests::edit::full_dump_covers_catalog_and_identity` and SoftHSM
   `softhsm_read_full_template_dumps_the_object` (unsigned CKA_KEY_GEN_MECHANISM).
 

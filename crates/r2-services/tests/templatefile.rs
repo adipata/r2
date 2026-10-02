@@ -280,6 +280,13 @@ fn unknown_section_keys_render_like_python_str() {
         ("~: {CKA_TOKEN: true}\n", "None"),
         ("1.5: {CKA_TOKEN: true}\n", "1.5"),
         ("AES: {CKA_TOKEN: true}\n", "AES"),
+        // date/datetime/bytes keys: Python `str()` of the object PyYAML built (c2@408d6f2)
+        ("2002-12-14: {CKA_TOKEN: true}\n", "2002-12-14"),
+        (
+            "2001-12-14t21:59:43.10-05:00:\n  CKA_TOKEN: true\n",
+            "2001-12-14 21:59:43.100000-05:00",
+        ),
+        ("!!binary aGk=: {CKA_TOKEN: true}\n", "b'hi'"),
     ] {
         let err = load_err(text);
         assert!(
@@ -288,6 +295,42 @@ fn unknown_section_keys_render_like_python_str() {
             "{text:?}: {}",
             err.message
         );
+    }
+}
+
+#[test]
+fn unknown_attribute_keys_render_like_python_str() {
+    // c2 `str(name)` over the PyYAML-typed key; param_name is the same text (c2@408d6f2)
+    for (text, shown) in [
+        (
+            "aes:\n  2001-12-14 21:59:43.10: 1\n",
+            "2001-12-14 21:59:43.100000",
+        ),
+        (
+            "aes:\n  2001-12-14t21:59:43.10-05:00: x\n",
+            "2001-12-14 21:59:43.100000-05:00",
+        ),
+        (
+            "aes:\n  2001-12-14T21:59:43Z: 1\n",
+            "2001-12-14 21:59:43+00:00",
+        ),
+        (
+            "aes:\n  2001-1-2   1:02:03.1234567 +5: 1\n",
+            "2001-01-02 01:02:03.123456+05:00",
+        ),
+        ("aes:\n  !!binary aGVsbG8=: 1\n", "b'hello'"),
+        ("aes:\n  ? !!binary AAEC\n  : x\n", "b'\\x00\\x01\\x02'"),
+        ("aes:\n  !!binary \"\": 1\n", "b''"),
+        ("aes:\n  2002-12-14: 1\n", "2002-12-14"),
+        ("aes:\n  1000.0: 1\n", "1000.0"),
+    ] {
+        let err = load_err(text);
+        assert_eq!(
+            err.message,
+            format!("unknown PKCS#11 attribute '{shown}'"),
+            "{text:?}"
+        );
+        assert_eq!(param_name(&err), shown, "{text:?}");
     }
 }
 
@@ -536,6 +579,53 @@ fn negative_ulong_is_twos_complement_only_in_non_creation_rows() {
         err.message
     );
     assert_eq!(param_name(&err), "template");
+}
+
+#[test]
+fn negative_class_rows_load_and_are_dropped_like_c2() {
+    // c2 loaded `CKA_CLASS: -1` unchanged and build_seed dropped it (the flow supplies the
+    // class and key type), so it never raised; r2 loads the two's complement (§11 D18)
+    let sections = load_text(
+        "aes:\n  CKA_CLASS: -1\n  CKA_KEY_TYPE: -9223372036854775808\n  CKA_TOKEN: true\n",
+    )
+    .unwrap();
+    assert_eq!(
+        rows(&sections["aes"]),
+        vec![
+            (
+                "CKA_CLASS".into(),
+                AttrKind::Ulong,
+                AttrValue::Ulong(u64::MAX)
+            ),
+            (
+                "CKA_KEY_TYPE".into(),
+                AttrKind::Ulong,
+                AttrValue::Ulong(9_223_372_036_854_775_808)
+            ),
+            ("CKA_TOKEN".into(), AttrKind::Bool, AttrValue::Bool(true)),
+        ]
+    );
+    let seed = templatefile::build_seed(
+        &make_templates(),
+        Some(&sections),
+        KeyClass::Secret,
+        KeyAlgorithm::Aes,
+    )
+    .unwrap();
+    let class_rows: Vec<(String, AttrValue, bool)> = seed
+        .attrs
+        .iter()
+        .filter(|a| a.name == "CKA_CLASS" || a.name == "CKA_KEY_TYPE")
+        .map(|a| (a.name.clone(), a.value.clone(), a.locked))
+        .collect();
+    assert_eq!(
+        class_rows,
+        vec![
+            ("CKA_CLASS".into(), sym("CKO_SECRET_KEY"), true),
+            ("CKA_KEY_TYPE".into(), sym("CKK_AES"), true),
+        ]
+    );
+    assert_eq!(names(&seed), ["CKA_CLASS", "CKA_KEY_TYPE", "CKA_TOKEN"]);
 }
 
 #[test]
@@ -1176,7 +1266,8 @@ fn test_load_wrapped_seed_templates_reach_the_editor() {
         seeds: Some(&sections),
     };
     let wrapped = [0u8; 40];
-    let _ = wrapload::load_wrapped(
+    // c2 calls load_wrapped outside `pytest.raises`: the unwrap itself must succeed
+    wrapload::load_wrapped(
         &provider,
         UnwrapJob {
             kek: &kek,
@@ -1189,7 +1280,8 @@ fn test_load_wrapped_seed_templates_reach_the_editor() {
             key_id: None,
         },
         &seeding,
-    );
+    )
+    .expect("load_wrapped succeeds on FakeProvider like c2");
     let seen = editor.templates();
     let names = names(&seen[0]);
     assert_eq!(names[..2], ["CKA_CLASS", "CKA_KEY_TYPE"]); // flow-locked rows (§5.16)
