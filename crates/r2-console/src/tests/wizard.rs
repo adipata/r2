@@ -78,6 +78,8 @@ struct WizardDouble {
     shutdowns: Cell<usize>,
     /// FailingInitProvider: init_token always fails at the choke point.
     fail_init: bool,
+    /// init_token returns UserAbort (a Ctrl-C mid-init).
+    abort_init: bool,
     /// Apply set_env_and_reset to the real environment (through set_env), so a
     /// softhsm2-util subprocess inherits it like the real provider's.
     apply_env: bool,
@@ -137,6 +139,9 @@ impl FakeHooks for WizardDouble {
             .borrow_mut()
             .push(self.conf_env.borrow().clone());
         self.init_calls.borrow_mut().push((slot, label.to_owned()));
+        if self.abort_init {
+            return Some(Err(ConsoleError::user_abort("Aborted.")));
+        }
         if self.fail_init {
             return Some(Err(ConsoleError::pkcs11(
                 "PKCS#11 token initialization failed (CKR_GENERAL_ERROR)",
@@ -858,6 +863,30 @@ fn test_fallback_runs_util_and_reloads() {
     );
     // the PINs travel in argv only — never printed
     assert!(!io.text().contains(SO_PIN) && !io.text().contains(USER_PIN));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_user_abort_during_init_skips_util_fallback() {
+    // spec §4.2: the softhsm2-util fallback never swallows UserAbort (c2's Ctrl-C was a
+    // KeyboardInterrupt, outside its `except ConsoleError`).
+    let fx = Fixture::new();
+    let (bin, argv, _env) = fake_util(&fx, "exit 0");
+    let _path = set_env("PATH", Some(bin.to_str().unwrap()));
+    let io = scripted(&HAPPY_ANSWERS);
+    let double = Rc::new(WizardDouble {
+        abort_init: true,
+        util_argv: Some(argv.clone()),
+        ..WizardDouble::new()
+    });
+    let provider = provider_with(&double);
+
+    let err = run(&make_ctx(&io, &fx.config, None, None), &provider).unwrap_err();
+
+    assert!(err.kind.is_user_abort());
+    assert!(!argv.exists(), "softhsm2-util must not run");
+    assert!(!any_output(&io, "retrying via softhsm2-util"));
+    assert_eq!(double.init_calls.borrow().len(), 1);
 }
 
 #[test]

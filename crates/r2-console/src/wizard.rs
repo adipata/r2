@@ -131,6 +131,10 @@ pub fn run_softhsm_wizard(
     let user_pin = prompt_pin(io, "user PIN")?;
     let slot = free_slot(provider)?;
     if let Err(err) = init.init_token(slot, &label, &so_pin, &user_pin) {
+        // A Ctrl-C mid-init is never retried via the util (spec §4.2 error rules).
+        if err.kind.is_user_abort() {
+            return Err(err);
+        }
         let Some(util) = which(SOFTHSM2_UTIL) else {
             return Err(err);
         };
