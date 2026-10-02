@@ -7742,6 +7742,31 @@ merges).**
     CKA_VALUE_LEN → `CKR_ATTRIBUTE_VALUE_INVALID`); and an ECDH SPKI peer pyca loads only as
     `UnsupportedAlgorithm` (a curve pyca does not support) → Param `peer is not a valid SPKI
     public key: <pyca detail>`, like c2's ValueError case.
+  - (r) the SoftHSM wizard (§5.13): a `softhsm2-util` found on `PATH` that cannot be
+    started (`subprocess.run` raised `OSError`, e.g. a bad interpreter line or permission
+    denied) crashed c2; r2 raises Generic `softhsm2-util --init-token failed: <Python
+    str(OSError) of the util path>` (hint `check the SoftHSM2 installation and
+    $SOFTHSM2_CONF`). At the config append, a file that is no longer valid UTF-8
+    (`UnicodeDecodeError`) or whose YAML construction raises a plain `ValueError` (c2's
+    `append_provider_entry` caught only `OSError` / `yaml.YAMLError`) → Config `cannot read
+    config file <path>: <CPython UnicodeDecodeError text>` resp. `cannot parse config file
+    <path>: <text>`. A wizard run on a provider that cannot initialize tokens (a
+    non-PKCS#11 instance named `softhsm.provider_name`; c2 wrote the conf, set the
+    environment and then crashed with `AttributeError` at `init_token`) → UnsupportedOperation
+    `provider '<name>' cannot initialize tokens` right after the setup confirm, before
+    anything is written (declining still works on any provider). Output of a failing
+    `softhsm2-util` that is not valid UTF-8 (c2's strict text-mode decoding raised
+    `UnicodeDecodeError`, a crash) is decoded lossily (U+FFFD) into the `softhsm2-util
+    --init-token failed: <detail>` text; newlines are translated as in c2. A
+    `softhsm.conf_dir` / `softhsm.token_dir` that is not valid UTF-8 (c2 carried it into
+    `SOFTHSM2_CONF` through surrogateescape) → Config `cannot create the SoftHSM
+    configuration: <path> is not valid UTF-8` (hint `check softhsm.conf_dir /
+    softhsm.token_dir in the configuration`) right after the setup confirm, before anything
+    is written; a re-detected module path that is not valid UTF-8 appears lossily in the
+    reported entry. The `softhsm2-util` lookup ports `shutil.which` but approximates
+    `os.access(X_OK)` by any execute bit (r2 has no safe access to the real uid/gid or
+    noexec mounts), so a util executable only by another user, or on a noexec mount, is
+    picked where c2 kept searching `PATH`, and then fails to start (above).
 - *Reason*: every expected failure must be a `ConsoleError`; OpenSSL would reject the CN
   with a different text anyway.
 - *Verified by*: R8 certops test (a), R6 keyparse/x509info/formats fixtures (b, h, i, j:
@@ -7761,16 +7786,18 @@ merges).**
   codec differential vectors (e), R2 loader tests (d, f: `invalid_utf8_is_a_read_error`,
   `deleted_working_directory_skips_the_cwd_candidate`, the `LOAD` vectors; g:
   `discovery::expand_user_is_python_expanduser`,
-  `discovery::expand_user_resolves_other_users`), R5a session test (l:
-  `unsettable_env_entries_are_errors_not_panics`), R5a capability/objects tests (m:
+  `discovery::expand_user_resolves_other_users`), R5a session test (n:
+  `unsettable_env_entries_are_errors_not_panics`), R5a capability/objects tests (o:
   `unknown_ckms_survive_the_unfiltered_mechanism_list`,
-  `listed_vendor_mechanisms_resolve_by_pykcs11_name`; n: the pyca gate of
+  `listed_vendor_mechanisms_resolve_by_pykcs11_name`; p: the pyca gate of
   `key_material_is_gated_by_pycas_der_loaders`), R5b verbs/mechanisms tests (q:
   `pkcs1_prefers_the_combined_ckm_else_digestinfo_over_bare_rsa_pkcs`,
   `gcm_packer_integer_reads_are_strict`, `ctr_needs_a_full_counter_block`,
   `oaep_software_fallback_failure_is_a_crypto_error`,
   `derive_negative_out_len_is_the_tokens_value_invalid`, `derive_peer_rules`; SoftHSM
-  `softhsm_oaep_software_fallback_reports_its_own_openssl_reason`).
+  `softhsm_oaep_software_fallback_reports_its_own_openssl_reason`), R11 wizard tests (r:
+  `util_spawn_failure_is_an_error`, `append_io_errors_are_config_errors`,
+  `decline_works_on_a_provider_without_token_init_and_accept_refuses_it`).
 
 **D13 — Ctrl-C while a command runs is honored at step boundaries.**
 - *Description*: c2's `KeyboardInterrupt` surfaced at the next Python bytecode after the
@@ -7846,7 +7873,8 @@ merges).**
 - *Description*: r2 types YAML exactly like PyYAML 6.0.3 `safe_load` and writes it
   byte-identically to `safe_dump` (§4.8.4), but its syntax parser is `yaml-rust2` (YAML
   1.2), not PyYAML's: (a) the parser text inside `invalid YAML in config file <path>:
-  <text>` / `invalid YAML in template file <path>: <text>` differs (construction errors —
+  <text>` / `invalid YAML in template file <path>: <text>` / the wizard's (§5.13) `cannot
+  parse config file <path>: <text>` differs (construction errors —
   unknown tag, unhashable key, several documents — use PyYAML's wording); (b) inputs that
   only one of the two parsers rejects (exotic or malformed syntax: tabs in indentation,
   YAML-1.2-only escapes, directives) may load in one and fail in the other — among them,

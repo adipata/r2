@@ -88,8 +88,8 @@ tests/integration/test_pkcs11_provider.py::TestKeyEdit::test_read_key_template_s
 tests/integration/test_pkcs11_provider.py::TestKeyEdit::test_keypair_half_rename_leaves_sibling,1,R5b,ported,r2-pkcs11::softhsm_crypto softhsm_keypair_half_rename_leaves_sibling,softhsm
 tests/integration/test_softhsm_fixture.py::test_softhsm_token_is_initialized_and_listed,1,R0,ported,r2-testkit::softhsm_fixture test_softhsm_token_is_initialized_and_listed,"softhsm | feature softhsm; token R2TEST (D7) initialized by scripts/softhsm-init.sh before the test process, fails (never skips) when the env is missing (§4.10.5)"
 tests/integration/test_softhsm_fixture.py::test_unique_label_is_fresh_per_use,1,R0,ported,r2-testkit::softhsm_fixture test_unique_label_is_fresh_per_use ; r2-testkit::softhsm_fixture test_unique_label_drop_deletes_objects_created_under_it,softhsm | feature softhsm; prefix r2test- (D7); r2 adds a teardown-deletion test (pkcs11-tool)
-tests/integration/test_wizard.py::test_wizard_yields_working_provider,1,R11,todo,,softhsm
-tests/integration/test_wizard.py::test_wizard_falls_back_to_softhsm2_util,1,R11,todo,,softhsm
+tests/integration/test_wizard.py::test_wizard_yields_working_provider,1,R11,ported,r2-console tests::wizard_softhsm::softhsm_wizard_yields_working_provider ; r2-console tests::wizard_softhsm::softhsm_wizard_token_round_trips_aes_gcm ; r2-cli::e2e_wizard softhsm_wizard_e2e_first_login_sets_up_and_persists,"softhsm | the GCM round trip is #[ignore]d until R5b merges (encrypt/decrypt stubs), the e2e until R8 merges (login)"
+tests/integration/test_wizard.py::test_wizard_falls_back_to_softhsm2_util,1,R11,ported,r2-console tests::wizard_softhsm::softhsm_wizard_falls_back_to_softhsm2_util,softhsm | monkeypatched init_token → a BrokenInit wrapper over the real Pkcs11Provider
 tests/unit/console/test_app.py::test_build_operation_registry_registers_builtins_and_customs,1,R3,ported,r2-ops::build_registry test_build_operation_registry_registers_builtins_and_customs,build_operation_registry moved to R3 (spec §4.1.1): r2_ops::registry
 tests/unit/console/test_app.py::test_custom_op_resolves_via_cli_name,1,R3,ported,r2-ops::build_registry test_custom_op_resolves_via_cli_name,build_operation_registry + resolve_cli moved to R3 (spec §4.1.1): r2_ops::registry
 tests/unit/console/test_app.py::test_custom_ckm_map,1,R7,ported,r2-cli::bin/r2 bootstrap::tests::test_custom_ckm_map,
@@ -396,8 +396,8 @@ tests/unit/console/test_providers_cmd.py::test_login_softhsm_without_wizard_modu
 tests/unit/console/test_providers_cmd.py::test_login_softhsm_triggers_wizard_and_uses_its_token,1,R8,ported,r2-console tests::providers_cmd::test_login_softhsm_triggers_wizard_and_uses_its_token,Python stubs c2.console.wizard via sys.modules: r2 needs an injectable wizard seam (skeleton hook) so R8 can test before R11 merges | R8: wizard API stubbed through commands::providers::test_seam (cfg(test) thread-local)
 tests/unit/console/test_providers_cmd.py::test_login_softhsm_wizard_declined_stops_cleanly,1,R8,ported,r2-console tests::providers_cmd::test_login_softhsm_wizard_declined_stops_cleanly,Python stubs c2.console.wizard via sys.modules: r2 needs an injectable wizard seam (skeleton hook) so R8 can test before R11 merges | R8: wizard API stubbed through commands::providers::test_seam (cfg(test) thread-local)
 tests/unit/console/test_providers_cmd.py::test_login_softhsm_initialized_token_skips_wizard,1,R8,ported,r2-console tests::providers_cmd::test_login_softhsm_initialized_token_skips_wizard,Python stubs c2.console.wizard via sys.modules: r2 needs an injectable wizard seam (skeleton hook) so R8 can test before R11 merges | R8: wizard API stubbed through commands::providers::test_seam (cfg(test) thread-local)
-tests/unit/console/test_providers_cmd.py::test_login_softhsm_live_wizard_skips_for_initialized_token,1,R11,todo,,consults the REAL wizard (token_needs_init)
-tests/unit/console/test_providers_cmd.py::test_login_softhsm_live_wizard_triggers_and_decline_stops,1,R11,todo,,drives the REAL wizard's decline path
+tests/unit/console/test_providers_cmd.py::test_login_softhsm_live_wizard_skips_for_initialized_token,1,R11,ported,r2-console tests::wizard::test_login_softhsm_live_wizard_skips_for_initialized_token ; r2-console tests::wizard::login_softhsm_live_wizard_skip_condition,consults the REAL wizard (token_needs_init) | the run_line half is #[ignore]d until R8 merges (login); the API half runs now
+tests/unit/console/test_providers_cmd.py::test_login_softhsm_live_wizard_triggers_and_decline_stops,1,R11,ported,r2-console tests::wizard::test_login_softhsm_live_wizard_triggers_and_decline_stops ; r2-console tests::wizard::login_softhsm_live_wizard_trigger_and_decline ; r2-cli::e2e_wizard softhsm_wizard_e2e_decline_keeps_memory_usable,drives the REAL wizard's decline path | the run_line half and the e2e are #[ignore]d until R8 merges (login); the API half runs now
 tests/unit/console/test_providers_cmd.py::test_login_other_provider_never_consults_wizard,1,R8,ported,r2-console tests::providers_cmd::test_login_other_provider_never_consults_wizard,Python stubs c2.console.wizard via sys.modules: r2 needs an injectable wizard seam (skeleton hook) so R8 can test before R11 merges
 tests/unit/console/test_providers_cmd.py::test_logout_drops_session_capabilities,1,R8,ported,r2-console tests::providers_cmd::test_logout_drops_session_capabilities,
 tests/unit/console/test_providers_cmd.py::test_logout_memory_unsupported,1,R8,ported,r2-console tests::providers_cmd::test_logout_memory_unsupported,
@@ -446,32 +446,32 @@ tests/unit/console/test_template_editor.py::test_render_reflects_state_glyphs,1,
 tests/unit/console/test_template_editor.py::test_create_template_editor_factory,1,R10,todo,,r2 constructs the editor directly (no lazy import)
 tests/unit/console/test_template_editor.py::test_bootstrap_picks_up_the_real_editor,1,R10,todo,,r2 constructs the editor directly: assert AppContext wires the checklist editor
 tests/unit/console/test_template_editor.py::test_editor_seeded_from_default_template_flow,1,R10,todo,,
-tests/unit/console/test_wizard.py::TestDecline::test_decline_touches_nothing,1,R11,todo,,
-tests/unit/console/test_wizard.py::TestHappyPath::test_full_flow,1,R11,todo,,
-tests/unit/console/test_wizard.py::TestHappyPath::test_report_snippet_matches_schema,1,R11,todo,,
-tests/unit/console/test_wizard.py::TestHappyPath::test_pins_never_echoed,1,R11,todo,,
-tests/unit/console/test_wizard.py::TestHappyPath::test_empty_label_uses_default,1,R11,todo,,
-tests/unit/console/test_wizard.py::TestHappyPath::test_overlong_label_reprompted,1,R11,todo,,
-tests/unit/console/test_wizard.py::TestPinPrompts::test_short_then_mismatch_then_ok,1,R11,todo,,
-tests/unit/console/test_wizard.py::TestPinPrompts::test_gives_up_after_three_attempts,1,R11,todo,,
-tests/unit/console/test_wizard.py::TestSlots::test_token_needs_init,1,R11,todo,,
-tests/unit/console/test_wizard.py::TestSlots::test_free_slot_picked_by_empty_label_and_serial,1,R11,todo,,
-tests/unit/console/test_wizard.py::TestSlots::test_no_free_slot_raises,1,R11,todo,,
-tests/unit/console/test_wizard.py::TestUtilFallback::test_fallback_runs_util_and_reloads,1,R11,todo,,
-tests/unit/console/test_wizard.py::TestUtilFallback::test_no_util_reraises_original,1,R11,todo,,
-tests/unit/console/test_wizard.py::TestUtilFallback::test_util_failure_raises_console_error,1,R11,todo,,
-tests/unit/console/test_wizard.py::TestConfigAppend::test_textual_append_preserves_comments_and_loads,1,R11,todo,,
-tests/unit/console/test_wizard.py::TestConfigAppend::test_structured_append_keeps_existing_instances,1,R11,todo,,
-tests/unit/console/test_wizard.py::TestConfigAppend::test_append_declined_leaves_file_alone,1,R11,todo,,
-tests/unit/console/test_wizard.py::TestConfigAppend::test_duplicate_name_raises_config_error,1,R11,todo,,
-tests/unit/console/test_wizard.py::TestConfigAppend::test_unresolved_library_skips_append_offer,1,R11,todo,,
-tests/unit/console/test_wizard.py::TestConfigAppend::test_library_redetected_from_search_paths,1,R11,todo,,
-tests/unit/console/test_wizard.py::TestHelpers::test_softhsm_conf_text_matches_spec,1,R11,todo,,
-tests/unit/console/test_wizard.py::TestHelpers::test_write_softhsm_conf_creates_dirs,1,R11,todo,,
-tests/unit/console/test_wizard.py::TestHelpers::test_write_softhsm_conf_failure_is_config_error,1,R11,todo,,
-tests/unit/console/test_wizard.py::TestHelpers::test_append_rejects_non_mapping_file,1,R11,todo,,
-tests/unit/console/test_wizard.py::TestHelpers::test_append_to_empty_file,1,R11,todo,,
-tests/unit/console/test_wizard.py::TestHelpers::test_append_treats_null_sections_as_empty,2,R11,todo,,
+tests/unit/console/test_wizard.py::TestDecline::test_decline_touches_nothing,1,R11,ported,r2-console tests::wizard::test_decline_touches_nothing ; r2-console tests::wizard::decline_works_on_a_provider_without_token_init_and_accept_refuses_it,
+tests/unit/console/test_wizard.py::TestHappyPath::test_full_flow,1,R11,ported,r2-console tests::wizard::test_full_flow ; r2-console tests::wizard::transcript_matches_c2,os.environ at init → the recorded set_env_and_reset call (the wizard never sets the env itself)
+tests/unit/console/test_wizard.py::TestHappyPath::test_report_snippet_matches_schema,1,R11,ported,r2-console tests::wizard::test_report_snippet_matches_schema ; r2-console tests::wizard::snippet_and_entry_match_c2_bytes,
+tests/unit/console/test_wizard.py::TestHappyPath::test_pins_never_echoed,1,R11,ported,r2-console tests::wizard::test_pins_never_echoed,
+tests/unit/console/test_wizard.py::TestHappyPath::test_empty_label_uses_default,1,R11,ported,r2-console tests::wizard::test_empty_label_uses_default,default label r2 (D7)
+tests/unit/console/test_wizard.py::TestHappyPath::test_overlong_label_reprompted,1,R11,ported,r2-console tests::wizard::test_overlong_label_reprompted ; r2-console tests::wizard::label_limit_is_measured_in_utf8_bytes,byte-measured limit (D15)
+tests/unit/console/test_wizard.py::TestPinPrompts::test_short_then_mismatch_then_ok,1,R11,ported,r2-console tests::wizard::test_short_then_mismatch_then_ok ; r2-console tests::wizard::pin_length_counts_characters,
+tests/unit/console/test_wizard.py::TestPinPrompts::test_gives_up_after_three_attempts,1,R11,ported,r2-console tests::wizard::test_gives_up_after_three_attempts,
+tests/unit/console/test_wizard.py::TestSlots::test_token_needs_init,1,R11,ported,r2-console tests::wizard::test_token_needs_init ; r2-console tests::wizard::token_needs_init_counts_a_label_or_a_serial_and_propagates_errors,
+tests/unit/console/test_wizard.py::TestSlots::test_free_slot_picked_by_empty_label_and_serial,1,R11,ported,r2-console tests::wizard::test_free_slot_picked_by_empty_label_and_serial,
+tests/unit/console/test_wizard.py::TestSlots::test_no_free_slot_raises,1,R11,ported,r2-console tests::wizard::test_no_free_slot_raises ; r2-console tests::wizard::token_missing_after_init_is_an_error ; r2-console tests::wizard::shared_module_refusal_keeps_the_conf_files_and_stops,
+tests/unit/console/test_wizard.py::TestUtilFallback::test_fallback_runs_util_and_reloads,1,R11,ported,r2-console tests::wizard::test_fallback_runs_util_and_reloads ; r2-console tests::wizard::util_lookup_follows_shutil_which,shutil.which/subprocess.run monkeypatch → a fake softhsm2-util script on a test-owned $PATH (unix)
+tests/unit/console/test_wizard.py::TestUtilFallback::test_no_util_reraises_original,1,R11,ported,r2-console tests::wizard::test_no_util_reraises_original,
+tests/unit/console/test_wizard.py::TestUtilFallback::test_util_failure_raises_console_error,1,R11,ported,r2-console tests::wizard::test_util_failure_raises_console_error ; r2-console tests::wizard::util_failure_detail_is_stderr_then_stdout_then_the_exit_code ; r2-console tests::wizard::util_spawn_failure_is_an_error,fake script (unix)
+tests/unit/console/test_wizard.py::TestConfigAppend::test_textual_append_preserves_comments_and_loads,1,R11,ported,r2-console tests::wizard::test_textual_append_preserves_comments_and_loads ; r2-console tests::wizard::appends_match_c2_bytes,
+tests/unit/console/test_wizard.py::TestConfigAppend::test_structured_append_keeps_existing_instances,1,R11,ported,r2-console tests::wizard::test_structured_append_keeps_existing_instances ; r2-console tests::wizard::append_universal_newlines_and_backup_metadata,
+tests/unit/console/test_wizard.py::TestConfigAppend::test_append_declined_leaves_file_alone,1,R11,ported,r2-console tests::wizard::test_append_declined_leaves_file_alone,
+tests/unit/console/test_wizard.py::TestConfigAppend::test_duplicate_name_raises_config_error,1,R11,ported,r2-console tests::wizard::test_duplicate_name_raises_config_error,
+tests/unit/console/test_wizard.py::TestConfigAppend::test_unresolved_library_skips_append_offer,1,R11,ported,r2-console tests::wizard::test_unresolved_library_skips_append_offer,
+tests/unit/console/test_wizard.py::TestConfigAppend::test_library_redetected_from_search_paths,1,R11,ported,r2-console tests::wizard::test_library_redetected_from_search_paths,
+tests/unit/console/test_wizard.py::TestHelpers::test_softhsm_conf_text_matches_spec,1,R11,ported,r2-console tests::wizard::test_softhsm_conf_text_matches_spec,
+tests/unit/console/test_wizard.py::TestHelpers::test_write_softhsm_conf_creates_dirs,1,R11,ported,r2-console tests::wizard::test_write_softhsm_conf_creates_dirs,
+tests/unit/console/test_wizard.py::TestHelpers::test_write_softhsm_conf_failure_is_config_error,1,R11,ported,r2-console tests::wizard::test_write_softhsm_conf_failure_is_config_error,
+tests/unit/console/test_wizard.py::TestHelpers::test_append_rejects_non_mapping_file,1,R11,ported,r2-console tests::wizard::test_append_rejects_non_mapping_file ; r2-console tests::wizard::append_section_shape_errors_and_falsy_pkcs11 ; r2-console tests::wizard::append_io_errors_are_config_errors ; r2-console tests::wizard::append_backup_into_an_existing_directory ; r2-console tests::wizard::append_backup_that_is_the_config_itself_is_refused,
+tests/unit/console/test_wizard.py::TestHelpers::test_append_to_empty_file,1,R11,ported,r2-console tests::wizard::test_append_to_empty_file,
+tests/unit/console/test_wizard.py::TestHelpers::test_append_treats_null_sections_as_empty,2,R11,ported,r2-console tests::wizard::test_append_treats_null_sections_as_empty,"both c2 ids (null-providers, null-pkcs11) in one table-driven test"
 tests/unit/core/test_codec.py::test_decode_matrix,30,R1,ported,r2-core::codec test_decode_matrix ; r2-core::codec decode_data_matches_c2_on_differential_vectors,R1: + 62 differential vectors generated from c2 decode_data
 tests/unit/core/test_codec.py::test_decode_malformed_raises_codec_error,20,R1,ported,r2-core::codec test_decode_malformed_raises_codec_error ; r2-core::codec codec_messages_and_hints_are_c2_verbatim ; r2-core::codec decode_data_matches_c2_on_differential_vectors,
 tests/unit/core/test_codec.py::test_unrecognized_input_message_and_hint_are_frozen,1,R1,ported,r2-core::codec test_unrecognized_input_message_and_hint_are_frozen,
