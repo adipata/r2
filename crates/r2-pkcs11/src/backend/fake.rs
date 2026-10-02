@@ -679,6 +679,10 @@ impl Backend for FakeBackend {
             return Err(fail(rv::CKR_PIN_LOCKED, "login"));
         }
         let pin = pin.expose_secret();
+        if pin.is_empty() {
+            // NULL pPin without a protected authentication path (SoftHSM parity)
+            return Err(fail(rv::CKR_ARGUMENTS_BAD, "login"));
+        }
         match user {
             UserKind::So => {
                 if pin != token.so_pin {

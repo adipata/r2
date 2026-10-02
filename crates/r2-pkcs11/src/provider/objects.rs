@@ -395,8 +395,8 @@ fn public_material_attrs(data: &[u8]) -> Result<Vec<RawAttr>> {
 }
 
 fn label_text(raw: Option<Zeroizing<Vec<u8>>>) -> String {
-    raw.map(|v| String::from_utf8_lossy(&v).into_owned())
-        .unwrap_or_default()
+    // PyKCS11 decodes CKA_LABEL with errors="ignore".
+    raw.map(|v| attributes::utf8_ignore(&v)).unwrap_or_default()
 }
 
 fn flag(raw: &Option<Zeroizing<Vec<u8>>>) -> bool {
@@ -632,14 +632,14 @@ impl Pkcs11Provider {
             KeyClass::Data => {
                 let value = self.attr(handle, cka::VALUE)?.map(|v| v.len()).unwrap_or(0);
                 let mut attributes = BTreeMap::new();
-                if let Some(app) = self
+                // c2 `if app_v:` tests the str PyKCS11 decoded with errors="ignore", so an
+                // all-invalid value is omitted like an empty one.
+                let app = self
                     .attr(handle, cka::APPLICATION)?
-                    .filter(|v| !v.is_empty())
-                {
-                    attributes.insert(
-                        "CKA_APPLICATION".to_string(),
-                        AttrValue::Str(String::from_utf8_lossy(&app).into_owned()),
-                    );
+                    .map(|v| crate::attributes::utf8_ignore(&v))
+                    .unwrap_or_default();
+                if !app.is_empty() {
+                    attributes.insert("CKA_APPLICATION".to_string(), AttrValue::Str(app));
                 }
                 if let Some(oid) = self.attr(handle, cka::OBJECT_ID)?.filter(|v| !v.is_empty()) {
                     attributes.insert("CKA_OBJECT_ID".to_string(), AttrValue::Bytes(oid.to_vec()));

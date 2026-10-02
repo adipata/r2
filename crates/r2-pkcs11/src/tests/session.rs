@@ -569,4 +569,38 @@ fn raw_token_info_ignores_a_blank_utc_time() {
     let raw = crate::backend::raw::decode_token_info(0, &garbage);
     assert!(!raw.initialized);
     assert_eq!(raw.label, "");
+    // PyKCS11 decodes the text fields with errors="ignore": invalid bytes are dropped
+    // (no U+FFFD), then the padding is trimmed.
+    let mut latin1 = cryptoki_sys::CK_TOKEN_INFO {
+        flags: cryptoki_sys::CKF_CLOCK_ON_TOKEN | cryptoki_sys::CKF_TOKEN_INITIALIZED,
+        utcTime: [b' '; 16],
+        ..Default::default()
+    };
+    latin1.label = [b' '; 32];
+    latin1.label[..4].copy_from_slice(b"ab\xffc");
+    latin1.manufacturerID = [b' '; 32];
+    latin1.manufacturerID[..6].copy_from_slice(b"Caf\xe9 \xe2");
+    latin1.model = [b'\0'; 16];
+    latin1.model[..3].copy_from_slice(b"m\x80x");
+    latin1.serialNumber = [b' '; 16];
+    latin1.serialNumber[..3].copy_from_slice(b"\xfe12");
+    let raw = crate::backend::raw::decode_token_info(1, &latin1);
+    assert_eq!(raw.label, "abc");
+    assert_eq!(raw.manufacturer, "Caf");
+    assert_eq!(raw.model, "mx");
+    assert_eq!(raw.serial, "12");
+    assert!(raw.initialized);
+}
+
+#[test]
+fn empty_pin_is_arguments_bad_not_pin_incorrect() {
+    // PyKCS11 sends pPin=NULL for an empty PIN; the token rejects the arguments rather
+    // than counting a bad PIN (c2: "PKCS#11 login failed (CKR_ARGUMENTS_BAD)").
+    let (_backend, provider) = new_provider();
+    let token = token_at(&provider, 0);
+    let err = provider.login(&token, &pin(""), false).unwrap_err();
+    assert_eq!(err.ckr().map(|(_, n)| n), Some("CKR_ARGUMENTS_BAD"));
+    assert_eq!(err.message, "PKCS#11 login failed (CKR_ARGUMENTS_BAD)");
+    assert_eq!(provider.status().auth, AuthState::LoggedOut);
+    provider.login(&token, &pin(USER_PIN), false).unwrap();
 }

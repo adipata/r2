@@ -111,6 +111,28 @@ fn softhsm_login_status_logout() {
 }
 
 #[test]
+fn softhsm_empty_pin_is_a_null_pin() {
+    // PyKCS11 passes pPin=NULL for an empty PIN; SoftHSM answers CKR_ARGUMENTS_BAD, not
+    // CKR_PIN_INCORRECT (which would spend a retry on a real token).
+    let _lock = r2_testkit::global_state_lock(); // one module user at a time under cargo test
+    let token = softhsm_token();
+    let provider = make_provider(token, "softhsm");
+    let info = provider
+        .list_tokens()
+        .unwrap()
+        .into_iter()
+        .find(|t| t.label == token.token_label)
+        .unwrap();
+    let err = provider.login(&info, &pin(""), false).unwrap_err();
+    assert!(matches!(err.kind, ErrorKind::Pkcs11 { .. }));
+    assert_eq!(err.message, "PKCS#11 login failed (CKR_ARGUMENTS_BAD)");
+    assert_ne!(err.ckr().map(|(_, n)| n), Some("CKR_PIN_INCORRECT"));
+    assert_eq!(provider.status().auth, AuthState::LoggedOut);
+    login(&provider, token, false); // the real PIN still works (no retry spent)
+    provider.shutdown().unwrap();
+}
+
+#[test]
 fn softhsm_wrong_pin() {
     let _lock = r2_testkit::global_state_lock(); // one module user at a time under cargo test
     let token = softhsm_token();

@@ -725,6 +725,55 @@ fn zero_length_id_lists_and_resolves_as_none() {
 }
 
 #[test]
+fn invalid_utf8_label_and_application_drop_invalid_bytes() {
+    // PyKCS11 decodes CKA_LABEL / CKA_APPLICATION with errors="ignore": invalid sequences
+    // vanish (no U+FFFD), and an all-invalid CKA_APPLICATION is "" so c2 omits it.
+    let (backend, provider) = logged_in();
+    backend.plant_object(
+        0,
+        vec![
+            (CKA_CLASS, ul(CKO_SECRET_KEY)),
+            (CKA_KEY_TYPE, ul(CKK_AES)),
+            (CKA_LABEL, b"k\xfe1".to_vec()),
+            (CKA_ID, vec![9]),
+            (CKA_VALUE_LEN, ul(16)),
+        ],
+        &[7; 16],
+    );
+    backend.plant_object(
+        0,
+        vec![
+            (CKA_CLASS, ul(CKO_DATA)),
+            (CKA_LABEL, b"d\xc3".to_vec()),
+            (CKA_APPLICATION, b"ap\xffp".to_vec()),
+            (CKA_VALUE, b"v".to_vec()),
+        ],
+        b"",
+    );
+    backend.plant_object(
+        0,
+        vec![
+            (CKA_CLASS, ul(CKO_DATA)),
+            (CKA_LABEL, b"e".to_vec()),
+            (CKA_APPLICATION, b"\xff\xfe".to_vec()),
+            (CKA_VALUE, b"v".to_vec()),
+        ],
+        b"",
+    );
+    let listed = provider.list_keys().unwrap();
+    let labels: Vec<&str> = listed.iter().map(|k| k.key_ref.label.as_str()).collect();
+    assert!(labels.contains(&"k1"), "{labels:?}");
+    assert!(labels.iter().all(|l| !l.contains('\u{fffd}')), "{labels:?}");
+    let d = listed.iter().find(|k| k.key_ref.label == "d").unwrap();
+    assert_eq!(
+        d.attributes.get("CKA_APPLICATION"),
+        Some(&AttrValue::Str("app".to_string()))
+    );
+    let e = listed.iter().find(|k| k.key_ref.label == "e").unwrap();
+    assert_eq!(e.attributes.get("CKA_APPLICATION"), None);
+}
+
+#[test]
 fn list_keys_orders_by_class_then_creation() {
     let (_backend, provider) = logged_in();
     let (cert, _) = cert_material("c");

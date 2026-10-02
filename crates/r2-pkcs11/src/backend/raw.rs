@@ -92,9 +92,10 @@ fn raw_template(template: &[RawAttr]) -> BResult<Vec<CK_ATTRIBUTE>> {
         .collect()
 }
 
-/// A blank-padded CK_UTF8CHAR field: lossy UTF-8, trailing ' ' and '\0' trimmed.
+/// A blank-padded CK_UTF8CHAR field: UTF-8 with invalid sequences dropped (PyKCS11
+/// `errors="ignore"`), then trailing ' ' and '\0' trimmed.
 fn padded(field: &[CK_BYTE]) -> String {
-    String::from_utf8_lossy(field)
+    crate::attributes::utf8_ignore(field)
         .trim_end_matches(['\0', ' '])
         .to_string()
 }

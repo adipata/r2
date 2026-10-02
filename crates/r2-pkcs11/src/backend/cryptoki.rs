@@ -14,7 +14,7 @@ use cryptoki::session::{Session, UserType};
 use cryptoki::slot::Slot;
 use cryptoki_sys as sys;
 use r2_config::model::Pkcs11InstanceConfig;
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use zeroize::{Zeroize, Zeroizing};
 
 use super::raw::{self, RawOp, SharedModule};
@@ -534,9 +534,13 @@ impl super::Backend for CryptokiBackend {
             UserKind::User => UserType::User,
             UserKind::So => UserType::So,
         };
+        // PyKCS11 passes pPin=NULL for an empty PIN (the token answers CKR_ARGUMENTS_BAD
+        // or uses its protected authentication path); cryptoki's `Some("")` would pass a
+        // non-NULL pointer and spend a retry on CKR_PIN_INCORRECT.
+        let pin = (!pin.expose_secret().is_empty()).then_some(pin);
         self.with_session("C_Login", |session| {
             session
-                .login(user_type, Some(pin))
+                .login(user_type, pin)
                 .map_err(|e| convert(e, "C_Login"))
         })
     }

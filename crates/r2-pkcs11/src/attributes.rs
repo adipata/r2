@@ -36,6 +36,13 @@ pub(crate) fn ulong_bytes(value: u64) -> BResult<Vec<u8>> {
     Ok(narrow.to_ne_bytes().to_vec())
 }
 
+/// UTF-8 with every invalid sequence dropped — PyKCS11's `decode("utf-8", "ignore")`,
+/// used for the CK_TOKEN_INFO text fields and the `isString` attributes (CKA_LABEL,
+/// CKA_APPLICATION). Not for vendor STR values: c2 decodes those with `errors="replace"`.
+pub(crate) fn utf8_ignore(data: &[u8]) -> String {
+    data.utf8_chunks().map(|chunk| chunk.valid()).collect()
+}
+
 /// Native-endian integer of any length (c2 `int.from_bytes(data, sys.byteorder)`), kept to
 /// its low 64 bits.
 pub(crate) fn decode_ulong(data: &[u8]) -> u64 {

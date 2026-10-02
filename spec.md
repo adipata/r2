@@ -781,7 +781,9 @@ never calls crossterm itself and does no terminal I/O (`force_no_tty()`, §4.9.2
   `openssl::aes::wrap_key`, `openssl::aes::unwrap_key` (deprecated; KWP is EVP-only),
   `openssl::memcmp::eq` (allowed only inside `r2_core::crypto::ct_eq`: it panics on a
   length mismatch), the lossy cryptoki APIs `cryptoki::context::Pkcs11::get_mechanism_list`
-  (drops unknown CKMs), `cryptoki::session::Session::get_attributes` (fails whole calls /
+  (drops unknown CKMs), `cryptoki::context::Pkcs11::get_token_info` (parses `utcTime`;
+  fails on a token with CKF_CLOCK_ON_TOKEN and a non-digit clock),
+  `cryptoki::session::Session::get_attributes` (fails whole calls /
   omits refusals) and `cryptoki::session::Session::wrap_key` (no truncation) — use the
   `RawFns` equivalents (§4.5.5) — and `std::io::IsTerminal::is_terminal` (the
   TerminalIo/PlainIo switch uses `crossterm::tty::IsTty`, §4.9.7; one allowed site: the
@@ -2611,13 +2613,17 @@ PKCS#11 environment and lifecycle rules (S0 spike 1, binding for R5a):
   `Rc<SharedModule>` (RW|SERIAL). Switching slot replaces the Option (Drop =
   C_CloseSession). `logout()` keeps the session. `shutdown()` drops the session before
   releasing the module. `C_Login` uses `UserType::User`; `CKR_USER_ALREADY_LOGGED_IN`
-  from the token is swallowed (login state is token-wide).
+  from the token is swallowed (login state is token-wide). An empty PIN is sent as
+  `pPin=NULL, ulPinLen=0` (cryptoki `login(user, None)`), as PyKCS11 does — never a
+  non-NULL empty buffer, which tokens count as CKR_PIN_INCORRECT (SoftHSM answers
+  CKR_ARGUMENTS_BAD → "PKCS#11 login failed (CKR_ARGUMENTS_BAD)", c2 parity).
 - Capability discovery folds `RawFns::mechanism_list(slot) -> Vec<u64>`;
   `Pkcs11::get_mechanism_list` MUST NOT be used (it drops every CKM without a TryFrom
   arm, incl. all vendor CKMs).
 - Token info is a raw `C_GetTokenInfo` through `RawFns::token_info(slot)`, which reads
-  only label, manufacturerID, model, serialNumber (lossy UTF-8, trailing spaces and NULs
-  trimmed) and `CKF_TOKEN_INITIALIZED`; `Pkcs11::get_token_info` MUST NOT be used — its
+  only label, manufacturerID, model, serialNumber (UTF-8 with invalid sequences dropped —
+  PyKCS11 `errors="ignore"`, no U+FFFD — then trailing spaces and NULs trimmed) and
+  `CKF_TOKEN_INITIALIZED`; `Pkcs11::get_token_info` MUST NOT be used — its
   `TokenInfo` conversion parses `utcTime` whenever CKF_CLOCK_ON_TOKEN is set and fails on
   a blank or non-digit clock, which would make `slots`/`login`/session recovery fail on
   such a token, while PyKCS11 never parses `utcTime` (c2 parity).
@@ -2629,7 +2635,10 @@ PKCS#11 environment and lifecycle rules (S0 spike 1, binding for R5a):
   to equal `CK_UNAVAILABLE_INFORMATION` is a real value and is reported numerically (e.g.
   `CKA_KEY_GEN_MECHANISM: 18446744073709551615`, §5.16 — c2/PyKCS11 parity); BOOL = 1 byte.
   A CKA_ID read of `Some(empty)` becomes `KeyRef.key_id = None` (c2 `or None`; the §4.3
-  invariant) — `get_attr` itself still reports the bytes it got.
+  invariant) — `get_attr` itself still reports the bytes it got. CKA_LABEL and
+  CKA_APPLICATION (PyKCS11's `isString` attributes) decode as UTF-8 with invalid sequences
+  dropped (`errors="ignore"`); CKA_APPLICATION is reported only when the DECODED text is
+  non-empty (c2 `if app_v:`). Vendor STR values keep c2's own `errors="replace"`.
 - Templates cross the seam as `RawAttr = (u64, Zeroizing<Vec<u8>>)` (they carry
   CKA_VALUE / private RSA components on import and unwrap) and become
   `Attribute::VendorDefined((AttributeType::VendorDefined(CK_ATTRIBUTE_TYPE::try_from(t)?), bytes))`
