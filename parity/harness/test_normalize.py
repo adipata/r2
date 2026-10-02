@@ -102,6 +102,24 @@ class PromptsAreCompared(unittest.TestCase):
             norm("c2", text), norm("r2", r2_out(iv=long_prompt))
         )
 
+    def test_c2_prompt_echo_after_a_command_echo_run_is_kept(self) -> None:
+        # an answer piped without its final newline: prompt_toolkit re-renders the command
+        # echo and the prompt echo as one carriage-return run, then aborts (R13 PAR4-1)
+        run = (
+            "c2>\r\n\r\n     c2> generate mem aes\r\n\r\n   c2> generate mem aes\r\n"
+            "Key label: lbl\r\n\r\n        Key label: lbl\r\nAborted.\n"
+        )
+        r2 = "r2> generate mem aes\nKey label: lbl\nAborted.\n"
+        inputs = ["generate mem aes", "lbl"]
+        c2_lines = normalize(run, "c2", "/w", "/f", inputs, set())
+        self.assertEqual(c2_lines, normalize(r2, "r2", "/w", "/f", inputs, set()))
+        self.assertIn("PROMPT: Key label: lbl", c2_lines)
+        changed = run.replace("Key label", "Key name")
+        self.assertNotEqual(
+            normalize(changed, "c2", "/w", "/f", inputs, set()),
+            normalize(r2, "r2", "/w", "/f", inputs, set()),
+        )
+
     def test_unparsed_c2_echo_is_kept_for_the_diff(self) -> None:
         text = c2_out().replace(
             f"{'IV (16 bytes): '}IVHEX{PAD}{'IV (16 bytes): '}IVHEX\r", "IV (16\r\nbytes): IVHEX\r"

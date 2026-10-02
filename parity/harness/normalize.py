@@ -94,12 +94,32 @@ def _c2_echo(lines: list[str]) -> list[str]:
     out: list[str] = []
     group: list[str] = []
 
-    def flush() -> None:
-        if group and not any(piece.startswith("c2>") for piece in group):
-            if len(group) >= 2 and all(group[-1].startswith(piece) for piece in group):
-                out.append(PROMPT + group[-1])
+    def flush_one(pieces: list[str]) -> None:
+        if pieces and not any(piece.startswith("c2>") for piece in pieces):
+            if len(pieces) >= 2 and all(pieces[-1].startswith(piece) for piece in pieces):
+                out.append(PROMPT + pieces[-1])
             else:
-                out.extend("PROMPT?: " + piece for piece in group)
+                out.extend("PROMPT?: " + piece for piece in pieces)
+
+    def flush() -> None:
+        # A run may hold several echoes back to back (e.g. the command echo and then the
+        # prompt it opened, when the piped answer ended without a newline: no clean
+        # doubled line). Split it into chains of renders each extending the previous one;
+        # a lone piece stays with the chain before it (an unparsed wrap stays visible).
+        chains: list[list[str]] = []
+        for piece in group:
+            if chains and piece.startswith(chains[-1][-1]):
+                chains[-1].append(piece)
+            else:
+                chains.append([piece])
+        merged: list[list[str]] = []
+        for chain in chains:
+            if merged and len(chain) == 1:
+                merged[-1].extend(chain)
+            else:
+                merged.append(chain)
+        for chain in merged:
+            flush_one(chain)
         group.clear()
 
     for line in lines:

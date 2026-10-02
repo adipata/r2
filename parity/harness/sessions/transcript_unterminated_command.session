@@ -1,0 +1,6 @@
+## Piped stdin whose last line has no '\n' (c2's prompt_toolkit: EOF): the command is
+## echoed but never runs, the session exits 0 (R13 PAR4-1).
+## final-newline: no
+load mem aes 000102030405060708090a0b0c0d0e0f --label x
+keys
+export mem:x {WORK}/out.bin

@@ -41,7 +41,9 @@ impl PlainReader {
     /// Prompt to stdout, one byte-level line from `input` (the global stdin lock — never a
     /// second BufReader; tests pass a cursor), trailing `\r`/`\n` stripped, lossy UTF-8;
     /// echo per the rules; at EOF a newline and Eof. The byte buffer is wiped once decoded
-    /// (it may hold a secret).
+    /// (it may hold a secret). Piped stdin: a final line with no '\n' is echoed like any
+    /// line and then reported as Eof, never returned — c2's prompt_toolkit treated the
+    /// unterminated text as EOF (at `c2>` the command never ran; at a prompt it aborted).
     ///
     /// Piped stdin (not a terminal): a SIGINT (the ctrlc handler's flag) set before the read
     /// reports Interrupted without reading; one that arrived while the read blocked reports
@@ -64,6 +66,9 @@ impl PlainReader {
             return Ok(ReadOutcome::Interrupted);
         }
         drop(out);
+        // piped stdin: a final line without its '\n' is EOF, as for c2's prompt_toolkit
+        // (the command never runs; a pending prompt aborts) — it is still echoed
+        let mut unterminated = false;
         let line = match self.stashed.take() {
             Some(line) => Some(line),
             None => {
@@ -72,6 +77,7 @@ impl PlainReader {
                 if read == 0 {
                     None
                 } else {
+                    unterminated = !self.stdin_is_tty && buffer.last() != Some(&b'\n');
                     while buffer.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
                         buffer.pop();
                     }
@@ -86,7 +92,8 @@ impl PlainReader {
             reset_interrupt();
             // a secret read's line is wiped and dropped, never stashed: a later command
             // read would echo it, save it to the history and dispatch it (§4.9.7, §5.1)
-            if !secret {
+            // (an unterminated final line is EOF: dropped, the next read finds EOF)
+            if !secret && !unterminated {
                 self.stashed = line;
             }
             out.write_all(b"\n")?;
@@ -106,6 +113,9 @@ impl PlainReader {
                 out.write_all(b"\n")?;
             }
             out.flush()?;
+        }
+        if unterminated {
+            return Ok(ReadOutcome::Eof);
         }
         Ok(ReadOutcome::Line(String::clone(&line)))
     }

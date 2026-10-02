@@ -27,7 +27,6 @@ zeroize = { workspace = true }
 indexmap = { workspace = true }
 hex = { workspace = true }
 base64 = { workspace = true }
-comfy-table = { workspace = true }
 anstyle = { workspace = true }
 tracing = { workspace = true }
 

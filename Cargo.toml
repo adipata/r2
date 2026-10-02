@@ -44,7 +44,6 @@ reedline       = "=0.49.0"
 crossterm      = { version = "=0.29.0", features = ["use-dev-tty"] }   # burst-stall fix, S0 spike 3
 nu-ansi-term   = "0.50"             # reedline 0.49's Style type (StyledText, DefaultHinter::with_style)
 rpassword      = "=7.5.4"
-comfy-table    = "=8.0.1"
 anstream       = "1.0"
 anstyle        = "1.0"
 unicode-width  = "0.2"

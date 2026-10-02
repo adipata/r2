@@ -1,4 +1,5 @@
 ## Every command's help text and usage errors (verbatim parity of usage lines).
+## columns: 60 80 200
 help clear
 help config
 help copy

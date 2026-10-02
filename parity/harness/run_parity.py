@@ -114,6 +114,7 @@ def run_tool(
     env_extra: dict[str, str],
     extra_config: str = "",
     columns: str = "200",
+    final_newline: bool = True,
 ) -> str:
     work.mkdir(parents=True, exist_ok=True)
     home = work / "home"
@@ -136,7 +137,7 @@ def run_tool(
         env["SOFTHSM2_CONF"] = str(ctx.softhsm_conf)
     env.update(env_extra)
     cmd = (ctx.c2_cmd if tool == "c2" else ctx.r2_cmd) + ["--config", str(config)]
-    stdin = "\n".join(lines) + "\n"
+    stdin = "\n".join(lines) + ("\n" if final_newline else "")
     proc = subprocess.run(
         cmd,
         input=stdin.encode(),
@@ -213,21 +214,30 @@ def same_files(ctx: Ctx, name: str, files: list[str], a: Path, b: Path) -> None:
 
 def suite_transcript(ctx: Ctx) -> None:
     for path in sorted(SESSIONS.glob("transcript_*.session")):
-        outputs: dict[str, str] = {}
-        works: dict[str, Path] = {}
-        inputs: dict[str, list[str]] = {}
-        headers: dict[str, list[str]] = {}
-        for tool in TOOLS:
-            work = ctx.base / "transcript" / path.stem / tool
-            lines, headers = load_session(path, {"WORK": str(work), "FIX": str(FIXTURES)})
-            extra = "".join(
-                (FIXTURES / name).read_text(encoding="utf-8") for name in headers.get("config", [])
-            )
-            outputs[tool] = run_tool(ctx, tool, work, lines, {}, extra)
-            works[tool] = work
-            inputs[tool] = lines
-        compare(ctx, path.stem, outputs, works, inputs, set(headers.get("secret", [])))
-        same_files(ctx, path.stem, headers.get("same-files", []), works["c2"], works["r2"])
+        _, headers = load_session(path, {})
+        # ``## columns: 80 200`` runs the session once per console width (default 200);
+        # ``## final-newline: no`` pipes it without the newline after its last line
+        widths = headers.get("columns") or ["200"]
+        final_newline = headers.get("final-newline", ["yes"]) != ["no"]
+        for width in widths:
+            name = path.stem if widths == ["200"] else f"{path.stem}@{width}"
+            outputs: dict[str, str] = {}
+            works: dict[str, Path] = {}
+            inputs: dict[str, list[str]] = {}
+            for tool in TOOLS:
+                work = ctx.base / "transcript" / name / tool
+                lines, headers = load_session(path, {"WORK": str(work), "FIX": str(FIXTURES)})
+                extra = "".join(
+                    (FIXTURES / fixture).read_text(encoding="utf-8")
+                    for fixture in headers.get("config", [])
+                )
+                outputs[tool] = run_tool(
+                    ctx, tool, work, lines, {}, extra, columns=width, final_newline=final_newline
+                )
+                works[tool] = work
+                inputs[tool] = lines
+            compare(ctx, name, outputs, works, inputs, set(headers.get("secret", [])))
+            same_files(ctx, name, headers.get("same-files", []), works["c2"], works["r2"])
 
 
 def suite_interop(ctx: Ctx) -> None:

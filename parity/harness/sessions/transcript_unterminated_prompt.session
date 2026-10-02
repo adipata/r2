@@ -1,0 +1,5 @@
+## Piped stdin ending inside a parameter prompt without the final '\n' (c2: EOF at the
+## prompt → `Aborted.`, nothing generated; R13 PAR4-1).
+## final-newline: no
+generate mem aes size=128
+lbl

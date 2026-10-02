@@ -188,6 +188,43 @@ fn ctrl_d_at_the_prompt_exits_zero() {
 }
 
 #[test]
+fn piped_final_line_without_newline_is_eof() {
+    // c2's prompt_toolkit treated a final piped line without its '\n' as EOF: echoed, the
+    // command never ran (`printf 'help\nhelp' | c2` printed the table once) and the
+    // session exited 0; at a parameter prompt the read aborted (`Key label: lbl` then
+    // `Aborted.`), nothing was generated (R13 PAR4-1).
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), "");
+    let (out, err, code) = session(dir.path(), &config, b"help\nhelp");
+    assert_eq!((code, err.as_str()), (0, ""));
+    assert_eq!(
+        out.matches("List commands, or show usage").count(),
+        1,
+        "{out}"
+    );
+    assert!(
+        out.ends_with("help <command> shows its usage\nr2> help\n"),
+        "{out}"
+    );
+    let path = dir.path().join("mem.yaml");
+    std::fs::write(
+        &path,
+        format!(
+            "app:\n  history_file: {}\nproviders:\n  memory:\n    enabled: true\nsofthsm:\n  autodetect: false\n",
+            dir.path().join("history").display(),
+        ),
+    )
+    .unwrap();
+    let (out, _, code) = session(dir.path(), &path, b"generate mem aes size=128\nlbl");
+    assert_eq!(code, 0);
+    assert!(out.ends_with("Key label: lbl\nAborted.\nr2> \n"), "{out}");
+    assert!(!out.contains("generated"), "{out}");
+    let (out, _, code) = session(dir.path(), &path, b"keys");
+    assert_eq!(code, 0);
+    assert_eq!(out, format!("{}r2> keys\n", banner()));
+}
+
+#[test]
 fn unknown_command_suggestion_transcript() {
     let dir = tempfile::tempdir().unwrap();
     let config = write_config(dir.path(), "");

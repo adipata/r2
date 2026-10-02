@@ -9,6 +9,8 @@
 
 #[path = "support/rich_panels.rs"]
 mod rich_panels;
+#[path = "support/rich_tables.rs"]
+mod rich_tables;
 
 use r2_core::error::ConsoleError;
 use r2_core::io::{PanelData, Renderable, Span, TableData, Tone, caret, error_panel, hex, table};
@@ -333,7 +335,9 @@ fn test_hex_panel_title_renders_verbatim() {
 #[test]
 fn table_cells_and_headers_expand_tabs() {
     // §4.9.2 rich Text model: tabs expand to the next multiple of 8 cells, counted from
-    // the start of each cell line; no TAB byte reaches the output.
+    // the start of each cell line, when the cell is laid out — but rich MEASURES a cell
+    // with its tabs as 0 cells, so the columns stay narrow and the expanded text wraps
+    // (rich 15: "  h          \n  x    b     \n ─────────── \n  a    abc   \n  b    d …").
     let t = table(
         None,
         &["h\tx", "b"],
@@ -341,10 +345,51 @@ fn table_cells_and_headers_expand_tabs() {
     );
     let plain = render_plain(&t, &at(200));
     assert!(!plain.contains('\t'), "{plain:?}");
-    assert!(plain.contains("a       b"), "{plain:?}");
-    assert!(plain.contains("h       x"), "{plain:?}");
-    assert!(plain.contains("abc     d"), "{plain:?}");
-    assert!(plain.contains("q       w"), "{plain:?}");
+    assert_eq!(
+        plain,
+        " h\n x    b\n───────────\n a    abc\n b    d\n      q\n      w"
+    );
+}
+
+fn table_case(title: Option<&str>, columns: &[&str], rows: &[&[&str]]) -> Renderable {
+    table(
+        title,
+        columns,
+        rows.iter()
+            .map(|row| row.iter().map(|cell| (*cell).to_owned()).collect())
+            .collect(),
+    )
+}
+
+/// rich 15 `_calculate_column_widths` (§4.9.2, §11 D1): r2's tables equal rich's at every
+/// console width — c2's help, ops, keys and key tables and 120 generated ones at widths
+/// 20..120 — except where rich cropped a word (`…`) that r2 folds; there the column widths
+/// (the header rule) still equal rich's.
+#[test]
+fn tables_match_rich_column_widths() {
+    let mut failures = Vec::new();
+    for &(title, columns, rows, width, expected) in rich_tables::TABLES {
+        let got = render_plain(&table_case(title, columns, rows), &at(width));
+        if got != expected {
+            failures.push(format!(
+                "{title:?} {columns:?} @{width}\n--- rich\n{expected}\n--- r2\n{got}"
+            ));
+        }
+    }
+    for &(title, columns, rows, width, rule) in rich_tables::TABLE_RULES {
+        let got = render_plain(&table_case(title, columns, rows), &at(width));
+        if !got.lines().any(|line| line == rule) {
+            failures.push(format!(
+                "{title:?} {columns:?} @{width}: rule {} cells\n{got}",
+                rule.chars().count()
+            ));
+        }
+    }
+    assert!(
+        rich_tables::TABLES.len() > 500 && !rich_tables::TABLE_RULES.is_empty(),
+        "vectors missing"
+    );
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
 #[test]
@@ -371,8 +416,8 @@ fn table_layout_is_simple_head() {
     // A title wider than the table wraps at the table width, each line centered.
     let narrow = table(Some("long titles"), &["name"], vec![vec!["aes".into()]]);
     assert_eq!(rendered(&narrow), " long\ntitles\n name\n──────\n aes");
-    // … at RICH's table width, which counts the two SIMPLE_HEAD edge columns comfy-table
-    // does not draw (R13 parity harness; rich 15 renders "  a  \nlong \ntitle\n…" here),
+    // … at RICH's table width, which counts the two SIMPLE_HEAD edge columns r2 does
+    // not draw (R13 parity harness; rich 15 renders "  a  \nlong \ntitle\n…" here),
     // and words longer than that fold (rich `overflow="fold"`).
     let tiny = table(Some("a long title"), &["a"], vec![vec!["1".into()]]);
     assert_eq!(rendered(&tiny), " a\nlong\ntitle\n a\n───\n 1");
@@ -719,11 +764,12 @@ fn content_escape_bytes_pass_through() {
     let plain = render_plain(&t, &at(80));
     assert_eq!(
         plain,
-        "         ti\u{1b}[0m\n name          v\n───────────────────────\n x\u{1b}]0;titley   a\u{0}b\n z             q  \u{1b}[0m"
+        // rich 15: "         ti\x1b[0m …\n  name         v …\n ───────────────────── …"
+        "        ti\u{1b}[0m\n name         v\n─────────────────────\n x\u{1b}]0;titley   a\u{0}b\n z            q  \u{1b}[0m"
     );
     let styled = render(&t, &at(80));
     assert!(
-        styled.ends_with("\n x\u{1b}]0;titley   a\u{0}b\n z             q  \u{1b}[0m"),
+        styled.ends_with("\n x\u{1b}]0;titley   a\u{0}b\n z            q  \u{1b}[0m"),
         "{styled:?}"
     );
     assert!(

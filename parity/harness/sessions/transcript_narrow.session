@@ -1,0 +1,17 @@
+## Tables and text at everyday console widths: rich's column allocation
+## (`_calculate_column_widths`) decides where multi-word cells wrap, so r2's tables must
+## wrap at the same points as c2's (spec §11 D1; R13 PAR4-2). Rows whose words are longer
+## than their column (rich crops them with `…`, r2 folds them — D1) are avoided.
+## columns: 80 100
+help
+providers
+load mem aes 2b7e151628aed2a6abf7158809cf4f3c --label aes128
+load mem generic 0x0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b --label a-rather-long-hmac-label
+load mem --file {FIX}/rsa2048.pem --label rsa
+load mem --file {FIX}/p256.pem --label p256
+keys
+keys mem aes
+key info mem:aes128
+key info mem:rsa
+key info mem:p256
+config path

@@ -740,6 +740,37 @@ fn plain_reader_on_a_terminal_ignores_a_stale_interrupt() {
     r2_core::runtime::reset_interrupt();
 }
 
+#[test]
+fn plain_reader_piped_unterminated_final_line_is_eof() {
+    // c2's prompt_toolkit treated a final piped line without its '\n' as EOF: at `c2>`
+    // the command never ran, at a prompt the read aborted (R13 PAR4-1)
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("history");
+    let mut reader =
+        crate::io::PlainReader::new(false, Some(SecretFilteringHistory::open(Some(&path))));
+    let mut input = io::Cursor::new(b"help\r\nkeys".to_vec());
+    let first = reader.read_command_from("r2> ", &mut input).unwrap();
+    assert!(
+        matches!(first, ReadOutcome::Line(ref l) if l == "help"),
+        "{first:?}"
+    );
+    let second = reader.read_command_from("r2> ", &mut input).unwrap();
+    assert!(matches!(second, ReadOutcome::Eof), "{second:?}");
+    assert_eq!(history_entries(&path), ["help"]);
+    // a hidden answer without its '\n' is EOF too (the prompt aborts)
+    let mut input = io::Cursor::new(b"1234".to_vec());
+    let secret = reader.read_secret_from("PIN: ", &mut input).unwrap();
+    assert!(matches!(secret, SecretRead::Eof), "unterminated secret");
+    // on a terminal the cooked read's text is what the operator typed: kept
+    let mut tty = crate::io::PlainReader::new(true, None);
+    let mut input = io::Cursor::new(b"keys".to_vec());
+    let typed = tty.read_command_from("r2> ", &mut input).unwrap();
+    assert!(
+        matches!(typed, ReadOutcome::Line(ref l) if l == "keys"),
+        "{typed:?}"
+    );
+}
+
 // -- PlainReader: SIGINT with piped stdin (R7 fix round 2) ---------------------------
 
 /// A piped stdin whose read "receives" a SIGINT while it blocks (the ctrlc handler's flag

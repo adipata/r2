@@ -210,8 +210,8 @@ Rules (summary of §4.1.2/§4.1.3):
   `r2-cli` (review rule).
 - **Interaction traits and the renderer live in `r2-core`.** `ConsoleIo`, `TemplateEditor`
   and `Renderable` are defined in `r2_core::io`, and `render`/`render_plain` in
-  `r2_core::render` (comfy-table, anstyle; comfy-table's
-  default `tty` feature pulls crossterm in transitively, but r2-core does no terminal I/O).
+  `r2_core::render` (anstyle; its tables, panels and text are own ports of rich 15's
+  layout, §4.9.2; r2-core does no terminal I/O).
   The reedline/rpassword/crossterm/indicatif implementations, the Sink and the
   TerminalIo/PlainIo switch (`r2_console::io::open_console_io`) live in `r2-console`.
   Interactive needs reach r2-core only through these traits or plain callbacks (e.g. the
@@ -277,7 +277,7 @@ operator input line
                       └─ r2-memory (openssl)
                        | r2-pkcs11: Pkcs11Provider → Backend seam → CryptokiBackend
                                     (cryptoki safe API + RawFns) → vendor module (dlopen)
-          └─ r2-console::render   Renderable → comfy-table / panel / hex dump → Sink (anstream,
+          └─ r2-console::render   Renderable → table / panel / hex dump → Sink (anstream,
                                   color policy)  |  file write via r2_core::datainput::DataOutput
 ```
 
@@ -710,14 +710,14 @@ Third-party dependencies per crate (normal dependencies; versions in §4.1.4):
 
 | crate | third-party dependencies |
 |---|---|
-| r2-core | `openssl`, `der`, `spki`, `x509-cert`, `const-oid`, `secrecy`, `zeroize`, `indexmap`, `hex`, `base64`, `comfy-table`, `anstyle`, `tracing`; optional build-dependency `openssl-src` (feature `vendored-openssl` only, §4.1.4) |
+| r2-core | `openssl`, `der`, `spki`, `x509-cert`, `const-oid`, `secrecy`, `zeroize`, `indexmap`, `hex`, `base64`, `anstyle`, `tracing`; optional build-dependency `openssl-src` (feature `vendored-openssl` only, §4.1.4) |
 | r2-config | `serde_yaml_ng`, `yaml-rust2`, `indexmap`, `tracing` |
 | r2-provider | `openssl`, `secrecy`, `zeroize`, `tracing` |
 | r2-ops | `indexmap`, `tracing` |
 | r2-memory | `openssl`, `secrecy`, `zeroize`, `tracing` |
 | r2-pkcs11 | `cryptoki`, `cryptoki-sys`, `libloading`, `openssl`, `secrecy`, `zeroize`, `indexmap`, `tracing` |
 | r2-services | `secrecy`, `zeroize`, `indexmap`, `tracing` |
-| r2-console | `reedline`, `crossterm`, `nu-ansi-term`, `rpassword`, `indicatif`, `console`, `comfy-table`, `anstream`, `anstyle`, `unicode-width`, `secrecy`, `zeroize`, `indexmap`, `tracing` |
+| r2-console | `reedline`, `crossterm`, `nu-ansi-term`, `rpassword`, `indicatif`, `console`, `anstream`, `anstyle`, `unicode-width`, `secrecy`, `zeroize`, `indexmap`, `tracing` |
 | r2-cli | `clap`, `ctrlc`, `tracing`, `tracing-subscriber`, `regex` |
 | r2-testkit | `openssl`, `secrecy`, `zeroize`, `indexmap` |
 | dev (any crate) | `tempfile`, `assert_cmd`, `insta` |
@@ -733,15 +733,15 @@ reviews can check a new line quickly):
 | `openssl-src` | `r2-core` only, as an optional `[build-dependencies]` entry enabled by `vendored-openssl` (it is never called; it only unifies features with openssl-sys's own openssl-src build-dependency) |
 | `serde_yaml_ng`, `yaml-rust2` | `r2-config` only (other crates use `r2_config::yaml`, §4.8.5) |
 | `reedline`, `crossterm`, `nu-ansi-term`, `rpassword`, `indicatif`, `console` | `r2-console` only (`nu-ansi-term` is reedline 0.49's `Style` type: `StyledText`, `DefaultHinter::with_style`; reedline does not re-export it) |
-| `comfy-table`, `anstyle` | `r2-core` (renderer), `r2-console` |
+| `anstyle` | `r2-core` (renderer), `r2-console` |
 | `unicode-width` | `r2-console` (r2-core's renderer measures with rich's own cell table, §4.9.2) |
 | `anstream` | `r2-console` (Sink) only |
 | `clap`, `ctrlc`, `tracing-subscriber`, `regex` | `r2-cli` only |
 | `tracing` | any crate |
 
-`comfy-table` keeps its default `tty` feature (bold header cells and `enforce_styling`
-need it), which pulls `crossterm` into r2-core's dependency tree transitively; r2-core
-never calls crossterm itself and does no terminal I/O (`force_no_tty()`, §4.9.2).
+r2-core has no terminal crate in its dependency tree: the renderer's tables are an own
+port of rich's `Table` layout (§4.9.2; `comfy-table` was dropped by R13 fix round 4, its
+`Dynamic` column allocation differed from rich's).
 
 #### 4.1.3 Workspace rules
 
@@ -854,7 +854,6 @@ reedline       = "=0.49.0"
 crossterm      = { version = "=0.29.0", features = ["use-dev-tty"] }   # burst-stall fix, S0 spike 3
 nu-ansi-term   = "0.50"             # reedline 0.49's Style type (StyledText, DefaultHinter::with_style)
 rpassword      = "=7.5.4"
-comfy-table    = "=8.0.1"
 anstream       = "1.0"
 anstyle        = "1.0"
 unicode-width  = "0.2"
@@ -4193,11 +4192,24 @@ Rendering rules (normative; layout differences from rich are D1):
   `narrow_to_wide` characters to 2; tabs
   expand to the next multiple of 8 cells; wrapping is rich `Text.wrap` (greedy at
   whitespace, words wider than the width folded, `rstrip_end`, truncate).
-- **Table**: comfy-table `TableStyle` with only a header separator (fill/junction `─`,
-  rich `box.SIMPLE_HEAD` look), `force_no_tty()` + `enforce_styling()` +
-  `set_width(cfg.width)` + `ContentArrangement::Dynamic`, bold header cells, `trim_fmt()`;
-  the title is rendered by r2 as a centered italic line over the table body; an empty
-  title is none, and a table with no columns and no rows renders "" (title included).
+- **Table**: own port of rich 15's `Table` as c2's `make_table` built it (`box.SIMPLE_HEAD`,
+  padding (0, 1), bold header, no expand): column widths are rich's
+  `_calculate_column_widths` — each column's maximum = its widest cell's
+  `Padding(Text)` measurement (rich `Text.__rich_measure__`: widest `str.splitlines()`
+  line in rich cells, a TAB measured as 0, plus the 2 padding cells, capped at the console
+  width minus the two edge columns and the column dividers); above that budget the widest
+  columns are collapsed (`_collapse_widths`, `ratio_reduce` with Python's banker's
+  rounding), then all columns reduced evenly — so cells wrap at rich's points at every
+  width. Cells are laid out by the rich Text model at the column width minus 2 (tabs
+  expanded, words folded — D1), header cells bottom-aligned, row cells top-aligned, a
+  column narrower than 3 cells blank (as rich); a row longer than the columns adds
+  columns (header ""), a shorter one is padded with empty cells (rich `add_row`). Drawn
+  without rich's blank edge columns and edge rows: one blank between columns, a `─`
+  header rule spanning the table, trailing blanks trimmed (in the plain domain for the
+  styled header lines); the title is rendered by r2 as a centered italic line over the
+  table body; an empty title is none, and a table with no columns and no rows renders ""
+  (title included). Verified against rich-generated vectors
+  (`crates/r2-core/tests/support/gen_rich_tables.py`).
 - **Panel**: own renderer — rounded box (`╭─╮│╰╯`), title in the top border
   (`╭─ title ───╮`), subtitle right-aligned in the bottom border (`── 40 bytes ─╯`), width =
   unwrapped content width capped at `cfg.width - 4` (rich `expand=False`), the body laid
@@ -4672,7 +4684,11 @@ pub fn install_line_assist(assist: Rc<dyn LineAssist>) -> AssistGuard { .. }
   of a command whose quote is open exactly as the REPL does ("\n") and saves the logical
   command once, when the quote closes (an entry still open at Ctrl-C/EOF is never saved),
   through `SecretFilteringHistory` + `sync` — the same file format as TerminalIo (D7).
-  EOF in a param prompt → UserAbort ("Aborted."); EOF at `r2>` exits 0. R7's pty smoke
+  EOF in a param prompt → UserAbort ("Aborted."); EOF at `r2>` exits 0. When stdin is NOT
+  a terminal, a final line without its "\n" is EOF too (c2's prompt_toolkit treated the
+  unterminated text as EOF): it is echoed like any line, then the read returns Eof — the
+  command never runs, a pending prompt aborts, a secret answer is wiped (R13 fix round 4;
+  a terminal's cooked read keeps what was typed). R7's pty smoke
   test covers TERM=dumb.
 - Completion/highlighting bridge: reedline requires `Send` extension points and
   AppContext is `!Send`, so `run_repl` installs its `LineAssist` with
@@ -6759,7 +6775,7 @@ encodings, other string types as UTF-8), the whole Name being decoded as c2's
 ### 5.12 Template editor UX
 
 Line-based checklist (works in every terminal, scriptable via `ScriptedIo` — deliberately
-not a full-screen dialog). Rendered as a table (comfy-table, §11 D1): index, state glyph
+not a full-screen dialog). Rendered as a table (§4.9.2, §11 D1): index, state glyph
 (`[x]`/`[ ]` bool, `(-)` disabled, `(*)` locked), attribute, kind, value. Cell content is
 never interpreted as markup, so the glyphs render verbatim (c2 needed an L13 fix for rich
 eating `[x]`). Mini-REPL:
@@ -7359,7 +7375,12 @@ custom_mechanisms: []      # entry schema: spec §4.8 / example §5.14
     `normalize(…, token_provider="hsm")`) — `handle <n>` numbers and the order of
     consecutive `hsm:` table rows (SoftHSM's handle and find order depend on its token file
     names). The transcript and interop suites reorder nothing: memory listing order is
-    compared (R13 fix round 2).
+    compared (R13 fix round 2). Sessions run at `COLUMNS=200` (token suite 1000) so that no word is
+    cropped by rich or folded by r2 (§11 D1); a transcript session's `## columns:` header
+    runs it at further widths (`transcript_help` at 60/80/200, `transcript_narrow` at
+    80/100: the column allocation is compared where columns are squeezed), and
+    `## final-newline: no` pipes it without the newline after its last line (the
+    `transcript_unterminated_*` sessions; R13 fix round 4).
 - **Coverage**: `cargo llvm-cov` with an 80% line floor on the workspace, enforced from R13
   (as c2's floor was wired in L13). As built (R13): the `coverage` CI job runs `cargo llvm-cov nextest --workspace
   --features softhsm --fail-under-lines 80` on the SoftHSM 2.6.1 fixture token (`just
@@ -7395,7 +7416,7 @@ custom_mechanisms: []      # entry schema: spec §4.8 / example §5.14
   `catch_unwind` and the `Drop`-based provider shutdown and transport-key cleanup rely on
   unwinding). Dependency versions are pinned workspace-wide; the exact pins that encode
   spike findings are `cryptoki =0.12.1`, `cryptoki-sys =0.5.0`, `reedline =0.49.0`,
-  `crossterm =0.29.0` (feature `use-dev-tty`), `rpassword =7.5.4`, `comfy-table =8.0.1`,
+  `crossterm =0.29.0` (feature `use-dev-tty`), `rpassword =7.5.4`,
   `openssl >= 0.10.81` (minimum: the wrap-pad heap-overflow fixes of 0.10.79/0.10.80, the
   unwrap-assert fix of 0.10.78, `mul_generator2`, `Asn1StringRef::to_string`), `der 0.8.2`,
   `spki 0.8.0`, `x509-cert 0.3.0`, `const-oid 0.10.2`, `secrecy 0.10`; exactly one `der`
@@ -7488,18 +7509,21 @@ entry). IDs are stable; a resolved entry keeps its ID with its resolution. "Veri
 names the test or harness check that pins the deviation.
 
 **D1 — Rendering glyphs and layout.**
-- *Description*: tables are drawn by comfy-table with a header rule only (c2: rich
-  `box.SIMPLE_HEAD`): same columns, same cell content (control codes stripped as rich did),
-  but no outer edge spaces or blank edge rows, the header rule spans the computed width, a
-  table title is an r2-rendered italic line, wrapped like rich's at RICH's table width
-  (r2's body plus the two `SIMPLE_HEAD` edge columns, at most the console width, which
-  rich's table never exceeds, so the line breaks equal c2's) and
-  centered over r2's body, and comfy-table measures cells with
-  unicode-width (column widths may differ where that differs from rich's cell table). A
-  word longer than its column is folded onto further lines of the cell, its content kept
-  whole; c2's rich columns (default `overflow="ellipsis"`) cropped it to the column width
-  minus one and appended `…` (e.g. a long config path in `config show --origin`; text with
-  spaces word-wraps in both). Printed text, the caret echo and panels (error panel, hex dump, any `PanelData`) are an
+- *Description*: tables are drawn with a header rule only (c2: rich `box.SIMPLE_HEAD`):
+  same columns, same column widths (an own port of rich 15's `_calculate_column_widths`
+  and cell measurement, §4.9.2 — so multi-word cells wrap at rich's points at every
+  console width; R13 fix round 4 replaced comfy-table, whose `Dynamic` arrangement
+  allocated width differently), same cell content (control codes stripped as rich did),
+  but no outer edge spaces or blank edge rows (every body line is rich's minus its first
+  column), the header rule spans the table, a table title is an r2-rendered italic line,
+  wrapped like rich's at RICH's table width (r2's body plus the two `SIMPLE_HEAD` edge
+  columns, at most the console width, which rich's table never exceeds, so the line breaks
+  equal c2's) and centered over r2's body. The one layout difference: a word longer than
+  its column is folded onto further lines of the cell, its content kept whole; c2's rich
+  columns (default `overflow="ellipsis"`) cropped it to the column width minus one and
+  appended `…` (e.g. a long config path in `config show --origin`, or `ops` / `keys` rows
+  at 60 columns; text with spaces word-wraps in both), so such a row takes more lines in
+  r2. The column widths are unaffected (rich measures before it crops). Printed text, the caret echo and panels (error panel, hex dump, any `PanelData`) are an
   own port of rich 15's Text/Panel layout (§4.9.2) and equal rich's output at every console
   width of 2 or more; residuals: cell widths are rich's Unicode 17.0.0 table (rich's
   `UNICODE_VERSION` environment override is not honoured), and below width 2 (never
@@ -7518,8 +7542,12 @@ names the test or harness check that pins the deviation.
 - *Reason*: different renderer (decision PLAN §3/§13).
 - *Verified by*: `insta` snapshots; the parity harness (`parity/harness/`) compares
   content after normalizing table glyphs, at console widths where no word is cropped by
-  rich or folded by r2; r2-core render `table_layout_is_simple_head` (title wrap vectors
-  from rich 15); the R1 renderer tests assert rich-identical text for error, hex and generic
+  rich or folded by r2 (200 by default — only for that crop/fold rule; `help` and the
+  `transcript_narrow` session also run at 60/80/100 columns); r2-core render
+  `tables_match_rich_column_widths` (c2's help/ops/keys/key tables and 120 generated ones
+  at widths 20..120, `crates/r2-core/tests/support/gen_rich_tables.py`: equal to rich's
+  output, or — where rich cropped — equal header rules) and `table_layout_is_simple_head`
+  (title wrap vectors from rich 15); the R1 renderer tests assert rich-identical text for error, hex and generic
   panels, printed text (content ESC/NUL/DEL/OSC bytes included), caret layouts and
   `cell_len` (vectors generated with rich 15,
   `crates/r2-core/tests/support/gen_rich_panels.py`); `resolve_color` unit tests over the

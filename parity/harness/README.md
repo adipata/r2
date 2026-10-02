@@ -54,8 +54,12 @@ The user config file case (`transcript_user_config`) appends `fixtures/user_conf
   all reported.
 - **Tool name** (§11 D7): `c2` → `r2` as a word, except inside hex dump lines.
 - **Glyphs** (§11 D1): box-drawing characters become spaces, whitespace runs collapse,
-  blank lines are dropped. Both tools run with `COLUMNS=200` (the token suite with 1000, so
-  no long attribute value is cropped by rich or folded by r2 — the D1 overflow rule).
+  blank lines are dropped. Both tools run with `COLUMNS=200` (the token suite with 1000) by
+  default. That width steps around the ONE remaining table difference, the D1 overflow
+  rule (a word longer than its column: rich crops it with `…`, r2 folds it); it is not
+  needed for the column allocation, which is rich's own (`_calculate_column_widths`) in
+  r2 and is compared at narrower widths through the `## columns:` header below
+  (`transcript_help` at 60/80/200, `transcript_narrow` at 80/100).
 - **ULONG ≥ 2^63** (§11 D18): `18446744073709551615` is compared as c2's `-1`.
 - **Token enumeration** (token suite only; `normalize(..., token_provider="hsm")`):
   `handle <n>` loses its number and consecutive table rows starting with `hsm:` are
@@ -78,7 +82,10 @@ in spec §11 through the §4.11 procedure and only then normalized here.
 One input line per line, exactly as typed (template editor answers such as `ok`, select
 answers, pasted PEM lines and the empty line that ends a paste included). `## key: value`
 lines are headers (`same-files`, `config`, `secret` = the answers typed at hidden-input
-prompts), other `##` lines are comments.
+prompts; transcript suite only: `columns` = the console widths to run the session at,
+each compared on its own as `<session>@<width>`, default 200, and `final-newline: no` =
+pipe the session without the newline after its last line, as in the
+`transcript_unterminated_*` sessions), other `##` lines are comments.
 `{WORK}`/`{FIX}`/`{SRC}` are substituted; a line `{PASTE:<fixture>}` expands to the
 lines of that fixture file. Fixtures in `fixtures/` were generated once with pyca in c2's
 virtualenv (fixed keys, so signatures and exports are deterministic).
@@ -94,6 +101,17 @@ printed by each run; they vary slightly with c2's prompt_toolkit render timing a
 recorded here.)
 
 Differences found and fixed in r2 during R13:
+
+- (fix round 4) at everyday widths r2's tables (comfy-table's `Dynamic` arrangement)
+  split the width between columns differently from rich, so multi-word cells wrapped at
+  other points (`help` at 80 columns: `copy … (wrapped in transit when` / `possible)`);
+  r2 now ports rich's column-width algorithm (§4.9.2) and `transcript_help`/
+  `transcript_narrow` run at 60–100 columns;
+- (fix round 4) a final piped line without its newline ran in r2; c2's prompt_toolkit
+  treated it as EOF (the command never ran; at a prompt, `Aborted.`) — r2 now does the
+  same (`transcript_unterminated_command`/`_prompt`). `normalize.py` splits a c2
+  carriage-return run holding two echoes (command echo, then the prompt echo) into its
+  render chains so the prompt line is compared, not dropped;
 
 - a table title one or two cells wider than r2's table body wrapped where rich (whose
   `SIMPLE_HEAD` table counts two edge columns) kept it on one line — e.g. `unwrapped into

@@ -26,7 +26,6 @@ nu-ansi-term = { workspace = true }
 rpassword = { workspace = true }
 indicatif = { workspace = true }
 console = { workspace = true }
-comfy-table = { workspace = true }
 anstream = { workspace = true }
 anstyle = { workspace = true }
 unicode-width = { workspace = true }

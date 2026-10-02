@@ -1,14 +1,12 @@
 // The ConsoleIo renderer (spec §4.9.2; owner R1): Renderable → text. Text, styled lines and
 // panels (error panel, hex dump) are an own port of rich 15's Text/Panel layout — its cell
 // widths (rich's own Unicode table, ZWJ/VS16 graphemes), control-code stripping, tab
-// expansion and fold wrapping — and equal rich's output; tables are comfy-table with a rich
-// `box.SIMPLE_HEAD` look (§11 D1).
+// expansion and fold wrapping — and equal rich's output; tables are a port of rich's
+// `Table` (column widths, cell measurement and layout) drawn with c2's `box.SIMPLE_HEAD`
+// minus its blank edge columns and rows (§11 D1).
 use std::cmp::Ordering;
 
 use anstyle::{AnsiColor, Style};
-use comfy_table::{
-    Attribute, Cell, ContentArrangement, LineStyle, Table as ComfyTable, TableStyle,
-};
 
 use crate::codec::format_hex;
 use crate::io::{Line, PanelData, Renderable, Span, TableData, Tone};
@@ -665,62 +663,265 @@ fn side_str(text: &str, tone: Tone, sgr: Sgr) -> String {
 }
 
 // ---- tables -------------------------------------------------------------------------------
+//
+// A port of rich 15's `Table` as c2's `make_table` built it (`box.SIMPLE_HEAD`, padding
+// (0, 1), `header_style="bold"`, no expand, no column width options): rich's column widths
+// (`_calculate_column_widths`, `_collapse_widths`, `ratio_reduce`), its cell measurement
+// (`Padding`/`Text.__rich_measure__`) and cell layout (rich `Text.wrap`, header cells bottom-
+// and row cells top-aligned), drawn without the two blank `SIMPLE_HEAD` edge columns and the
+// blank top/bottom edge rows (§11 D1). Words longer than their column fold (rich cropped
+// them with `…`, D1).
 
-/// rich `box.SIMPLE_HEAD` look: only a header rule (fill and junction '─'); the junction
-/// makes comfy-table separate columns by one blank vertical line, as rich does.
-const SIMPLE_HEAD: TableStyle =
-    TableStyle::new().header_separator(LineStyle::none().fill('─').junction('─'));
-
-/// `text` as rich's `Text(str(cell))` lays it out: control codes stripped, then each
-/// '\n'-separated line's tabs expanded to the next multiple of 8 cells (counted from the
-/// start of the cell line), so no TAB reaches comfy-table.
-fn table_cell_text(text: &str) -> String {
-    text.split('\n')
-        .map(|line| {
-            expand_tabs(&to_cells(line, Tone::Plain))
-                .into_iter()
-                .map(|(c, _)| c)
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+/// rich `Text.__rich_measure__` maximum of a cell held as rich's `Text(str(cell))` (control
+/// codes stripped, tabs still in place — rich measures a TAB as 0 cells and expands it only
+/// when the cell is laid out): the widest `str.splitlines()` line.
+fn text_maximum(cells: &[(char, Tone)]) -> i64 {
+    let plain: String = cells.iter().map(|&(c, _)| c).collect();
+    let widest = py_splitlines(&plain)
+        .into_iter()
+        .map(str_cell_len)
+        .max()
+        .unwrap_or(0);
+    i64::try_from(widest).unwrap_or(i64::MAX)
 }
 
-/// The comfy-table body lines (`trim_fmt`), header cells bold when `bold_header` (then
-/// SGR is enforced; otherwise comfy-table emits none).
-fn comfy_lines(data: &TableData, cfg: &RenderConfig, bold_header: bool) -> Vec<String> {
-    let mut table = ComfyTable::new();
-    table
-        .load_style(SIMPLE_HEAD)
-        .force_no_tty()
-        .set_width(u16::try_from(cfg.width).unwrap_or(u16::MAX))
-        .set_content_arrangement(ContentArrangement::Dynamic);
-    if bold_header {
-        table.enforce_styling();
+/// rich `Measurement.get(console, options(max_width), Padding(Text, (0, 1))).maximum`.
+fn cell_maximum(text_maximum: i64, max_width: i64) -> i64 {
+    if max_width < 1 {
+        return 0;
     }
-    if !data.columns.is_empty() {
-        table.set_header(
-            data.columns
-                .iter()
-                .map(|column| {
-                    let cell = Cell::new(table_cell_text(column));
-                    if bold_header {
-                        cell.add_attribute(Attribute::Bold)
-                    } else {
-                        cell
+    if max_width - 2 < 1 {
+        return max_width;
+    }
+    (text_maximum.max(0).min(max_width) + 2).min(max_width)
+}
+
+/// rich `Table._measure_column(...).maximum` (header cell included).
+fn column_maximum(text_maximums: &[i64], max_width: i64) -> i64 {
+    if max_width < 1 {
+        return 0;
+    }
+    text_maximums
+        .iter()
+        .map(|&text| cell_maximum(text, max_width))
+        .max()
+        .unwrap_or(max_width)
+        .min(max_width)
+}
+
+/// Python `round(num / den)` (banker's rounding) for `den > 0`.
+fn py_round_div(num: i64, den: i64) -> i64 {
+    let quotient = num.div_euclid(den);
+    let twice_remainder = 2 * num.rem_euclid(den);
+    match twice_remainder.cmp(&den) {
+        Ordering::Greater => quotient + 1,
+        Ordering::Equal => quotient + quotient.rem_euclid(2),
+        Ordering::Less => quotient,
+    }
+}
+
+/// rich `_ratio.ratio_reduce`.
+fn ratio_reduce(total: i64, ratios: &[i64], maximums: &[i64], values: &[i64]) -> Vec<i64> {
+    let ratios: Vec<i64> = ratios
+        .iter()
+        .zip(maximums)
+        .map(|(&ratio, &maximum)| if maximum != 0 { ratio } else { 0 })
+        .collect();
+    let mut total_ratio: i64 = ratios.iter().sum();
+    if total_ratio == 0 {
+        return values.to_vec();
+    }
+    let mut total_remaining = total;
+    ratios
+        .iter()
+        .zip(maximums)
+        .zip(values)
+        .map(|((&ratio, &maximum), &value)| {
+            if ratio != 0 && total_ratio > 0 {
+                let distributed = maximum.min(py_round_div(ratio * total_remaining, total_ratio));
+                total_remaining -= distributed;
+                total_ratio -= ratio;
+                value - distributed
+            } else {
+                value
+            }
+        })
+        .collect()
+}
+
+/// rich `Table._collapse_widths` with every column wrapable.
+fn collapse_widths(mut widths: Vec<i64>, max_width: i64) -> Vec<i64> {
+    let mut total: i64 = widths.iter().sum();
+    let mut excess = total - max_width;
+    while total != 0 && excess > 0 {
+        let Some(&max_column) = widths.iter().max() else {
+            break;
+        };
+        let second_max_column = widths
+            .iter()
+            .map(|&width| if width != max_column { width } else { 0 })
+            .max()
+            .unwrap_or(0);
+        let column_difference = max_column - second_max_column;
+        let ratios: Vec<i64> = widths
+            .iter()
+            .map(|&width| i64::from(width == max_column))
+            .collect();
+        if column_difference == 0 {
+            break;
+        }
+        let max_reduce = vec![excess.min(column_difference); widths.len()];
+        widths = ratio_reduce(excess, &ratios, &max_reduce, &widths);
+        total = widths.iter().sum();
+        excess = total - max_width;
+    }
+    widths
+}
+
+/// rich `Table._calculate_column_widths` (padding included, borders not) for columns whose
+/// cells (header first) have the given `text_maximum`s, at a console of `console_width`.
+fn column_widths(columns: &[Vec<i64>], console_width: usize) -> Vec<usize> {
+    let count = i64::try_from(columns.len()).unwrap_or(i64::MAX);
+    // `_extra_width`: the two edge columns plus one divider between columns
+    let max_width = i64::try_from(console_width).unwrap_or(i64::MAX) - (2 + count - 1);
+    let mut widths: Vec<i64> = columns
+        .iter()
+        .map(|column| match column_maximum(column, max_width) {
+            0 => 1,
+            width => width,
+        })
+        .collect();
+    let mut table_width: i64 = widths.iter().sum();
+    if table_width > max_width {
+        widths = collapse_widths(widths, max_width);
+        table_width = widths.iter().sum();
+        if table_width > max_width {
+            let ones = vec![1; widths.len()];
+            widths = ratio_reduce(table_width - max_width, &ones, &widths.clone(), &widths);
+        }
+        widths = widths
+            .iter()
+            .zip(columns)
+            .map(|(&width, column)| column_maximum(column, width))
+            .collect();
+    }
+    widths
+        .into_iter()
+        .map(|width| usize::try_from(width).unwrap_or(0))
+        .collect()
+}
+
+/// One cell rendered at its column `width` (padding included): rich `Padding` +
+/// `Text.wrap` lines, each `" " + text padded to width - 2 + " "`. A column narrower than
+/// 3 cells has no room for content (rich renders it blank). Padding takes the cell's style
+/// (`tone`), as rich's `Padding` does.
+fn cell_lines(cell: &[(char, Tone)], width: usize, tone: Tone) -> Vec<Cells> {
+    let inner = width.saturating_sub(2);
+    let pad = |count: usize| std::iter::repeat_n((' ', tone), count);
+    let lines = if inner == 0 {
+        vec![Cells::new()]
+    } else {
+        wrap_lines(&[cell.to_vec()], inner)
+    };
+    lines
+        .into_iter()
+        .map(|line| {
+            let fill = inner.saturating_sub(cells_len(&line));
+            let mut out: Cells = pad(width.min(1)).collect();
+            out.extend(line);
+            out.extend(pad(fill + usize::from(width >= 2)));
+            out
+        })
+        .collect()
+}
+
+/// The table body lines: header row (cells bold when `bold_header`, bottom-aligned), the
+/// header rule spanning the table, then the rows (top-aligned); columns separated by one
+/// blank; trailing blanks trimmed (in the plain domain for styled header lines).
+fn table_lines(data: &TableData, cfg: &RenderConfig, sgr: Sgr) -> Vec<String> {
+    // rich `add_row`: a row longer than the columns adds columns (header ""), a shorter one
+    // is padded with empty cells.
+    let count = data
+        .rows
+        .iter()
+        .map(Vec::len)
+        .max()
+        .unwrap_or(0)
+        .max(data.columns.len());
+    let cell = |text: Option<&String>, tone: Tone| to_cells(text.map_or("", String::as_str), tone);
+    let header_tone = if sgr == Sgr::Off {
+        Tone::Plain
+    } else {
+        Tone::Bold
+    };
+    let header: Vec<Cells> = (0..count)
+        .map(|index| cell(data.columns.get(index), header_tone))
+        .collect();
+    let rows: Vec<Vec<Cells>> = data
+        .rows
+        .iter()
+        .map(|row| {
+            (0..count)
+                .map(|index| cell(row.get(index), Tone::Plain))
+                .collect()
+        })
+        .collect();
+    let measured: Vec<Vec<i64>> = (0..count)
+        .map(|index| {
+            std::iter::once(&header[index])
+                .chain(rows.iter().map(|row| &row[index]))
+                .map(|cells| text_maximum(cells))
+                .collect()
+        })
+        .collect();
+    let widths = column_widths(&measured, cfg.width);
+    // rich aligns header cells to the bottom of their row and body cells to the top; the
+    // blank lines added take the cell's style
+    let render_row = |cells: &[Cells], tone: Tone, bottom: bool| -> Vec<Cells> {
+        let laid_out: Vec<Vec<Cells>> = cells
+            .iter()
+            .zip(&widths)
+            .map(|(cell, &width)| cell_lines(cell, width, tone))
+            .collect();
+        let height = laid_out.iter().map(Vec::len).max().unwrap_or(1);
+        (0..height)
+            .map(|line| {
+                let mut out = Cells::new();
+                for (index, (column, &width)) in laid_out.iter().zip(&widths).enumerate() {
+                    if index > 0 {
+                        out.push((' ', Tone::Plain));
                     }
-                })
-                .collect::<Vec<_>>(),
+                    let offset = if bottom { height - column.len() } else { 0 };
+                    match line.checked_sub(offset).and_then(|at| column.get(at)) {
+                        Some(cells) => out.extend_from_slice(cells),
+                        None => out.extend(std::iter::repeat_n((' ', tone), width)),
+                    }
+                }
+                out
+            })
+            .collect()
+    };
+    let trim_plain = |line: String| line.trim_end_matches(' ').to_owned();
+    let mut lines: Vec<String> = render_row(&header, header_tone, true)
+        .iter()
+        .map(|line| {
+            if sgr == Sgr::Off {
+                trim_plain(styled(line, sgr))
+            } else {
+                trim_styled_end(&styled(line, sgr))
+            }
+        })
+        .collect();
+    let rule_width = widths.iter().sum::<usize>() + count.saturating_sub(1);
+    lines.push("─".repeat(rule_width));
+    for row in &rows {
+        lines.extend(
+            render_row(row, Tone::Plain, false)
+                .iter()
+                .map(|line| trim_plain(styled(line, sgr))),
         );
     }
-    for row in &data.rows {
-        table.add_row(
-            row.iter()
-                .map(|cell| Cell::new(table_cell_text(cell)))
-                .collect::<Vec<_>>(),
-        );
-    }
-    table.trim_fmt().lines().map(str::to_owned).collect()
+    lines
 }
 
 fn render_table(data: &TableData, cfg: &RenderConfig, sgr: Sgr) -> String {
@@ -728,37 +929,11 @@ fn render_table(data: &TableData, cfg: &RenderConfig, sgr: Sgr) -> String {
     if data.columns.is_empty() && data.rows.is_empty() {
         return String::new();
     }
-    // Layout and measurement happen on the unstyled rendering, where cell content (ESC and
-    // all) is plain text. The styled rendering only replaces the header lines (the bold
-    // header cells are the only SGR comfy-table emits); `trim_fmt()` cannot see the padding
-    // inside a styled header cell, which ends with its SGR reset, so those lines get their
-    // trailing blanks before such sequences trimmed too. Row lines (data) are never parsed
-    // for escape sequences.
-    let plain = comfy_lines(data, cfg, false);
-    let body_lines: Vec<String> = if sgr == Sgr::Off || data.columns.is_empty() {
+    let plain = table_lines(data, cfg, Sgr::Off);
+    let body_lines = if sgr == Sgr::Off {
         plain.clone()
     } else {
-        let styled_lines = comfy_lines(data, cfg, true);
-        let header_count = plain
-            .iter()
-            .position(|line| !line.is_empty() && line.chars().all(|c| c == '─'))
-            .unwrap_or(0);
-        if styled_lines.len() == plain.len() {
-            plain
-                .iter()
-                .zip(&styled_lines)
-                .enumerate()
-                .map(|(index, (plain_line, styled_line))| {
-                    if index < header_count {
-                        trim_styled_end(styled_line)
-                    } else {
-                        plain_line.clone()
-                    }
-                })
-                .collect()
-        } else {
-            plain.clone()
-        }
+        table_lines(data, cfg, sgr)
     };
     let body = body_lines.join("\n");
     // rich `if self.title:` — an empty title (after control-code stripping) is none.
@@ -782,7 +957,7 @@ fn render_table(data: &TableData, cfg: &RenderConfig, sgr: Sgr) -> String {
         table_width
     };
     // rich wraps the title at ITS table width, which includes the two edge columns of
-    // `box.SIMPLE_HEAD` that comfy-table does not draw (§11 D1): a title one or two cells
+    // `box.SIMPLE_HEAD` that r2 does not draw (§11 D1): a title one or two cells
     // wider than r2's body stays on one line, as in c2 (R13 parity harness). rich's table,
     // edges included, never exceeds the console width, so neither does the wrap width: a
     // body that already fills the console wraps its title at the console width (R13 fix 1).
