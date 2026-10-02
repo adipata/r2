@@ -154,7 +154,9 @@ pub(crate) fn console_width(is_terminal: bool, env: &dyn Fn(&str) -> Option<Stri
 fn terminal_width() -> Option<usize> {
     use crossterm::tty::IsTty;
     if io::stdin().is_tty() || io::stdout().is_tty() || io::stderr().is_tty() {
-        crossterm::terminal::size().ok().map(|(width, _)| usize::from(width))
+        crossterm::terminal::size()
+            .ok()
+            .map(|(width, _)| usize::from(width))
     } else {
         None
     }
@@ -406,7 +408,10 @@ impl<R: LineReader> r2_core::io::ConsoleIo for LineIo<R> {
         }
         let bar = ProgressBar::with_draw_target(
             None,
-            ProgressDrawTarget::term_like_with_hz(Box::new(NarrowTerm(console::Term::stderr())), 20),
+            ProgressDrawTarget::term_like_with_hz(
+                Box::new(NarrowTerm(console::Term::stderr())),
+                20,
+            ),
         );
         if let Ok(style) = ProgressStyle::with_template("{spinner} {msg}") {
             bar.set_style(style);

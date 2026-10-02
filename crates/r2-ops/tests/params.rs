@@ -14,8 +14,8 @@ use indexmap::IndexMap;
 use r2_core::error::{ConsoleError, ErrorKind, Result};
 use r2_core::keys::{KeyAlgorithm, KeyClass, KeyMaterial};
 use r2_ops::{
-    OperationRegistry, OperationSpec, ParamKind, ParamResolver, ParamSpec, ParamStruct,
-    ParamValue, Params, Verb, register_builtins,
+    OperationRegistry, OperationSpec, ParamKind, ParamResolver, ParamSpec, ParamStruct, ParamValue,
+    Params, Verb, register_builtins,
 };
 use r2_provider::{Provider, ProviderRegistry};
 use r2_testkit::{FakeProvider, ScriptedIo};
@@ -48,10 +48,7 @@ fn given(pairs: &[(&str, &str)]) -> IndexMap<String, String> {
 }
 
 fn params(pairs: Vec<(&str, ParamValue)>) -> Params {
-    pairs
-        .into_iter()
-        .map(|(k, v)| (k.to_owned(), v))
-        .collect()
+    pairs.into_iter().map(|(k, v)| (k.to_owned(), v)).collect()
 }
 
 fn enum_value(text: &str) -> ParamValue {
@@ -145,7 +142,10 @@ fn test_unknown_given_name_lists_valid_names() {
     // an operation without parameters says so
     let pkcs1 = reg.get("rsa.encrypt.pkcs1").unwrap();
     let err = resolve(&registry, &ScriptedIo::empty(), pkcs1, &[("x", "1")]).unwrap_err();
-    assert_eq!(err.hint.as_deref(), Some("this operation takes no parameters"));
+    assert_eq!(
+        err.hint.as_deref(),
+        Some("this operation takes no parameters")
+    );
 }
 
 #[test]
@@ -251,7 +251,11 @@ fn test_required_param_prompts_and_reprompts_until_valid() {
     assert_eq!(values["iv"], ParamValue::Bytes(vec![0x0b; 16]));
     assert_eq!(values["padding"], enum_value("pkcs7"));
     assert_eq!(io.prompts(), ["IV (16 bytes)", "IV (16 bytes)"]);
-    assert!(io.output().iter().any(|line| line.starts_with("error: iv:")));
+    assert!(
+        io.output()
+            .iter()
+            .any(|line| line.starts_with("error: iv:"))
+    );
 }
 
 #[test]
@@ -370,9 +374,8 @@ fn test_enum_prompt_reprompts_and_receives_choices() {
     // (tests::io::test_enum_prompt_reprompts_and_receives_choices).
     let registry = providers();
     let io = ScriptedIo::new(["nope", "aa"]);
-    let spec = one_param_spec(
-        ParamSpec::new("e", ParamKind::Enum, "Pick one").choices(&["aa", "bb"]),
-    );
+    let spec =
+        one_param_spec(ParamSpec::new("e", ParamKind::Enum, "Pick one").choices(&["aa", "bb"]));
     let values = resolve(&registry, &io, &spec, &[]).unwrap();
     assert_eq!(values, params(vec![("e", enum_value("aa"))]));
     assert_eq!(io.prompts(), ["Pick one", "Pick one"]);
@@ -388,7 +391,13 @@ fn test_str_kept_verbatim() {
     let registry = providers();
     let spec = one_param_spec(ParamSpec::new("s", ParamKind::Str, "S"));
     assert_eq!(
-        resolve(&registry, &ScriptedIo::empty(), &spec, &[("s", "  CN=x, O=y  ")]).unwrap(),
+        resolve(
+            &registry,
+            &ScriptedIo::empty(),
+            &spec,
+            &[("s", "  CN=x, O=y  ")]
+        )
+        .unwrap(),
         params(vec![("s", ParamValue::Str("  CN=x, O=y  ".to_owned()))])
     );
 }
@@ -413,7 +422,13 @@ fn test_bytes_hex_base64_and_prefix() {
 fn test_bytes_exact_length_enforced() {
     let registry = providers();
     let spec = one_param_spec(ParamSpec::new("iv", ParamKind::Bytes, "IV").length(16));
-    let err = resolve(&registry, &ScriptedIo::empty(), &spec, &[("iv", "deadbeef")]).unwrap_err();
+    let err = resolve(
+        &registry,
+        &ScriptedIo::empty(),
+        &spec,
+        &[("iv", "deadbeef")],
+    )
+    .unwrap_err();
     assert_param_error(&err);
     assert_eq!(err.message, "iv: expected exactly 16 bytes, got 4");
     assert_eq!(err.hint, None);
@@ -441,7 +456,13 @@ fn test_bytes_codec_failure_becomes_param_error() {
 fn test_keyref_resolves_to_key_info() {
     let registry = providers();
     let spec = one_param_spec(ParamSpec::new("peer", ParamKind::KeyRef, "Peer"));
-    let values = resolve(&registry, &ScriptedIo::empty(), &spec, &[("peer", "mem:k1")]).unwrap();
+    let values = resolve(
+        &registry,
+        &ScriptedIo::empty(),
+        &spec,
+        &[("peer", "mem:k1")],
+    )
+    .unwrap();
     let info = values["peer"].as_key().unwrap();
     assert_eq!(info.key_ref.display(), "mem:k1");
     assert_eq!(info.algorithm, KeyAlgorithm::Aes);
@@ -526,7 +547,10 @@ fn test_resolved_dict_covers_every_declared_param() {
     assert_eq!(keys, BTreeSet::from(["hash", "mgf_hash"]));
     let values = resolve(&registry, &ScriptedIo::empty(), pss, &[("salt_len", "-1")]).unwrap();
     let all: BTreeSet<&str> = pss.params.iter().map(|p| p.name.as_str()).collect();
-    assert_eq!(values.keys().map(String::as_str).collect::<BTreeSet<_>>(), all);
+    assert_eq!(
+        values.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        all
+    );
 }
 
 #[test]

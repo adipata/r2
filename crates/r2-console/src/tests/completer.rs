@@ -13,8 +13,7 @@ use reedline::{Highlighter, Span};
 
 use crate::commands::{Command, all_commands};
 use crate::completer::{
-    ConsoleAssist, browsable, complete_line, complete_paths, complete_provider_names,
-    complete_refs,
+    ConsoleAssist, browsable, complete_line, complete_paths, complete_provider_names, complete_refs,
 };
 use crate::context::AppContext;
 use crate::io::{BridgeCompleter, BridgeHighlighter, LineAssist, install_line_assist};
@@ -67,7 +66,12 @@ fn aes_material() -> KeyMaterial {
     KeyMaterial::new(KeyAlgorithm::Aes, KeyClass::Secret, vec![0x01; 16])
 }
 
-fn generate(provider: &Rc<dyn Provider>, algorithm: KeyAlgorithm, label: &str, key_id: Option<&[u8]>) {
+fn generate(
+    provider: &Rc<dyn Provider>,
+    algorithm: KeyAlgorithm,
+    label: &str,
+    key_id: Option<&[u8]>,
+) {
     let mut request = GenerateRequest::new(algorithm, label);
     match algorithm {
         KeyAlgorithm::Rsa => request.size_bits = Some(2048),
@@ -81,7 +85,10 @@ fn generate(provider: &Rc<dyn Provider>, algorithm: KeyAlgorithm, label: &str, k
 fn test_first_token_completes_command_names() {
     let ctx = make_ctx();
     assert_eq!(completions(&ctx, "he"), ["help"]);
-    assert!(as_set(completions(&ctx, "")).is_superset(&set(&["help", "exit", "quit", "clear", "config"])));
+    assert!(
+        as_set(completions(&ctx, ""))
+            .is_superset(&set(&["help", "exit", "quit", "clear", "config"]))
+    );
 }
 
 #[test]
@@ -154,7 +161,10 @@ fn test_help_arg_completion_stops_after_first_arg() {
 #[test]
 fn test_complete_provider_names() {
     let ctx = make_ctx();
-    assert_eq!(as_set(complete_provider_names(&ctx, "")), set(&["mem", "hsm"]));
+    assert_eq!(
+        as_set(complete_provider_names(&ctx, "")),
+        set(&["mem", "hsm"])
+    );
     assert_eq!(complete_provider_names(&ctx, "m"), ["mem"]);
 }
 
@@ -231,7 +241,10 @@ fn test_complete_refs_id_selector_stages() {
         complete_refs(&ctx, "hsm:tls#"),
         ["hsm:tls#0a1b", "hsm:tls#0a1b:secret"]
     );
-    assert_eq!(complete_refs(&ctx, "hsm:tls#0a1b:"), ["hsm:tls#0a1b:secret"]);
+    assert_eq!(
+        complete_refs(&ctx, "hsm:tls#0a1b:"),
+        ["hsm:tls#0a1b:secret"]
+    );
     assert_eq!(complete_refs(&ctx, "hsm:tls:"), ["hsm:tls:secret"]);
 }
 
@@ -283,10 +296,16 @@ fn test_complete_refs_ambiguous_selector_not_offered() {
     // ambiguous 'mem:dup:secret' (would be AmbiguousKey) never does
     let offered = complete_refs(&ctx, "mem:dup:");
     assert_eq!(offered.len(), 2);
-    assert!(offered.iter().all(|text| text.starts_with("mem:dup:secret@")));
+    assert!(
+        offered
+            .iter()
+            .all(|text| text.starts_with("mem:dup:secret@"))
+    );
     let hsm = fake(&ctx, "hsm");
-    hsm.import_key(&aes_material(), "dup", None, Some(&[0x01])).unwrap();
-    hsm.import_key(&aes_material(), "dup", None, Some(&[0x02])).unwrap();
+    hsm.import_key(&aes_material(), "dup", None, Some(&[0x01]))
+        .unwrap();
+    hsm.import_key(&aes_material(), "dup", None, Some(&[0x02]))
+        .unwrap();
     assert!(complete_refs(&ctx, "hsm:dup:").is_empty()); // distinct ids → no joint selector
 }
 
@@ -296,7 +315,8 @@ fn test_complete_refs_labels_containing_delimiters() {
     let mem = fake(&ctx, "mem");
     mem.import_key(&aes_material(), "a", None, None).unwrap();
     mem.import_key(&aes_material(), "a#b", None, None).unwrap();
-    mem.import_key(&aes_material(), "we:ird", None, None).unwrap();
+    mem.import_key(&aes_material(), "we:ird", None, None)
+        .unwrap();
     assert_eq!(complete_refs(&ctx, "mem:a#"), ["mem:a#b"]);
     assert_eq!(complete_refs(&ctx, "mem:we:"), ["mem:we:ird"]);
     assert_eq!(complete_refs(&ctx, "mem:a:"), ["mem:a:secret"]);
@@ -319,9 +339,20 @@ fn test_complete_refs_candidates_always_parse() {
     hsm.import_key(&aes_material(), "tls", None, Some(&[0x0a, 0x1b]))
         .unwrap();
     generate(&hsm, KeyAlgorithm::Ec, "pair", Some(&[0x01, 0x02]));
-    for prefix in ["hsm:", "hsm:tls", "hsm:tls#", "hsm:tls:", "hsm:pair#", "hsm:pair:"] {
+    for prefix in [
+        "hsm:",
+        "hsm:tls",
+        "hsm:tls#",
+        "hsm:tls:",
+        "hsm:pair#",
+        "hsm:pair:",
+    ] {
         for candidate in complete_refs(&ctx, prefix) {
-            assert_eq!(parse_ref(&candidate).unwrap().provider, "hsm", "{candidate}");
+            assert_eq!(
+                parse_ref(&candidate).unwrap().provider,
+                "hsm",
+                "{candidate}"
+            );
         }
     }
 }
@@ -433,7 +464,10 @@ fn suggestions_never_append_whitespace_and_paths_show_their_last_component() {
             (Some("subdir/".to_owned()), false)
         ]
     );
-    assert_eq!(suggestions[0].value, format!("{}/alpha.txt", dir.path().display()));
+    assert_eq!(
+        suggestions[0].value,
+        format!("{}/alpha.txt", dir.path().display())
+    );
     // refs of registered providers are not path-like, even with a '/' in the label
     fake(&ctx, "mem")
         .import_key(&aes_material(), "a/b", None, None)
@@ -478,7 +512,10 @@ fn highlighting_styles_follow_the_grammar() {
     );
     // unknown command red; an unregistered provider prefix is not a ref
     let styled = assist.highlight("nope zz:k");
-    assert_eq!(styled.buffer[0], (Style::new().fg(Color::Red), "nope".to_owned()));
+    assert_eq!(
+        styled.buffer[0],
+        (Style::new().fg(Color::Red), "nope".to_owned())
+    );
     assert_eq!(styled.buffer[2], (Style::new(), "zz:k".to_owned()));
     // a still-open quote is a string to the end of the buffer
     let styled = assist.highlight("help 'abc\ndef");
@@ -523,8 +560,14 @@ fn test_complete_paths_lists_directory() {
 fn test_complete_paths_partial_and_hidden() {
     let dir = tree();
     let tree = dir.path().display();
-    assert_eq!(complete_paths(&format!("{tree}/al")), [format!("{tree}/alpha.txt")]);
-    assert_eq!(complete_paths(&format!("{tree}/.")), [format!("{tree}/.hidden")]);
+    assert_eq!(
+        complete_paths(&format!("{tree}/al")),
+        [format!("{tree}/alpha.txt")]
+    );
+    assert_eq!(
+        complete_paths(&format!("{tree}/.")),
+        [format!("{tree}/.hidden")]
+    );
     assert!(complete_paths(&format!("{tree}/nomatch")).is_empty());
     assert!(complete_paths(&format!("{tree}/subdir/")).is_empty());
 }

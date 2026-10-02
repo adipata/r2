@@ -34,7 +34,11 @@ fn ctx_for(io: &Rc<ScriptedIo>) -> Rc<crate::context::AppContext> {
 fn test_help_lists_every_command() {
     let io = scripted();
     run_line(&ctx_for(&io), "help").unwrap();
-    assert!(io.output().iter().any(|line| line.contains("shows its usage")));
+    assert!(
+        io.output()
+            .iter()
+            .any(|line| line.contains("shows its usage"))
+    );
     let listing = &io.output()[0];
     assert!(listing.contains("commands"));
     for name in ["help", "exit", "quit", "clear", "config"] {
@@ -85,7 +89,10 @@ fn test_help_unknown_command_suggests() {
     assert!(hint.contains("config"));
     assert_eq!(hint, "did you mean: config");
     let err = run_line(&ctx_for(&scripted()), "help zzzzzz").unwrap_err();
-    assert_eq!(err.hint.as_deref(), Some("type 'help' for the command list"));
+    assert_eq!(
+        err.hint.as_deref(),
+        Some("type 'help' for the command list")
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -218,8 +225,14 @@ fn config_show_is_byte_identical_to_c2() {
     let defaults = make_config(None);
     let overrides = make_config(Some(include_str!("fixtures/config_show_overrides.yaml")));
     for (config, expected) in [
-        (defaults, include_str!("fixtures/config_show_defaults.c2.txt")),
-        (overrides, include_str!("fixtures/config_show_overrides.c2.txt")),
+        (
+            defaults,
+            include_str!("fixtures/config_show_defaults.c2.txt"),
+        ),
+        (
+            overrides,
+            include_str!("fixtures/config_show_overrides.c2.txt"),
+        ),
     ] {
         let io = scripted();
         let ctx = CtxBuilder::new(Rc::clone(&io) as Rc<dyn ConsoleIo>)
@@ -318,7 +331,10 @@ fn test_config_show_defaults_prints_embedded_annotated_yaml() {
 fn test_config_show_defaults_and_origin_conflict() {
     let err = run_line(&ctx_for(&scripted()), "config show --defaults --origin").unwrap_err();
     assert!(err.message.contains("mutually exclusive"));
-    assert_eq!(err.message, "--defaults and --origin are mutually exclusive");
+    assert_eq!(
+        err.message,
+        "--defaults and --origin are mutually exclusive"
+    );
     assert_eq!(
         err.hint.as_deref(),
         Some("usage: config show [--defaults | --origin] | config path")

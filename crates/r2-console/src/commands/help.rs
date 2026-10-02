@@ -30,8 +30,9 @@ impl Command for HelpCommand {
                 .collect();
             ctx.io
                 .print(table(Some("commands"), &["command", "summary"], rows));
-            ctx.io
-                .print(Renderable::Text("help <command> shows its usage".to_owned()));
+            ctx.io.print(Renderable::Text(
+                "help <command> shows its usage".to_owned(),
+            ));
             return Ok(Flow::Continue);
         };
         let Some(command) = commands.get(wanted.as_str()) else {
@@ -45,8 +46,7 @@ impl Command for HelpCommand {
         };
         ctx.io
             .print(Renderable::Text(format!("usage: {}", command.usage())));
-        ctx.io
-            .print(Renderable::Text(command.summary().to_owned()));
+        ctx.io.print(Renderable::Text(command.summary().to_owned()));
         let mut flags: Vec<&str> = command.flags().to_vec();
         if !flags.is_empty() {
             flags.sort_unstable();

@@ -27,10 +27,10 @@ pub fn positional<'a>(
 /// {usage} (quote {noun} containing '=')"); noun = "data" (keys, kek) or "values" (providers).
 pub fn reject_named(args: &BoundArgs, usage: &str, noun: &str) -> r2_core::Result<()> {
     match args.named.keys().next() {
-        Some(name) => Err(ConsoleError::generic(format!(
-            "unexpected name=value token '{name}=…'"
-        ))
-        .with_hint(format!("usage: {usage} (quote {noun} containing '=')"))),
+        Some(name) => Err(
+            ConsoleError::generic(format!("unexpected name=value token '{name}=…'"))
+                .with_hint(format!("usage: {usage} (quote {noun} containing '=')")),
+        ),
         None => Ok(()),
     }
 }
@@ -85,14 +85,13 @@ pub fn parse_seed_templates(
         return Ok(None);
     };
     if provider.type_name() != "pkcs11" {
-        return Err(ConsoleError::param(
-            "--template applies only to PKCS#11 targets",
-            "template",
-        )
-        .with_hint(format!(
-            "the template editor never opens for {}",
-            provider.name()
-        )));
+        return Err(
+            ConsoleError::param("--template applies only to PKCS#11 targets", "template")
+                .with_hint(format!(
+                    "the template editor never opens for {}",
+                    provider.name()
+                )),
+        );
     }
     load_seed_file(&py_path(path), &ctx.cfg().templates.custom_attributes).map(Some)
 }

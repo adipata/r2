@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use r2_core::io::{ConsoleIo, IdentityTemplateEditor, TemplateEditor};
+use r2_core::io::{ConsoleIo, TemplateEditor};
 use r2_core::keys::KeyClass;
 use r2_core::template::KeyTemplate;
 use r2_provider::{AuthState, ProviderRegistry};
@@ -69,6 +69,5 @@ fn ctx_builder_overrides() {
     // defaults: the R10 factory (identity until R10 merges) and the builtin operations
     let ctx = CtxBuilder::new(Rc::clone(&io) as Rc<dyn ConsoleIo>).build();
     assert!(ctx.operations.get("aes.encrypt.gcm").is_ok());
-    let _ = IdentityTemplateEditor;
     assert!(run_line(&ctx, "  ").is_ok());
 }

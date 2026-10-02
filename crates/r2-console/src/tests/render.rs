@@ -19,9 +19,29 @@ fn test_suggest_close_match_and_none() {
 fn suggest_takes_three_matches_in_difflib_order() {
     // CPython difflib.get_close_matches over the sorted command names (§4.2 vectors)
     let names = [
-        "clear", "config", "copy", "csr", "decrypt", "delete", "derive", "encrypt", "exit",
-        "export", "generate", "help", "key", "keys", "load", "login", "logout", "ops",
-        "providers", "quit", "sign", "slots", "verify",
+        "clear",
+        "config",
+        "copy",
+        "csr",
+        "decrypt",
+        "delete",
+        "derive",
+        "encrypt",
+        "exit",
+        "export",
+        "generate",
+        "help",
+        "key",
+        "keys",
+        "load",
+        "login",
+        "logout",
+        "ops",
+        "providers",
+        "quit",
+        "sign",
+        "slots",
+        "verify",
     ];
     assert_eq!(
         suggest("decrept", &names).as_deref(),
@@ -31,7 +51,10 @@ fn suggest_takes_three_matches_in_difflib_order() {
         suggest("aecrypt", &names).as_deref(),
         Some("did you mean: encrypt, decrypt")
     );
-    assert_eq!(suggest("cps", &names).as_deref(), Some("did you mean: ops, csr"));
+    assert_eq!(
+        suggest("cps", &names).as_deref(),
+        Some("did you mean: ops, csr")
+    );
 }
 
 fn info(key_class: KeyClass, algorithm: KeyAlgorithm) -> KeyInfo {
@@ -55,7 +78,16 @@ fn keys_table_cells() {
     assert_eq!(class_text(KeyClass::Secret), "secret");
     assert_eq!(class_text(KeyClass::Data), "data");
     assert_eq!(algo_text(&info(KeyClass::Data, KeyAlgorithm::None)), "-");
-    assert_eq!(algo_text(&info(KeyClass::Secret, KeyAlgorithm::Generic)), "generic");
-    assert_eq!(algo_text(&info(KeyClass::Private, KeyAlgorithm::EcEdwards)), "ec-edwards");
-    assert_eq!(algo_text(&info(KeyClass::Private, KeyAlgorithm::Other)), "other");
+    assert_eq!(
+        algo_text(&info(KeyClass::Secret, KeyAlgorithm::Generic)),
+        "generic"
+    );
+    assert_eq!(
+        algo_text(&info(KeyClass::Private, KeyAlgorithm::EcEdwards)),
+        "ec-edwards"
+    );
+    assert_eq!(
+        algo_text(&info(KeyClass::Private, KeyAlgorithm::Other)),
+        "other"
+    );
 }

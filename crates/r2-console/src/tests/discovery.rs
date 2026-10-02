@@ -45,7 +45,10 @@ fn test_config_declares_its_boolean_flags() {
 fn all_commands_is_cached_per_thread() {
     // c2 test_all_commands_is_cached (n/a in the ledger: Python caching); the r2 cache is
     // thread-local and hands out the same table.
-    assert!(Rc::ptr_eq(&all_commands().unwrap(), &all_commands().unwrap()));
+    assert!(Rc::ptr_eq(
+        &all_commands().unwrap(),
+        &all_commands().unwrap()
+    ));
 }
 
 #[test]
@@ -55,7 +58,10 @@ fn test_there_is_no_central_registration_table() {
     let source = include_str!("../commands/mod.rs");
     assert!(source.contains("include!(concat!(env!(\"OUT_DIR\"), \"/command_modules.rs\"));"));
     for name in ["\"help\"", "\"exit\"", "\"config\"", "\"keys\"", "\"misc\""] {
-        assert!(!source.contains(name), "{name} hard-coded in commands/mod.rs");
+        assert!(
+            !source.contains(name),
+            "{name} hard-coded in commands/mod.rs"
+        );
     }
     let build = include_str!("../../build.rs");
     assert!(build.contains("src/commands"));
@@ -87,7 +93,10 @@ fn duplicate_command_names_are_a_config_error() {
     let err = collect_commands(modules).err().unwrap();
     assert_eq!(err.kind, ErrorKind::Config);
     assert_eq!(err.message, "duplicate command name 'b' (module 'beta')");
-    let table = collect_commands(vec![("alpha", vec![Box::new(Named("z")), Box::new(Named("a"))])])
-        .unwrap();
+    let table = collect_commands(vec![(
+        "alpha",
+        vec![Box::new(Named("z")), Box::new(Named("a"))],
+    )])
+    .unwrap();
     assert_eq!(table.keys().copied().collect::<Vec<_>>(), ["a", "z"]);
 }

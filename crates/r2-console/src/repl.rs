@@ -156,7 +156,8 @@ pub fn dispatch(ctx: &AppContext, commands: &CommandTable, line: &str) -> r2_cor
         let names: Vec<&str> = commands.keys().copied().collect();
         return Err(
             ConsoleError::unknown_operation(format!("unknown command '{name}'")).with_hint(
-                suggest(name, &names).unwrap_or_else(|| "type 'help' for the command list".to_owned()),
+                suggest(name, &names)
+                    .unwrap_or_else(|| "type 'help' for the command list".to_owned()),
             ),
         );
     };

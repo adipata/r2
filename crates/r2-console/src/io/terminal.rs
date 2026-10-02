@@ -10,8 +10,8 @@ use nu_ansi_term::Style;
 use reedline::{
     Color, DefaultHinter, Emacs, FileBackedHistory, IdeMenu, KeyCode, KeyModifiers, MenuBuilder,
     Prompt, PromptEditMode, PromptHistorySearch, PromptHistorySearchStatus, Reedline,
-    ReedlineEvent, ReedlineMenu, Signal, Span, StyledText, Suggestion, ValidationResult,
-    Validator, default_emacs_keybindings,
+    ReedlineEvent, ReedlineMenu, Signal, Span, StyledText, Suggestion, ValidationResult, Validator,
+    default_emacs_keybindings,
 };
 
 use super::assist::{BridgeCompleter, BridgeHighlighter, plain_text};
@@ -158,8 +158,7 @@ impl ReedlineReader {
         let command = Reedline::create()
             .with_history(Box::new(SecretFilteringHistory::open(history_file)))
             .with_hinter(Box::new(
-                DefaultHinter::default()
-                    .with_style(Style::new().fg(nu_ansi_term::Color::DarkGray)),
+                DefaultHinter::default().with_style(Style::new().fg(nu_ansi_term::Color::DarkGray)),
             ))
             .with_completer(Box::new(BridgeCompleter))
             .with_highlighter(Box::new(BridgeHighlighter))

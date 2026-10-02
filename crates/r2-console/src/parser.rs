@@ -161,10 +161,12 @@ pub fn bind_args(tokens: &[Token], flags: &[&str], line: &str) -> r2_core::Resul
             && let Some((name, value)) = token.text.split_once('=')
         {
             if name.is_empty() {
-                return Err(
-                    ConsoleError::parse("empty parameter name before '='", line, token.pos)
-                        .with_hint("parameters are written name=value"),
-                );
+                return Err(ConsoleError::parse(
+                    "empty parameter name before '='",
+                    line,
+                    token.pos,
+                )
+                .with_hint("parameters are written name=value"));
             }
             args.named.insert(name.to_owned(), value.to_owned());
         } else {

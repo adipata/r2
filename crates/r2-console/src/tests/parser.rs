@@ -27,7 +27,8 @@ fn owned(expected: &[(&str, bool, usize)]) -> Vec<(String, bool, usize)> {
 
 #[test]
 fn test_tokenize_table() {
-    let table: Vec<(&str, Vec<(&str, bool, usize)>)> = vec![
+    type Row<'a> = (&'a str, Vec<(&'a str, bool, usize)>);
+    let table: Vec<Row<'_>> = vec![
         ("", vec![]),
         ("   \t \n ", vec![]),
         ("help", vec![("help", false, 0)]),
@@ -35,7 +36,10 @@ fn test_tokenize_table() {
         // newlines are unquoted whitespace
         ("a\nb", vec![("a", false, 0), ("b", false, 2)]),
         // quotes delimit one token preserving inner whitespace verbatim
-        ("load \"de ad\"", vec![("load", false, 0), ("de ad", true, 5)]),
+        (
+            "load \"de ad\"",
+            vec![("load", false, 0), ("de ad", true, 5)],
+        ),
         ("load 'de ad'", vec![("load", false, 0), ("de ad", true, 5)]),
         // newline INSIDE quotes stays in the token
         ("e \"l1\nl2\"", vec![("e", false, 0), ("l1\nl2", true, 2)]),
@@ -69,10 +73,7 @@ fn test_tokenize_table() {
 fn tokenize_closing_quote_rules_and_token_ends() {
     // c2 parser.py: `"a"b` → [a quoted, b]; `"a""b"` → [a quoted, b quoted]; `x"y"` → one
     // unquoted token.
-    assert_eq!(
-        triples("\"a\"b"),
-        owned(&[("a", true, 0), ("b", false, 3)])
-    );
+    assert_eq!(triples("\"a\"b"), owned(&[("a", true, 0), ("b", false, 3)]));
     assert_eq!(
         triples("\"a\"\"b\""),
         owned(&[("a", true, 0), ("b", true, 3)])
@@ -264,7 +265,10 @@ fn test_bind_empty_parameter_name_caret() {
     assert_eq!(err.parse_position(), Some(("cmd a =x", 6)));
     assert!(err.message.contains("empty parameter name"));
     assert_eq!(err.message, "empty parameter name before '='");
-    assert_eq!(err.hint.as_deref(), Some("parameters are written name=value"));
+    assert_eq!(
+        err.hint.as_deref(),
+        Some("parameters are written name=value")
+    );
     assert!(matches!(err.kind, ErrorKind::Parse { .. }));
 }
 
@@ -275,10 +279,7 @@ fn test_bind_duplicate_named_last_wins() {
     // Python dict semantics: a repeated name keeps its FIRST position
     let args = bind("a=1 b=2 a=3 --x 1 --y 2 --x 3", &[]).unwrap();
     assert_eq!(args.named, named(&[("a", "3"), ("b", "2")]));
-    assert_eq!(
-        args.options,
-        options(&[("x", Some("3")), ("y", Some("2"))])
-    );
+    assert_eq!(args.options, options(&[("x", Some("3")), ("y", Some("2"))]));
 }
 
 #[test]

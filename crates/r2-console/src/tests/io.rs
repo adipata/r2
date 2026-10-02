@@ -22,8 +22,8 @@ use secrecy::{ExposeSecret, SecretString};
 
 use crate::io::line::{Sink, SinkTarget, WidthRule, choices_for, console_width};
 use crate::io::{
-    LineIo, LineReader, ReadOutcome, SecretFilteringHistory, SecretRead, SinkStyle,
-    is_secret_line, resolve_color,
+    LineIo, LineReader, ReadOutcome, SecretFilteringHistory, SecretRead, SinkStyle, is_secret_line,
+    resolve_color,
 };
 
 /// One scripted read.
@@ -96,7 +96,11 @@ impl Harness {
         String::from_utf8(self.out.borrow().clone()).unwrap()
     }
     fn prompts(&self) -> Vec<String> {
-        self.seen.borrow().iter().map(|(_, p, _)| p.clone()).collect()
+        self.seen
+            .borrow()
+            .iter()
+            .map(|(_, p, _)| p.clone())
+            .collect()
     }
 }
 
@@ -157,7 +161,10 @@ fn test_prompt_eof_raises_user_abort() {
 #[test]
 fn test_prompt_secret_returns_text() {
     let h = harness(vec![line("hunter2")]);
-    assert_eq!(h.io.prompt_secret("PIN").unwrap().expose_secret(), "hunter2");
+    assert_eq!(
+        h.io.prompt_secret("PIN").unwrap().expose_secret(),
+        "hunter2"
+    );
     assert_eq!(h.seen.borrow()[0].0, "secret");
     assert_eq!(h.prompts(), ["PIN: "]);
     // never echoed through the sink
@@ -199,7 +206,8 @@ fn test_prompt_multiline_eof_ends_paste() {
 fn test_select_by_number_is_one_based() {
     let h = harness(vec![line("2")]);
     assert_eq!(
-        h.io.select("mechanism", &strings(&["gcm", "cbc", "ctr"])).unwrap(),
+        h.io.select("mechanism", &strings(&["gcm", "cbc", "ctr"]))
+            .unwrap(),
         1
     );
     assert!(h.text().contains("gcm")); // the pick list was rendered
@@ -214,7 +222,8 @@ fn test_select_by_number_is_one_based() {
 fn test_select_by_option_text() {
     let h = harness(vec![line("ctr")]);
     assert_eq!(
-        h.io.select("mechanism", &strings(&["gcm", "cbc", "ctr"])).unwrap(),
+        h.io.select("mechanism", &strings(&["gcm", "cbc", "ctr"]))
+            .unwrap(),
         2
     );
 }
@@ -222,7 +231,10 @@ fn test_select_by_option_text() {
 #[test]
 fn test_select_reprompts_on_invalid() {
     let h = harness(vec![line("9"), line("x"), line("1")]);
-    assert_eq!(h.io.select("mechanism", &strings(&["gcm", "cbc"])).unwrap(), 0);
+    assert_eq!(
+        h.io.select("mechanism", &strings(&["gcm", "cbc"])).unwrap(),
+        0
+    );
     let text = h.text();
     assert!(text.contains("invalid choice"));
     assert!(text.contains("invalid choice '9' — enter 1-2 or the option text"));
@@ -237,11 +249,20 @@ fn select_answer_rules_follow_c2() {
     assert_eq!(h.io.select("t", &options).unwrap(), 1); // option "2" by text
     let h = harness(vec![line(" 03 ")]);
     assert_eq!(h.io.select("t", &options).unwrap(), 2);
-    let h = harness(vec![line("+2"), line("1_0"), line("-0"), line("²"), line("1")]);
+    let h = harness(vec![
+        line("+2"),
+        line("1_0"),
+        line("-0"),
+        line("²"),
+        line("1"),
+    ]);
     assert_eq!(h.io.select("t", &options).unwrap(), 0);
     let text = h.text();
     for bad in ["'+2'", "'1_0'", "'-0'", "'²'"] {
-        assert!(text.contains(&format!("invalid choice {bad} — enter 1-3")), "{bad}");
+        assert!(
+            text.contains(&format!("invalid choice {bad} — enter 1-3")),
+            "{bad}"
+        );
     }
     let h = harness(vec![line("99999999999999999999999"), Step::Eof]);
     assert_eq!(
@@ -316,7 +337,10 @@ fn test_read_command_reads_a_raw_line() {
     assert_eq!(h.seen.borrow()[0].0, "command");
     assert_eq!(h.prompts(), ["r2> "]); // verbatim, never "r2> : "
     let h = harness(vec![Step::CtrlC]);
-    assert_eq!(h.io.read_command("r2> ").unwrap(), CommandInput::Interrupted);
+    assert_eq!(
+        h.io.read_command("r2> ").unwrap(),
+        CommandInput::Interrupted
+    );
 }
 
 #[test]
@@ -337,8 +361,7 @@ fn reader_errors_become_console_errors() {
 
 #[test]
 fn test_completer_for_enum_offers_choices() {
-    let enum_spec =
-        ParamSpec::new("hash", ParamKind::Enum, "Hash").choices(&["sha1", "sha256"]);
+    let enum_spec = ParamSpec::new("hash", ParamKind::Enum, "Hash").choices(&["sha1", "sha256"]);
     assert_eq!(choices_for(&enum_spec), ["sha1", "sha256"]);
     // the choices reach the reader with the prompt
     let h = harness(vec![line("sha256")]);
@@ -552,18 +575,15 @@ fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
         .iter()
         .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
         .collect();
-    move |key: &str| {
-        map.iter()
-            .find(|(k, _)| k == key)
-            .map(|(_, v)| v.clone())
-    }
+    move |key: &str| map.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
 }
 
 #[test]
 fn resolve_color_reproduces_richs_decision() {
     use ColorMode::{Always, Auto, Never};
     use SinkStyle::{Full, NoColor, Plain};
-    let cases: Vec<(ColorMode, bool, Vec<(&str, &str)>, SinkStyle)> = vec![
+    type Case<'a> = (ColorMode, bool, Vec<(&'a str, &'a str)>, SinkStyle);
+    let cases: Vec<Case<'_>> = vec![
         (Auto, true, vec![], Full),
         (Auto, false, vec![], Plain),
         (Auto, true, vec![("NO_COLOR", "1")], NoColor),
@@ -571,9 +591,19 @@ fn resolve_color_reproduces_richs_decision() {
         (Auto, false, vec![("FORCE_COLOR", "1")], Full),
         (Auto, false, vec![("FORCE_COLOR", "")], Plain),
         (Auto, true, vec![("FORCE_COLOR", "")], Plain),
-        (Auto, true, vec![("TTY_COMPATIBLE", "0"), ("FORCE_COLOR", "1")], Plain),
+        (
+            Auto,
+            true,
+            vec![("TTY_COMPATIBLE", "0"), ("FORCE_COLOR", "1")],
+            Plain,
+        ),
         (Auto, false, vec![("TTY_COMPATIBLE", "1")], Full),
-        (Auto, false, vec![("TTY_COMPATIBLE", "2"), ("FORCE_COLOR", "1")], Full),
+        (
+            Auto,
+            false,
+            vec![("TTY_COMPATIBLE", "2"), ("FORCE_COLOR", "1")],
+            Full,
+        ),
         (Auto, false, vec![("CLICOLOR_FORCE", "1")], Plain),
         (Auto, true, vec![("CLICOLOR", "0")], Full),
         (Always, false, vec![], Full),
@@ -600,12 +630,24 @@ fn console_width_is_richs_size_rule() {
     // all cases avoid the real terminal (COLUMNS or the dumb rule decides)
     assert_eq!(console_width(false, &env_of(&[("COLUMNS", "50")])), 50);
     assert_eq!(console_width(true, &env_of(&[("COLUMNS", "120")])), 120);
-    assert_eq!(console_width(true, &env_of(&[("TERM", "dumb"), ("COLUMNS", "50")])), 80);
     assert_eq!(
-        console_width(true, &env_of(&[("TERM", "dumb"), ("COLUMNS", "50"), ("LINES", "9")])),
+        console_width(true, &env_of(&[("TERM", "dumb"), ("COLUMNS", "50")])),
+        80
+    );
+    assert_eq!(
+        console_width(
+            true,
+            &env_of(&[("TERM", "dumb"), ("COLUMNS", "50"), ("LINES", "9")])
+        ),
         50
     );
-    assert_eq!(console_width(false, &env_of(&[("TERM", "dumb"), ("COLUMNS", "50")])), 50);
+    assert_eq!(
+        console_width(false, &env_of(&[("TERM", "dumb"), ("COLUMNS", "50")])),
+        50
+    );
     assert_eq!(console_width(true, &env_of(&[("TERM", "unknown")])), 80);
-    assert_eq!(console_width(false, &env_of(&[("COLUMNS", "0"), ("LINES", "1")])), 80);
+    assert_eq!(
+        console_width(false, &env_of(&[("COLUMNS", "0"), ("LINES", "1")])),
+        80
+    );
 }

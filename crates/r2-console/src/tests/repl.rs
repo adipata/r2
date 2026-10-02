@@ -263,7 +263,12 @@ fn test_scripted_io_drives_the_repl_fallback_read_path() {
     let ctx = CtxBuilder::new(Rc::clone(&scripted) as Rc<dyn ConsoleIo>).build();
     run_repl(&ctx, false, all_commands().unwrap());
     assert_eq!(scripted.prompts()[0], "r2> ");
-    assert!(scripted.output().iter().any(|line| line.contains("shows its usage")));
+    assert!(
+        scripted
+            .output()
+            .iter()
+            .any(|line| line.contains("shows its usage"))
+    );
 }
 
 #[test]
@@ -298,7 +303,12 @@ fn ctrl_c_at_the_prompt_prints_aborted_and_reprompts() {
 #[test]
 fn ctrl_c_in_a_continuation_aborts_the_whole_buffer() {
     let out = run_steps(
-        vec![line("echo \"open"), Step::CtrlC, line("echo y"), line("exit")],
+        vec![
+            line("echo \"open"),
+            Step::CtrlC,
+            line("echo y"),
+            line("exit"),
+        ],
         false,
     );
     assert_eq!(out, "Aborted.\necho:'y':quoted=False\n");
@@ -341,7 +351,8 @@ fn a_user_abort_inside_a_prompt_flow_is_aborted_too() {
             "ask"
         }
         fn run(&self, ctx: &AppContext, _args: &BoundArgs) -> r2_core::Result<Flow> {
-            ctx.io.prompt(&r2_core::params::ParamSpec::str("hash", "Hash"))?;
+            ctx.io
+                .prompt(&r2_core::params::ParamSpec::str("hash", "Hash"))?;
             Ok(Flow::Continue)
         }
     }

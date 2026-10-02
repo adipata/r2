@@ -163,10 +163,10 @@ impl Command for ConfigCommand {
                 }
             }
             _ => {
-                return Err(ConsoleError::generic(format!(
-                    "unknown config subcommand '{sub}'"
-                ))
-                .with_hint(format!("usage: {CONFIG_USAGE}")));
+                return Err(
+                    ConsoleError::generic(format!("unknown config subcommand '{sub}'"))
+                        .with_hint(format!("usage: {CONFIG_USAGE}")),
+                );
             }
         }
         Ok(Flow::Continue)
