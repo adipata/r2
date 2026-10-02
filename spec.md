@@ -4968,8 +4968,9 @@ pub fn dump_template_file(path: &Path, class_key: &str, template: &KeyTemplate) 
 /// NON_CREATION_ATTRS row → its 64-bit two's complement 2^64 + n (c2 dumped PyKCS11's signed
 /// C long: `CKA_KEY_GEN_MECHANISM: -1` of an imported object loads as
 /// 18446744073709551615 = CK_UNAVAILABLE_INFORMATION, what r2's own dump writes; the row
-/// arrives disabled — §11 D18), any other negative int → "template attribute {name} must
-/// not be negative" (c2 raised it later, at conversion — §11 D18); BYTES: "{name}
+/// arrives disabled — §11 D18; likewise in a CKA_CLASS/CKA_KEY_TYPE row, which build_seed
+/// drops, so c2 never converted it), any other negative int → "template attribute {name}
+/// must not be negative" (c2 raised it later, at conversion — §11 D18); BYTES: "{name}
 /// expects a 0x… hex string" | "{name} has invalid hex" (`text::py_fromhex`); STR: "{name}
 /// expects a string". Values are typed by the §4.8.4 loader, so `CKA_TOKEN: yes` is a bool
 /// and `CKA_LABEL: yes` fails "expects a string", exactly as in c2.
@@ -7807,6 +7808,19 @@ merges).**
     `os.access(X_OK)` by any execute bit (r2 has no safe access to the real uid/gid or
     noexec mounts), so a util executable only by another user, or on a noexec mount, is
     picked where c2 kept searching `PATH`, and then fails to start (above).
+  - (s) a §5.16 template file (`--template`, R14) that is not valid UTF-8 (`Path.read_text`
+    raised `UnicodeDecodeError`), or whose YAML construction raised a non-`YAMLError`
+    exception (`ValueError` for an impossible timestamp such as `2001-02-30` or a malformed
+    explicit `!!int`/`!!float` scalar; `KeyError` for a malformed `!!bool`;
+    `AttributeError` for a malformed `!!timestamp`; `IndexError` for an empty `!!int`):
+    c2's `load_template_file` caught only `OSError` and `yaml.YAMLError`, so the command
+    crashed into the unexpected-error path. r2 raises DataIo `cannot read <path>: <CPython
+    UnicodeDecodeError text>` resp. Param (`template`) `invalid YAML in template file
+    <path>: <text>` (hint `template files are class-keyed YAML (spec §5.16)`), before any
+    prompt, where `<text>` is Python's `ValueError` text where c2 had one (`day is out of
+    range for month`, `invalid literal for int() with base 10: 'x'`, `could not convert
+    string to float: 'abc'`) and otherwise the §4.8.4 loader's own text (`invalid boolean
+    value '<v>'`, `invalid timestamp '<v>'`, `invalid literal for int() with base 10: ''`).
 - *Reason*: every expected failure must be a `ConsoleError`; OpenSSL would reject the CN
   with a different text anyway.
 - *Verified by*: R8 certops test (a), R6 keyparse/x509info/formats fixtures (b, h, i, j:
@@ -7837,7 +7851,9 @@ merges).**
   `derive_negative_out_len_is_the_tokens_value_invalid`, `derive_peer_rules`; SoftHSM
   `softhsm_oaep_software_fallback_reports_its_own_openssl_reason`), R11 wizard tests (r:
   `util_spawn_failure_is_an_error`, `append_io_errors_are_config_errors`,
-  `decline_works_on_a_provider_without_token_init_and_accept_refuses_it`).
+  `decline_works_on_a_provider_without_token_init_and_accept_refuses_it`), R14 templatefile
+  test (s: `non_utf8_file_is_an_unreadable_file`,
+  `construction_errors_of_the_yaml_loader_are_invalid_yaml`).
 
 **D13 — Ctrl-C while a command runs is honored at step boundaries.**
 - *Description*: c2's `KeyboardInterrupt` surfaced at the next Python bytecode after the
@@ -7922,7 +7938,10 @@ merges).**
   content at line <l>, column 1`; PyYAML's minimum indentation is 1, so such a line ends
   the scalar, and YAML 1.2 would load it as content); (c) an integer
   literal outside -2^63..=2^64-1 is a parse error `integer out of range: <text>`, where
-  Python's int is unbounded; (d) the explicit collection tags `!!set`, `!!omap` and
+  Python's int is unbounded — likewise a template-file dump (§5.16) of a ULONG row whose
+  c2 `int(bytes)` value lies outside that range (no provider produces one) writes it as a
+  quoted string where PyYAML wrote a plain int, and that row then reloads as `<name> expects
+  an integer or CKO_/CKK_/CKC_/CKM_ constant`; (d) the explicit collection tags `!!set`, `!!omap` and
   `!!pairs` (which PyYAML's SafeLoader constructs as `set` / list of pairs) are rejected
   with `could not determine a constructor for the tag 'tag:yaml.org,2002:set'` (resp.
   `omap`, `pairs`); (e) aliases are expanded into copies: a recursive alias (an anchored
@@ -7941,14 +7960,19 @@ merges).**
   character U+2028 at line <l>, column <c>` (PyYAML treats both as line breaks, keeping the
   character itself in folded content; yaml-rust2 treats them as ordinary characters, so the
   same text would load to a different value). NEL (U+0085), PyYAML's third extra break, is
-  normalized to `\n` before parsing and loads exactly like PyYAML.
+  normalized to `\n` before parsing, so it loads like PyYAML wherever a line break would;
+  inside a quoted scalar the continuation line it starts must be indented per YAML 1.2,
+  which is (b) (`"a<NEL>b"` → `invalid indentation in quoted scalar …`; PyYAML folded it
+  to `a b`).
 - *Reason*: no maintained Rust YAML 1.1 parser exists; the event parser is the only way to
   see scalar styles (§4.8.4).
 - *Verified by*: R2 loader tests (typing vectors generated with PyYAML, the cases above:
   `yaml::tests::load_r2_errors`, `yaml::tests::alias_expansion_rules`,
   `yaml::tests::nested_merges_hit_the_value_budget`,
   `yaml::tests::aliased_large_scalar_hits_the_byte_budget`), R14 template-file
-  tests, the R13 config interop check.
+  tests (f's NEL rule: `nel_is_a_line_break_and_quoted_continuations_must_be_indented`;
+  c's dump note: `dump_encodes_values_like_c2_encode_value`), the R13 config interop
+  check.
 
 **D18 — Numeric range and load-time typing guards.**
 - *Description*: Rust's fixed-width integers and typed config make r2 reject some values
@@ -7958,8 +7982,11 @@ merges).**
   - an INT parameter outside i64 → `<name>: invalid integer <text!r>` (c2: unbounded);
   - a negative template ULONG → config: Config `<path>: must not be negative` at load;
     template file: Param `template attribute <name> must not be negative` at load (c2
-    raised the latter only at the first create flow), except a `NON_CREATION_ATTRS` row
-    with a value ≥ −2^63, which loads as its two's complement (next sub-entry);
+    raised it only at conversion of an enabled row in a create flow, and never for a row
+    in a section no editor of the flow used), except a `NON_CREATION_ATTRS` row with a
+    value ≥ −2^63, which loads as its two's complement (next sub-entry), and a
+    CKA_CLASS/CKA_KEY_TYPE row with such a value, which loads the same way and is then
+    dropped by `build_seed` like any file class row (c2 loaded it and never converted it);
   - `custom_mechanisms[].params[].default` is typed by its `kind` at load (`expected a
     <kind> default, got <T>`, `keyref parameters cannot have a default`, or a BYTES
     default's `decode_data` CodecError text) — also where c2 never read the default (a
@@ -8021,7 +8048,8 @@ merges).**
 - *Verified by*: R1 parse_ref/text tests, R2 decoder tests, R3 packer tests, R7 resolver
   tests, R8 providers_cmd tests, R10 editor tests, R14 template-file tests (incl. a c2 dump of an imported SoftHSM
   object, `CKA_KEY_GEN_MECHANISM: -1`, seeding a disabled 18446744073709551615 row, and
-  `-1` in a non-NON_CREATION row refused at load), R13 differential dump/seed runs over an
+  `-1` in a non-NON_CREATION row refused at load,
+  `negative_class_rows_load_and_are_dropped_like_c2`), R13 differential dump/seed runs over an
   imported object; R5b `tests::edit::full_dump_covers_catalog_and_identity` and SoftHSM
   `softhsm_read_full_template_dumps_the_object` (unsigned CKA_KEY_GEN_MECHANISM).
 

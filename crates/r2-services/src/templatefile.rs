@@ -1,11 +1,26 @@
-// R0 skeleton — owner R14 (generated from spec §4)
-// ---- spec §4.9.10 block 0
+// Template-file codec + editor seeding (spec §5.16, §4.9.10; owner R14) — c2
+// `services/templatefile.py`.
+//
+// Serializes a provider's full attribute snapshot to a class-keyed YAML file and parses such
+// files back into per-class `KeyTemplate` seeds for the template editor. Attribute kinds are
+// resolved by NAME (`CKA_CATALOG` first, then `templates.custom_attributes`) — never inferred
+// from the value, so a hex-looking CKA_LABEL stays a string. YAML goes through the PyYAML
+// port of `r2_config::yaml` (§4.8.4), so a file dumped by c2 seeds r2 and vice versa.
 use indexmap::IndexMap;
-use r2_config::model::{CustomAttributeDef, TemplatesSection};
+use r2_config::model::{
+    CustomAttributeDef, TEMPLATE_CLASS_KEYS, TemplatesSection, template_class_key,
+};
+use r2_config::yaml::{self, Mapping, Number, Value};
+use r2_core::catalog::cka;
+use r2_core::error::ConsoleError;
 use r2_core::io::TemplateEditor;
 use r2_core::keys::{KeyAlgorithm, KeyClass};
-use r2_core::template::KeyTemplate;
+use r2_core::template::{AttrKind, AttrValue, KeyTemplate, TemplateAttr};
+use r2_core::text::{os_error_text, py_bytes_repr, py_fromhex, py_int};
 use std::path::Path;
+use zeroize::Zeroizing;
+
+use crate::keyexport::write_output;
 
 /// §5.16 file sections: class key → template (kinds resolved by NAME).
 pub type SeedTemplates = IndexMap<String, KeyTemplate>;
@@ -49,15 +64,37 @@ pub const SECRET_MATERIAL_ATTRS: [&str; 7] = [
     "CKA_EXPONENT_2",
     "CKA_COEFFICIENT",
 ];
+
+/// Enabled template identity rows are honored at creation (§4.7) — a dumped file carries
+/// the SOURCE key's identity, so these are seeded DISABLED too.
+const IDENTITY_ATTRS: [&str; 2] = ["CKA_LABEL", "CKA_ID"];
+/// Rows the create flow supplies (locked): file entries for them are dropped by `build_seed`.
+const FLOW_ATTRS: [&str; 2] = ["CKA_CLASS", "CKA_KEY_TYPE"];
+/// §4.8 symbolic ULONG values.
+const SYMBOL_PREFIXES: [&str; 4] = ["CKO_", "CKK_", "CKC_", "CKM_"];
+
 /// Write `template` as one class-keyed YAML section via `yaml::dump` + `keyexport::write_output`.
 pub fn dump_template_file(
     path: &Path,
     class_key: &str,
     template: &KeyTemplate,
 ) -> r2_core::Result<()> {
-    let _ = (path, class_key, template);
-    Err(r2_core::ConsoleError::not_implemented("R14"))
+    // c2: `{attr.name: _encode_value(attr) for attr in template.attrs}` — a repeated name
+    // keeps its first position and its last value (IndexMap insert, as a Python dict).
+    let mut section = Mapping::new();
+    for attr in &template.attrs {
+        section.insert(Value::String(attr.name.clone()), encode_value(attr)?);
+    }
+    let mut root = Mapping::new();
+    root.insert(Value::String(class_key.to_owned()), Value::Mapping(section));
+    // the tree and the text carry CKA_VALUE / private components in hex (§5.16): both are
+    // wiped on drop
+    let root = WipedValue(Value::Mapping(root));
+    let text = Zeroizing::new(yaml::dump(&root.0));
+    drop(root);
+    write_output(path, text.as_bytes())
 }
+
 /// ★ (R8, R10, R15 via cmdutil/copy) Parse a §5.16 file. Unreadable → DataIo "cannot read
 /// {path}: {err}"; bad YAML → Param "invalid YAML in template file {path}: {err}" (param
 /// "template", hint "template files are class-keyed YAML (spec §5.16)"); empty/non-mapping →
@@ -72,35 +109,107 @@ pub fn dump_template_file(
 /// NON_CREATION_ATTRS row → its 64-bit two's complement 2^64 + n (c2 dumped PyKCS11's signed
 /// C long: `CKA_KEY_GEN_MECHANISM: -1` of an imported object loads as
 /// 18446744073709551615 = CK_UNAVAILABLE_INFORMATION, what r2's own dump writes; the row
-/// arrives disabled — §11 D18), any other negative int → "template attribute {name} must
-/// not be negative" (c2 raised it later, at conversion — §11 D18); BYTES: "{name}
+/// arrives disabled — §11 D18; likewise in a CKA_CLASS/CKA_KEY_TYPE row, which build_seed
+/// drops, so c2 never converted it), any other negative int → "template attribute {name}
+/// must not be negative" (c2 raised it later, at conversion — §11 D18); BYTES: "{name}
 /// expects a 0x… hex string" | "{name} has invalid hex" (`text::py_fromhex`); STR: "{name}
 /// expects a string". Values are typed by the §4.8.4 loader, so `CKA_TOKEN: yes` is a bool
 /// and `CKA_LABEL: yes` fails "expects a string", exactly as in c2.
-/// R0 stub: Err(not_implemented("R14")).
 pub fn load_seed_file(
     path: &Path,
     custom_attributes: &IndexMap<String, CustomAttributeDef>,
 ) -> r2_core::Result<SeedTemplates> {
-    let _ = (path, custom_attributes);
-    Err(r2_core::ConsoleError::not_implemented("R14"))
+    let shown = path.display();
+    // a dumped file may carry key material in hex: every copy of its text is wiped on drop
+    let bytes = Zeroizing::new(std::fs::read(path).map_err(|err| {
+        ConsoleError::data_io(format!("cannot read {shown}: {}", os_error_text(&err)))
+    })?);
+    // c2 `path.read_text(encoding="utf-8")`: invalid UTF-8 raised UnicodeDecodeError past
+    // c2's `except OSError` (a crash); r2 reports it as the unreadable file (§11 D12 (s)).
+    let text = std::str::from_utf8(&bytes).map_err(|err| {
+        ConsoleError::data_io(format!(
+            "cannot read {shown}: {}",
+            utf8_error_text(&bytes, &err)
+        ))
+    })?;
+    // Python text mode: universal newlines.
+    let text = Zeroizing::new(text.replace("\r\n", "\n"));
+    let text = Zeroizing::new(text.replace('\r', "\n"));
+    let raw = WipedValue(yaml::parse(&text).map_err(|err| {
+        ConsoleError::param(
+            format!("invalid YAML in template file {shown}: {}", err.message),
+            "template",
+        )
+        .with_hint("template files are class-keyed YAML (spec §5.16)")
+    })?);
+    let section_hint = format!("valid sections: {}", TEMPLATE_CLASS_KEYS.join(", "));
+    let map = match &raw.0 {
+        Value::Mapping(map) if !map.is_empty() => map,
+        _ => {
+            return Err(ConsoleError::param(
+                format!("template file {shown} has no sections"),
+                "template",
+            )
+            .with_hint(section_hint));
+        }
+    };
+    let mut sections = SeedTemplates::new();
+    for (raw_key, section) in map {
+        let section_key = py_str(raw_key);
+        if !matches!(raw_key, Value::String(_)) || !TEMPLATE_CLASS_KEYS.contains(&&*section_key) {
+            return Err(ConsoleError::param(
+                format!("unknown template section '{section_key}' in {shown}"),
+                "template",
+            )
+            .with_hint(section_hint));
+        }
+        let Value::Mapping(entries) = section else {
+            return Err(ConsoleError::param(
+                format!("template section '{section_key}' in {shown} is not a mapping"),
+                "template",
+            )
+            .with_hint("each section maps CKA_* names to values"));
+        };
+        let mut attrs = Vec::with_capacity(entries.len());
+        for (raw_name, value) in entries {
+            let name = py_str(raw_name);
+            let kind = kind_of(&name, custom_attributes)?;
+            let value = value_from_yaml(&name, kind, value)?;
+            attrs.push(TemplateAttr::new(name, kind, value));
+        }
+        sections.insert(section_key, KeyTemplate::new(attrs));
+    }
+    Ok(sections)
 }
+
 /// ★ Editor seed for one (class, algorithm): the matching file section when present
 /// (locked CKA_CLASS/CKA_KEY_TYPE rows from the FLOW via default_template, file entries for
 /// them dropped; CKA_LABEL/CKA_ID and NON_CREATION_ATTRS rows disabled; everything else
 /// enabled with its file value), else `templates.default_template(..)` unchanged.
-/// R0 stub body (mandated): `seeds == None` → `templates.default_template(key_class,
-/// algorithm)`; `Some` → Err(not_implemented("R14")) — so R8/R10/R15 work before R14 merges.
 pub fn build_seed(
     templates: &TemplatesSection,
     seeds: Option<&SeedTemplates>,
     key_class: KeyClass,
     algorithm: KeyAlgorithm,
 ) -> r2_core::Result<KeyTemplate> {
-    match seeds {
-        None => templates.default_template(key_class, algorithm),
-        Some(_) => Err(r2_core::ConsoleError::not_implemented("R14")),
+    let base = templates.default_template(key_class, algorithm)?;
+    let Some(seeds) = seeds else {
+        return Ok(base);
+    };
+    let Some(section) = seeds.get(template_class_key(key_class, algorithm)?) else {
+        return Ok(base);
+    };
+    let mut attrs: Vec<TemplateAttr> = base.attrs.into_iter().filter(|a| a.locked).collect();
+    for attr in &section.attrs {
+        if FLOW_ATTRS.contains(&attr.name.as_str()) {
+            continue;
+        }
+        let name = attr.name.as_str();
+        let mut row = TemplateAttr::new(name, attr.kind, attr.value.clone());
+        row.enabled = !IDENTITY_ATTRS.contains(&name) && !NON_CREATION_ATTRS.contains(&name);
+        attrs.push(row);
     }
+    Ok(KeyTemplate::new(attrs))
 }
 
 /// ★ The seeding context every create flow passes around (keyload, transfer, wrapload).
@@ -120,5 +229,367 @@ impl<'a> EditorSeeding<'a> {
     ) -> r2_core::Result<KeyTemplate> {
         let seed = build_seed(self.templates, self.seeds, key_class, algorithm)?;
         self.editor.edit(seed, title)
+    }
+}
+
+// ---- codec helpers ------------------------------------------------------------------------
+
+/// TemplateAttr value → YAML scalar per kind (c2 `_encode_value`, §5.16 encoding).
+fn encode_value(attr: &TemplateAttr) -> r2_core::Result<Value> {
+    Ok(match attr.kind {
+        // c2 `bool(attr.value)` (Python truthiness for a value of another type)
+        AttrKind::Bool => Value::Bool(truthy(&attr.value)),
+        AttrKind::Bytes => match &attr.value {
+            AttrValue::Bytes(bytes) => Value::String(format!("0x{}", hex_lower(bytes).as_str())),
+            _ => Value::String("0x".to_owned()),
+        },
+        AttrKind::Ulong => match &attr.value {
+            // symbolic CKO_/CKK_… constant (any c2 str), kept verbatim
+            AttrValue::Symbol(text) | AttrValue::Str(text) => Value::String(text.clone()),
+            AttrValue::Ulong(n) => Value::Number(Number::from(*n)),
+            AttrValue::Bool(b) => Value::Number(Number::from(u64::from(*b))),
+            AttrValue::Bytes(bytes) => {
+                // c2 `int(bytes)`: Python parses ASCII digits, else ValueError
+                let text = String::from_utf8_lossy(bytes);
+                match py_int(&text, 10) {
+                    Some(n) => int_value(n),
+                    None => {
+                        return Err(ConsoleError::generic(format!(
+                            "invalid literal for int() with base 10: {}",
+                            py_bytes_repr(bytes)
+                        )));
+                    }
+                }
+            }
+        },
+        // c2 `str(attr.value)`
+        AttrKind::Str => Value::String(match &attr.value {
+            AttrValue::Bytes(bytes) => py_bytes_repr(bytes),
+            other => other.render_info(),
+        }),
+    })
+}
+
+/// c2 `int(bytes)` of a ULONG row as a YAML int. r2's YAML ints span -2^63..=2^64-1 (§11
+/// D17 (c)), so a value outside that range (only reachable from ASCII-digit bytes) is
+/// written as a quoted string where PyYAML wrote a plain int; reloading that row fails
+/// "expects an integer or CKO_/CKK_/CKC_/CKM_ constant" (c2's file loaded and failed only
+/// at conversion). No provider produces such a row.
+fn int_value(n: i128) -> Value {
+    if let Ok(v) = u64::try_from(n) {
+        Value::Number(Number::from(v))
+    } else if let Ok(v) = i64::try_from(n) {
+        Value::Number(Number::from(v))
+    } else {
+        Value::String(n.to_string())
+    }
+}
+
+/// Python truthiness of a c2 template value.
+fn truthy(value: &AttrValue) -> bool {
+    match value {
+        AttrValue::Bool(b) => *b,
+        AttrValue::Ulong(n) => *n != 0,
+        AttrValue::Bytes(bytes) => !bytes.is_empty(),
+        AttrValue::Str(text) | AttrValue::Symbol(text) => !text.is_empty(),
+    }
+}
+
+/// Lowercase hex of (possibly secret) attribute bytes, wiped on drop.
+fn hex_lower(bytes: &[u8]) -> Zeroizing<String> {
+    use std::fmt::Write as _;
+    let mut out = Zeroizing::new(String::with_capacity(bytes.len() * 2));
+    for byte in bytes {
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
+
+/// A YAML tree that may hold key material in hex (a dumped section, a parsed file): every
+/// string in it — keys included — is zeroized when the guard drops, on every return path.
+/// (Copies inside `yaml::dump`/`yaml::parse` themselves are outside r2-services' reach.)
+struct WipedValue(Value);
+
+impl Drop for WipedValue {
+    fn drop(&mut self) {
+        wipe(&mut self.0);
+    }
+}
+
+fn wipe(value: &mut Value) {
+    use zeroize::Zeroize as _;
+    match value {
+        Value::String(text) => text.zeroize(),
+        Value::Sequence(items) => items.iter_mut().for_each(wipe),
+        Value::Mapping(map) => {
+            // keys are immutable inside a Mapping: take it apart
+            for (mut key, mut item) in std::mem::take(map) {
+                wipe(&mut key);
+                wipe(&mut item);
+            }
+        }
+        Value::Tagged(tagged) => wipe(&mut tagged.value),
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+/// c2 `_kind_of`: CKA_CATALOG first, then templates.custom_attributes.
+fn kind_of(
+    name: &str,
+    custom_attributes: &IndexMap<String, CustomAttributeDef>,
+) -> r2_core::Result<AttrKind> {
+    if let Some(entry) = cka(name) {
+        return Ok(entry.kind);
+    }
+    if let Some(custom) = custom_attributes.get(name) {
+        return Ok(custom.kind);
+    }
+    Err(
+        ConsoleError::param(format!("unknown PKCS#11 attribute '{name}'"), name)
+            .with_hint("define it under templates.custom_attributes (code + kind)"),
+    )
+}
+
+/// c2 `_value_from_yaml`: YAML scalar → template value; kind comes from the catalog, never
+/// the value.
+fn value_from_yaml(name: &str, kind: AttrKind, raw: &Value) -> r2_core::Result<AttrValue> {
+    let mismatch = |text: String| ConsoleError::param(text, name);
+    match kind {
+        AttrKind::Bool => match raw {
+            Value::Bool(b) => Ok(AttrValue::Bool(*b)),
+            _ => Err(mismatch(format!("{name} expects true/false"))),
+        },
+        AttrKind::Ulong => {
+            if matches!(raw, Value::Bool(_)) {
+                return Err(mismatch(format!("{name} expects an integer")));
+            }
+            if let Some(n) = yaml::as_int(raw) {
+                return ulong_from_int(name, n);
+            }
+            if let Value::String(text) = raw
+                && SYMBOL_PREFIXES.iter().any(|p| text.starts_with(p))
+            {
+                // resolved by the provider at creation (§4.8)
+                return Ok(AttrValue::Symbol(text.clone()));
+            }
+            Err(mismatch(format!(
+                "{name} expects an integer or CKO_/CKK_/CKC_/CKM_ constant"
+            )))
+        }
+        AttrKind::Bytes => match raw {
+            Value::String(text) if text.starts_with("0x") => match py_fromhex(&text[2..]) {
+                Some(bytes) => Ok(AttrValue::Bytes(bytes)),
+                None => Err(mismatch(format!("{name} has invalid hex"))),
+            },
+            _ => Err(mismatch(format!("{name} expects a 0x… hex string"))),
+        },
+        AttrKind::Str => match raw {
+            Value::String(text) => Ok(AttrValue::Str(text.clone())),
+            _ => Err(mismatch(format!("{name} expects a string"))),
+        },
+    }
+}
+
+/// A YAML int for a ULONG row: non-negative as is; a negative value in a NON_CREATION_ATTRS
+/// row (c2 dumped PyKCS11's signed C long, e.g. `CKA_KEY_GEN_MECHANISM: -1`) as its 64-bit
+/// two's complement; any other negative refused at load (§11 D18). CKA_CLASS/CKA_KEY_TYPE
+/// rows take the same two's complement: `build_seed` always drops them (the flow supplies
+/// both), so c2 never converted their value and never raised.
+fn ulong_from_int(name: &str, n: i128) -> r2_core::Result<AttrValue> {
+    if let Ok(v) = u64::try_from(n) {
+        return Ok(AttrValue::Ulong(v));
+    }
+    if (NON_CREATION_ATTRS.contains(&name) || FLOW_ATTRS.contains(&name))
+        && let Ok(signed) = i64::try_from(n)
+    {
+        return Ok(AttrValue::Ulong(signed.cast_unsigned()));
+    }
+    Err(ConsoleError::param(
+        format!("template attribute {name} must not be negative"),
+        name,
+    ))
+}
+
+/// Python `str()` of a YAML mapping key as PyYAML constructed it (c2 f-strings / `str(..)`).
+fn py_str(value: &Value) -> String {
+    match value {
+        Value::Null => "None".to_owned(),
+        Value::Bool(true) => "True".to_owned(),
+        Value::Bool(false) => "False".to_owned(),
+        Value::String(text) => text.clone(),
+        Value::Number(number) => {
+            if let Some(v) = number.as_i64() {
+                v.to_string()
+            } else if let Some(v) = number.as_u64() {
+                v.to_string()
+            } else {
+                py_float_repr(number.as_f64().unwrap_or(f64::NAN))
+            }
+        }
+        // `!!timestamp` / `!!binary` keys: Python `str()` of the date/datetime/bytes object
+        Value::Tagged(tagged) => match yaml::python_type_name(value) {
+            "date" | "datetime" => represented_scalar(value),
+            "bytes" => py_bytes_repr(&binary_bytes(value)),
+            _ => py_str(&tagged.value),
+        },
+        // unhashable keys never get here (the loader rejects them); a value is never a key
+        Value::Sequence(_) | Value::Mapping(_) => String::new(),
+    }
+}
+
+/// The scalar text PyYAML's SafeRepresenter writes for `value` (`yaml::dump` is its port).
+/// For a date/datetime that is exactly Python `str()`: `represent_date` = `isoformat()`,
+/// `represent_datetime` = `isoformat(' ')` (microseconds padded to 6 digits when non-zero,
+/// the offset as `±HH:MM`, `Z` as `+00:00`).
+fn represented_scalar(value: &Value) -> String {
+    let mut map = Mapping::new();
+    map.insert(Value::String("k".to_owned()), value.clone());
+    let text = yaml::dump(&Value::Mapping(map));
+    let text = text.strip_prefix("k: ").unwrap_or(&text);
+    text.strip_suffix('\n').unwrap_or(text).to_owned()
+}
+
+/// The bytes of a `!!binary` value as PyYAML built them (`base64.decodebytes`, lenient):
+/// `yaml::dump` re-encodes them canonically (`!!binary |` + `encodebytes` lines, or
+/// `!!binary ""`), which is then decoded strictly.
+fn binary_bytes(value: &Value) -> Vec<u8> {
+    let text = represented_scalar(value);
+    let body = text.strip_prefix("!!binary").unwrap_or(&text);
+    let mut out = Vec::with_capacity(body.len() / 4 * 3);
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for c in body.bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            // `|`, quotes, line breaks, indentation and `=` padding carry no data
+            _ => continue,
+        };
+        acc = ((acc << 6) | u32::from(v)) & 0xffff;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((acc >> bits) & 0xff) as u8);
+        }
+    }
+    out
+}
+
+/// Python `repr(float)` (= `str(float)`): shortest round-trip digits, exponent form when
+/// the decimal exponent is < -4 or >= 16, else fixed with at least one fractional digit.
+fn py_float_repr(value: f64) -> String {
+    if value.is_nan() {
+        return "nan".to_owned();
+    }
+    if value.is_infinite() {
+        return if value > 0.0 { "inf" } else { "-inf" }.to_owned();
+    }
+    let sci = format!("{value:e}");
+    let (negative, sci) = match sci.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, sci.as_str()),
+    };
+    let (mantissa, exponent) = sci.split_once('e').unwrap_or((sci, "0"));
+    let exponent: i32 = exponent.parse().unwrap_or(0);
+    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
+    let digits = digits.trim_end_matches('0');
+    let digits = if digits.is_empty() { "0" } else { digits };
+    let mut out = String::new();
+    if negative {
+        out.push('-');
+    }
+    if !(-4..16).contains(&exponent) {
+        out.push_str(&digits[..1]);
+        if digits.len() > 1 {
+            out.push('.');
+            out.push_str(&digits[1..]);
+        }
+        let sign = if exponent < 0 { '-' } else { '+' };
+        out.push_str(&format!("e{sign}{:02}", exponent.unsigned_abs()));
+    } else if exponent < 0 {
+        out.push_str("0.");
+        for _ in 0..(-exponent - 1) {
+            out.push('0');
+        }
+        out.push_str(digits);
+    } else {
+        let point = usize::try_from(exponent).unwrap_or(0) + 1;
+        if digits.len() <= point {
+            out.push_str(digits);
+            for _ in digits.len()..point {
+                out.push('0');
+            }
+            out.push_str(".0");
+        } else {
+            out.push_str(&digits[..point]);
+            out.push('.');
+            out.push_str(&digits[point..]);
+        }
+    }
+    out
+}
+
+/// CPython's `UnicodeDecodeError` text for invalid UTF-8 (`Path.read_text`).
+fn utf8_error_text(bytes: &[u8], error: &std::str::Utf8Error) -> String {
+    let start = error.valid_up_to();
+    let first = bytes.get(start).copied().unwrap_or(0);
+    match error.error_len() {
+        None => {
+            let end = bytes.len().saturating_sub(1);
+            if end == start {
+                format!(
+                    "'utf-8' codec can't decode byte 0x{first:02x} in position {start}: \
+                     unexpected end of data"
+                )
+            } else {
+                format!(
+                    "'utf-8' codec can't decode bytes in position {start}-{end}: unexpected \
+                     end of data"
+                )
+            }
+        }
+        // CPython reports a truncated multi-byte sequence (maximal subpart) as a byte range.
+        Some(len) if len > 1 => format!(
+            "'utf-8' codec can't decode bytes in position {start}-{}: invalid continuation byte",
+            start + len - 1
+        ),
+        Some(_) => {
+            let reason = if (0x80..=0xc1).contains(&first) || first >= 0xf5 {
+                "invalid start byte"
+            } else {
+                "invalid continuation byte"
+            };
+            format!("'utf-8' codec can't decode byte 0x{first:02x} in position {start}: {reason}")
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wipe_zeroizes_every_string_in_the_tree() {
+        let tagged = yaml::parse("!!binary aGk=").unwrap();
+        let mut value = Value::Sequence(vec![
+            Value::String("0xdeadbeef".to_owned()),
+            Value::Sequence(vec![Value::String("0x01".to_owned()), Value::Bool(true)]),
+            tagged,
+        ]);
+        wipe(&mut value);
+        let Value::Sequence(items) = &value else {
+            panic!("not a sequence")
+        };
+        assert_eq!(items[0], Value::String(String::new()));
+        assert_eq!(
+            items[1],
+            Value::Sequence(vec![Value::String(String::new()), Value::Bool(true)])
+        );
+        // a mapping is taken apart (keys are immutable in place) and left empty
+        let mut map = yaml::parse("aes: {CKA_VALUE: '0x00ff'}").unwrap();
+        wipe(&mut map);
+        assert_eq!(map, Value::Mapping(Mapping::new()));
     }
 }
