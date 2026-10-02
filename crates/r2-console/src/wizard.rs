@@ -341,7 +341,7 @@ pub fn append_provider_entry(source: &Path, entry: &r2_config::yaml::Value) -> r
     copy2(source, &backup).map_err(|err| {
         let detail = match err {
             CopyError::Os(err, path) => py_os_error_str(&err, &path),
-            CopyError::SameFile(text) => text,
+            CopyError::SameFile(text) | CopyError::Special(text) => text,
         };
         ConsoleError::config(format!(
             "cannot write backup {}: {detail}",
@@ -691,7 +691,9 @@ fn utf8_error_text(bytes: &[u8], error: &std::str::Utf8Error) -> String {
 }
 
 /// `shutil.copy2(source, backup)`: a directory destination receives `source`'s file name;
-/// the same file (link or symlink) → `shutil.SameFileError`; then content, permission bits
+/// the same file (link or symlink) → `shutil.SameFileError`; a named pipe at either path
+/// (stat follows links; stat errors ignored) → `shutil.SpecialFileError`, checked before
+/// either file is opened (opening a FIFO would block); then content, permission bits
 /// and timestamps. Err names the path whose operation failed (source read vs backup
 /// write), as Python's OSError does.
 fn copy2(source: &Path, backup: &Path) -> std::result::Result<(), CopyError> {
@@ -713,6 +715,14 @@ fn copy2(source: &Path, backup: &Path) -> std::result::Result<(), CopyError> {
                 "PosixPath"
             }
         )));
+    }
+    for path in [source, backup] {
+        if is_fifo(path) {
+            return Err(CopyError::Special(format!(
+                "`{}` is a named pipe",
+                path.display()
+            )));
+        }
     }
     let os = |path: &Path| {
         let path = path.to_path_buf();
@@ -737,10 +747,23 @@ fn copy2(source: &Path, backup: &Path) -> std::result::Result<(), CopyError> {
 }
 
 /// A failed `copy2`: Python's `str(err)` is built by the caller from the OSError + path,
-/// or is the ready `SameFileError` text.
+/// or is the ready `SameFileError` / `SpecialFileError` text.
 enum CopyError {
     Os(std::io::Error, PathBuf),
     SameFile(String),
+    Special(String),
+}
+
+/// `stat.S_ISFIFO(os.stat(path).st_mode)`, any stat error → false.
+#[cfg(unix)]
+fn is_fifo(path: &Path) -> bool {
+    use std::os::unix::fs::FileTypeExt;
+    std::fs::metadata(path).is_ok_and(|meta| meta.file_type().is_fifo())
+}
+
+#[cfg(not(unix))]
+fn is_fifo(_path: &Path) -> bool {
+    false
 }
 
 /// `shutil._samefile` → `os.path.samefile`: both stat (following links) and equal

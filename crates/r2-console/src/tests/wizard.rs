@@ -1569,6 +1569,33 @@ fn append_backup_that_is_the_config_itself_is_refused() {
     assert_eq!(read_text(&source), "providers:\n");
 }
 
+#[cfg(unix)]
+#[test]
+fn append_backup_that_is_a_named_pipe_is_refused() {
+    // shutil.SpecialFileError (an OSError): a FIFO at `<config>.bak` is refused before
+    // either file is opened, so the wizard never blocks on it.
+    let dir = tempfile::tempdir().unwrap();
+    let entry = helper_entry(dir.path());
+    let source = dir.path().join("r2.yaml");
+    std::fs::write(&source, "providers:\n").unwrap();
+    let backup = dir.path().join("r2.yaml.bak");
+    let status = std::process::Command::new("mkfifo")
+        .arg(&backup)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let err = wizard::append_provider_entry(&source, &entry).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Config);
+    assert_eq!(
+        err.message,
+        format!(
+            "cannot write backup {b}: `{b}` is a named pipe",
+            b = backup.display()
+        )
+    );
+    assert_eq!(read_text(&source), "providers:\n");
+}
+
 #[test]
 fn append_universal_newlines_and_backup_metadata() {
     // Python read_text: CRLF/CR → LF before the textual append.
