@@ -691,12 +691,23 @@ pub(crate) fn oaep_encrypt(
     run().map_err(|err| ossl_reason(&err))
 }
 
+/// pyca's pre-check ("Ciphertext length must be equal to key size.", a ValueError c2
+/// reports as its detail-free decrypt/unwrap failure): it runs BEFORE OpenSSL, so a short
+/// or long ciphertext never reaches OpenSSL's PKCS#1 v1.5 implicit rejection (which would
+/// left-pad it and return pseudo-random plaintext, §5.8 / §11 D26).
+fn ciphertext_matches_key_size(private: &PKeyRef<Private>, data: &[u8]) -> bool {
+    private.size() == data.len()
+}
+
 /// RSA-OAEP decryption; any failure is detail-free (the caller's c2 text).
 pub(crate) fn oaep_decrypt(
     private: &PKeyRef<Private>,
     oaep: &Oaep,
     data: &[u8],
 ) -> Option<Zeroizing<Vec<u8>>> {
+    if !ciphertext_matches_key_size(private, data) {
+        return None;
+    }
     let run = || -> std::result::Result<Zeroizing<Vec<u8>>, ErrorStack> {
         let mut dec = openssl::encrypt::Decrypter::new(private)?;
         dec.set_rsa_padding(openssl::rsa::Padding::PKCS1_OAEP)?;
@@ -731,6 +742,9 @@ pub(crate) fn pkcs1_encrypt(
 
 /// RSA PKCS#1 v1.5 decryption; detail-free failure (Bleichenbacher hygiene).
 pub(crate) fn pkcs1_decrypt(private: &PKeyRef<Private>, data: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
+    if !ciphertext_matches_key_size(private, data) {
+        return None;
+    }
     let run = || -> std::result::Result<Zeroizing<Vec<u8>>, ErrorStack> {
         let mut dec = openssl::encrypt::Decrypter::new(private)?;
         dec.set_rsa_padding(openssl::rsa::Padding::PKCS1)?;

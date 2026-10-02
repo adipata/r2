@@ -1379,3 +1379,44 @@ fn private_key_with_trailing_bytes_reports_c2s_unexpected_tag_text() {
     );
     assert_eq!(err.hint, None);
 }
+
+#[test]
+fn rsa_ciphertext_not_the_modulus_size_fails_like_pycas_length_check() {
+    // pyca raises ValueError("Ciphertext length must be equal to key size.") before
+    // OpenSSL runs (so before PKCS#1 v1.5 implicit rejection), which c2 reports as its
+    // detail-free failure — on decrypt and on unwrap, for both RSA paddings (§5.8).
+    let provider = make();
+    let (kek, key) = rsa_kek(&provider);
+    assert_eq!(key.size(), 256); // RSA-2048
+    for len in [1usize, 2, 255, 257] {
+        let blob = vec![0x01u8; len];
+        for (name, decrypt_text, unwrap_text) in [
+            (
+                "RSA-PKCS1",
+                "RSA-PKCS1 decryption failed",
+                "RSA-PKCS1 unwrap failed",
+            ),
+            (
+                "RSA-OAEP",
+                "RSA-OAEP decryption failed",
+                "RSA-OAEP unwrap failed",
+            ),
+        ] {
+            let err = err_class(
+                provider.decrypt(&kek, &mech(name, &[]), &blob),
+                "CryptoError",
+            );
+            assert_eq!(err.message, decrypt_text, "{name} decrypt of {len} bytes");
+            let err = err_class(
+                provider.unwrap_key(
+                    &kek,
+                    &mech(name, &[]),
+                    &blob,
+                    &unwrap_req(KeyAlgorithm::Aes, KeyClass::Secret, "short", None, None),
+                ),
+                "CryptoError",
+            );
+            assert_eq!(err.message, unwrap_text, "{name} unwrap of {len} bytes");
+        }
+    }
+}
