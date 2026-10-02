@@ -7684,6 +7684,19 @@ merges).**
     `_private_material_attrs` caught only ValueError/TypeError, so it crashed; r2 raises
     KeyParse `private key material is not DER PKCS#8: {pyca detail}` (likewise
     `public key material is not DER SPKI: …`).
+  - (q) the SoftHSM wizard (§5.13): a `softhsm2-util` found on `PATH` that cannot be
+    started (`subprocess.run` raised `OSError`, e.g. a bad interpreter line or permission
+    denied) crashed c2; r2 raises Generic `softhsm2-util --init-token failed: <Python
+    str(OSError) of the util path>` (hint `check the SoftHSM2 installation and
+    $SOFTHSM2_CONF`). At the config append, a file that is no longer valid UTF-8
+    (`UnicodeDecodeError`) or whose YAML construction raises a plain `ValueError` (c2's
+    `append_provider_entry` caught only `OSError` / `yaml.YAMLError`) → Config `cannot read
+    config file <path>: <CPython UnicodeDecodeError text>` resp. `cannot parse config file
+    <path>: <text>`. A wizard run on a provider that cannot initialize tokens (a
+    non-PKCS#11 instance named `softhsm.provider_name`; c2 wrote the conf, set the
+    environment and then crashed with `AttributeError` at `init_token`) → UnsupportedOperation
+    `provider '<name>' cannot initialize tokens` right after the setup confirm, before
+    anything is written (declining still works on any provider).
 - *Reason*: every expected failure must be a `ConsoleError`; OpenSSL would reject the CN
   with a different text anyway.
 - *Verified by*: R8 certops test (a), R6 keyparse/x509info/formats fixtures (b, h, i, j:
@@ -7707,7 +7720,9 @@ merges).**
   `unsettable_env_entries_are_errors_not_panics`), R5a capability/objects tests (m:
   `unknown_ckms_survive_the_unfiltered_mechanism_list`,
   `listed_vendor_mechanisms_resolve_by_pykcs11_name`; n: the pyca gate of
-  `key_material_is_gated_by_pycas_der_loaders`).
+  `key_material_is_gated_by_pycas_der_loaders`), R11 wizard tests (q:
+  `util_spawn_failure_is_an_error`, `append_io_errors_are_config_errors`,
+  `decline_works_on_a_provider_without_token_init_and_accept_refuses_it`).
 
 **D13 — Ctrl-C while a command runs is honored at step boundaries.**
 - *Description*: c2's `KeyboardInterrupt` surfaced at the next Python bytecode after the

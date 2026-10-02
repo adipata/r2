@@ -113,6 +113,8 @@ fn softhsm_wizard_e2e_first_login_sets_up_and_persists() {
         "exit",
     ]);
     assert_eq!(code, 0, "{out}");
+    // long lines are word-wrapped at the session width (no spaces in the temp paths)
+    let out = out.split_whitespace().collect::<Vec<_>>().join(" ");
     let conf_path = setup.conf_dir.join("softhsm2.conf");
     assert!(out.contains("Provider 'softhsm' has no initialized SoftHSM2 token."));
     assert!(out.contains(&format!("Wrote {}", conf_path.display())));
@@ -163,11 +165,13 @@ fn softhsm_wizard_e2e_decline_keeps_memory_usable() {
     let original = std::fs::read_to_string(&setup.config).unwrap();
     let (out, code) = setup.session(&["login softhsm", "n", "providers", "exit"]);
     assert_eq!(code, 0, "{out}");
-    assert!(out.contains(
+    // long lines are word-wrapped at the session width
+    let flat = out.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(flat.contains(
         "SoftHSM setup skipped — 'softhsm' stays listed but unusable until the wizard is \
          re-run; the memory provider is unaffected."
     ));
-    assert!(out.contains("SoftHSM setup declined — 'softhsm' stays unusable until you run"));
+    assert!(flat.contains("SoftHSM setup declined — 'softhsm' stays unusable until you run"));
     // nothing touched: no conf, no token dir, config unchanged; both providers listed
     assert!(!setup.conf_dir.exists());
     assert!(!setup.token_dir.exists());

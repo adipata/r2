@@ -931,6 +931,38 @@ fn util_failure_detail_is_stderr_then_stdout_then_the_exit_code() {
 
 #[cfg(unix)]
 #[test]
+fn util_spawn_failure_is_an_error() {
+    // §11 D12 (q): c2's subprocess.run raised OSError (a crash); r2 reports Python's
+    // str(OSError) for the util path. A bad interpreter line makes exec fail with ENOENT.
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    let bin = fx.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let util = bin.join("softhsm2-util");
+    std::fs::write(&util, "#!/nonexistent/interpreter\n").unwrap();
+    std::fs::set_permissions(&util, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let _path = set_env("PATH", Some(bin.to_str().unwrap()));
+    let io = scripted(&HAPPY_ANSWERS);
+    let provider = provider_with(&Rc::new(WizardDouble::failing()));
+
+    let err = run(&make_ctx(&io, &fx.config, None, None), &provider).unwrap_err();
+
+    assert_eq!(err.kind, ErrorKind::Generic);
+    assert_eq!(
+        err.message,
+        format!(
+            "softhsm2-util --init-token failed: [Errno 2] No such file or directory: '{}'",
+            util.display()
+        )
+    );
+    assert_eq!(
+        err.hint.as_deref(),
+        Some("check the SoftHSM2 installation and $SOFTHSM2_CONF")
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn util_lookup_follows_shutil_which() {
     // A non-executable file and a directory named softhsm2-util are skipped; the first
     // executable one on $PATH wins (shutil.which).
