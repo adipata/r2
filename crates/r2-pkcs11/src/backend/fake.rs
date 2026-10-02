@@ -115,6 +115,8 @@ struct State {
     fail_next: Vec<(&'static str, u64)>,
     fail_always: Vec<(&'static str, u64)>,
     read_only: BTreeSet<u64>,
+    /// (object, attribute) → the CKR its size pass reports.
+    refused_reads: BTreeMap<(u64, u64), u64>,
     calls: Vec<&'static str>,
     last_mechanism: Option<MechSpec>,
 }
@@ -225,6 +227,13 @@ impl FakeBackend {
     /// "unwrap_key"); `fail_always` for every call until cleared.
     pub(crate) fn fail_next(&self, method: &'static str, rv: u64) {
         self.state.borrow_mut().fail_next.push((method, rv));
+    }
+    /// Make the size pass of reading `attribute` on `object` answer `rv`.
+    pub(crate) fn refuse_read(&self, object: u64, attribute: u64, rv: u64) {
+        self.state
+            .borrow_mut()
+            .refused_reads
+            .insert((object, attribute), rv);
     }
     #[allow(dead_code, reason = "failure/state knobs for R5b's verb tests")]
     pub(crate) fn fail_always(&self, method: &'static str, rv: u64) {
@@ -773,6 +782,14 @@ impl Backend for FakeBackend {
             .objects
             .get(&object)
             .ok_or_else(|| fail(rv::CKR_OBJECT_HANDLE_INVALID, "get_attr"))?;
+        if let Some(&code) = state.refused_reads.get(&(object, attribute)) {
+            // RawFns::get_attr's size-pass classification
+            return if super::is_attribute_refusal(code) {
+                Ok(None)
+            } else {
+                Err(fail(code, "get_attr"))
+            };
+        }
         if attribute == w(sys::CKA_VALUE) && !Self::value_readable(&obj.attrs) {
             return Ok(None);
         }

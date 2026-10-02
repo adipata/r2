@@ -88,7 +88,9 @@ pub(crate) fn pykcs11_error_text(code: u64) -> String {
 /// instance name (the `login <provider>` / `slots <provider>` texts). `token_label` = the
 /// label in the CKR_PIN_* texts: callers pass the logged-in token's label (or the token
 /// being logged in to); None renders "?" (c2's default). The CALLER logs
-/// "{provider}: {context} failed with {CKR}" at INFO.
+/// "{provider}: {context} failed with {CKR}" at INFO. For `LibraryUnavailable` the
+/// `context` is the library path: ProviderUnavailable "cannot load PKCS#11 library
+/// {context}: {detail}" (§5.2), as `Provider::initialize` renders every load failure.
 pub(crate) fn translate(
     err: BackendError,
     provider: &str,
@@ -102,8 +104,9 @@ pub(crate) fn translate(
             BINDING_ERROR_CODE
         }
         BackendError::LibraryUnavailable(detail) => {
+            // `context` is the library path here (§5.2 load-failure text)
             return ConsoleError::provider_unavailable(format!(
-                "PKCS#11 {context} failed: {detail}"
+                "cannot load PKCS#11 library {context}: {detail}"
             ))
             .with_hint("check providers.pkcs11[].library in the configuration");
         }

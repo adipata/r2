@@ -10,6 +10,35 @@ use r2_provider::mechanism as m;
 /// preference order.
 pub(crate) const EDDSA_VENDOR_CKMS: [u64; 2] = [0x8000_0C03, 0x8000_0C02];
 
+thread_local! {
+    /// Every vendor CKM (≥ CKM_VENDOR_DEFINED) any token listed in this process — the
+    /// entries PyKCS11's `getMechanismList` adds to its global `CKM` table.
+    static LISTED_VENDOR_CKMS: std::cell::RefCell<BTreeSet<u64>> =
+        const { std::cell::RefCell::new(BTreeSet::new()) };
+}
+
+/// Record a successful C_GetMechanismList (login, session recovery).
+pub(crate) fn note_listed_mechanisms(codes: &[u64]) {
+    let vendor = ckm(sys::CKM_VENDOR_DEFINED);
+    LISTED_VENDOR_CKMS.with(|set| {
+        set.borrow_mut()
+            .extend(codes.iter().copied().filter(|c| *c >= vendor));
+    });
+}
+
+/// `CKM_VENDOR_DEFINED_0x<HEX>` (PyKCS11's spelling: `HEX` = code − CKM_VENDOR_DEFINED,
+/// uppercase, unpadded) for a vendor CKM some token listed earlier in this process — the
+/// names c2's `_resolve_symbol` then accepted from `PyKCS11.CKM`.
+pub(crate) fn listed_vendor_symbol(symbol: &str) -> Option<u64> {
+    let vendor = ckm(sys::CKM_VENDOR_DEFINED);
+    LISTED_VENDOR_CKMS.with(|set| {
+        set.borrow()
+            .iter()
+            .copied()
+            .find(|code| symbol == format!("CKM_VENDOR_DEFINED_0x{:X}", code - vendor))
+    })
+}
+
 /// cryptoki-sys CKM constant widened to u64.
 pub(crate) fn ckm(code: sys::CK_MECHANISM_TYPE) -> u64 {
     crate::ulong_to_u64(code)

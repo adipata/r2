@@ -412,6 +412,30 @@ fn init_token_wrong_so_pin_is_translated() {
     assert_eq!(err.message, "wrong PIN for token '?' (CKR_PIN_INCORRECT)");
 }
 
+#[test]
+fn init_token_on_a_logged_in_provider_ends_its_login() {
+    // §11 D15(c): the SO session replaces the provider's one backend session
+    let (backend, provider) = logged_in();
+    provider
+        .init_token(9, "NEWTOK", &pin("4321"), &pin("9876"))
+        .unwrap();
+    assert_eq!(provider.status().auth, AuthState::LoggedOut);
+    assert!(!crate::backend::Backend::has_session(backend.as_ref()));
+}
+
+#[test]
+fn failed_init_token_keeps_the_provider_session() {
+    let (backend, provider) = logged_in();
+    assert!(
+        provider
+            .init_token(9, "NEWTOK", &pin("0000"), &pin("9876"))
+            .is_err()
+    );
+    assert_eq!(provider.status().auth, AuthState::LoggedIn);
+    assert!(crate::backend::Backend::has_session(backend.as_ref()));
+    provider.list_keys().unwrap();
+}
+
 // ---- TokenInit::set_env_and_reset (§5.13 step 2) ----
 
 #[test]
@@ -458,4 +482,53 @@ fn as_token_init_is_some() {
     assert!(provider.as_token_init().is_some());
     assert_eq!(provider.type_name(), "pkcs11");
     assert_eq!(provider.name(), "hsm");
+}
+
+#[test]
+fn unsettable_env_entries_are_errors_not_panics() {
+    // §11 D12(l): std::env::set_var panics on these; c2's os.environ raised ValueError
+    // (OSError for the empty name) out of initialize
+    let _lock = r2_testkit::global_state_lock();
+    let _guard = r2_testkit::set_env("R2_FAKE_OK", None);
+    let cases = [
+        ("A=B", "x", "illegal environment variable name: 'A=B'"),
+        ("", "x", "illegal environment variable name: ''"),
+        ("R2_FAKE_NUL", "a\0b", "embedded null byte: 'R2_FAKE_NUL'"),
+        ("R2\0X", "x", "embedded null byte: 'R2\\x00X'"),
+    ];
+    for (key, value, detail) in cases {
+        let backend = Rc::new(FakeBackend::new());
+        let shared: Rc<dyn crate::backend::Backend> = backend.clone();
+        let mut cfg = config("hsm");
+        cfg.env.insert("R2_FAKE_OK".into(), "1".into());
+        cfg.env.insert(key.into(), value.into());
+        let provider = Pkcs11Provider::with_backend(
+            "hsm",
+            cfg,
+            Default::default(),
+            Default::default(),
+            shared,
+        );
+        let err = provider.list_tokens().unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ProviderUnavailable);
+        assert_eq!(
+            err.message,
+            format!("cannot load PKCS#11 library /fake/libfake.so: {detail}")
+        );
+        assert_eq!(
+            err.hint.as_deref(),
+            Some("check providers.pkcs11[].env in the configuration")
+        );
+        // nothing was set, nothing was loaded
+        assert_eq!(std::env::var_os("R2_FAKE_OK"), None);
+        assert_eq!(backend.load_counts(), (0, 0));
+    }
+    let (_backend, provider) = logged_in();
+    let err = provider.set_env_and_reset("A=B", "x").unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Provider);
+    assert_eq!(
+        err.message,
+        "cannot set environment variable 'A=B': illegal environment variable name"
+    );
+    assert_eq!(provider.status().auth, AuthState::LoggedIn);
 }

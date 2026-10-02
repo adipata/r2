@@ -130,6 +130,7 @@ impl Pkcs11Provider {
         let context = "token initialization";
         let backend = Rc::clone(&self.backend);
         let had_session = backend.has_session();
+        let replaced = std::cell::Cell::new(false);
         let result = (|| -> std::result::Result<u64, BackendError> {
             backend.init_token(slot, so_pin, label)?;
             // SoftHSM reassigns slot ids on init — find the token by label
@@ -140,6 +141,7 @@ impl Pkcs11Provider {
                     break;
                 }
             }
+            replaced.set(true); // open_session closes the provider's session first
             backend.open_session(new_slot)?;
             let inner = (|| {
                 backend.login(UserKind::So, so_pin)?;
@@ -149,8 +151,9 @@ impl Pkcs11Provider {
             let _ = backend.close_session(); // best-effort cleanup
             inner.map(|()| new_slot)
         })();
-        if had_session {
+        if had_session && replaced.get() {
             // the backend owns ONE session: the init session replaced the provider's
+            // (§11 D15(c)); a C_InitToken failure leaves the provider's session alone
             self.drop_session();
         }
         match result {
@@ -292,6 +295,7 @@ impl Pkcs11Provider {
             self.backend.open_session(slot)?;
             self.login_session(&pin)?;
             let codes = self.backend.mechanism_list(slot)?;
+            crate::capability::note_listed_mechanisms(&codes);
             Ok(Some((slot, codes)))
         })();
         match attempt {
@@ -414,22 +418,31 @@ impl r2_provider::Provider for Pkcs11Provider {
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
-        crate::env::apply_env(&vars);
         let library = self.config.library.display().to_string();
-        match self.backend.initialize() {
-            Ok(()) => {}
-            Err(err) => {
-                let detail = match err {
-                    BackendError::LibraryUnavailable(detail) | BackendError::Binding(detail) => {
-                        detail
-                    }
-                    BackendError::Ckr(c) => ckr::pykcs11_error_text(c.code),
-                };
-                return Err(ConsoleError::provider_unavailable(format!(
-                    "cannot load PKCS#11 library {library}: {detail}"
-                ))
-                .with_hint("check providers.pkcs11[].library in the configuration"));
-            }
+        if let Some((key, detail)) = vars
+            .iter()
+            .find_map(|(k, v)| env_refusal(k, v).map(|d| (*k, d)))
+        {
+            // §11 D12(l): c2's os.environ raised ValueError/OSError out of initialize
+            return Err(ConsoleError::provider_unavailable(format!(
+                "cannot load PKCS#11 library {library}: {detail}: {}",
+                r2_core::text::py_repr(key)
+            ))
+            .with_hint("check providers.pkcs11[].env in the configuration"));
+        }
+        crate::env::apply_env(&vars);
+        if let Err(err) = self.backend.initialize() {
+            // every initialize failure is a load failure (§5.2), rendered at the choke point
+            let detail = match err {
+                BackendError::LibraryUnavailable(detail) | BackendError::Binding(detail) => detail,
+                BackendError::Ckr(c) => ckr::pykcs11_error_text(c.code),
+            };
+            return Err(ckr::translate(
+                BackendError::LibraryUnavailable(detail),
+                &self.name,
+                &library,
+                None,
+            ));
         }
         self.state.borrow_mut().initialized = true;
         tracing::info!(target: "r2::pkcs11", "{}: loaded PKCS#11 library {}", self.name, library);
@@ -504,7 +517,9 @@ impl r2_provider::Provider for Pkcs11Provider {
                 self.backend.open_session(token.slot_id)?;
             }
             self.login_session(pin)?;
-            self.backend.mechanism_list(token.slot_id)
+            let codes = self.backend.mechanism_list(token.slot_id)?;
+            crate::capability::note_listed_mechanisms(&codes);
+            Ok(codes)
         })();
         let codes = match sequence {
             Ok(codes) => codes,
@@ -710,8 +725,26 @@ impl r2_provider::TokenInit for Pkcs11Provider {
             ))
             .with_hint("restart r2 after the setup, or remove the other provider entry"));
         }
+        if let Some(detail) = env_refusal(key, value) {
+            return Err(ConsoleError::provider(format!(
+                "cannot set environment variable {}: {detail}",
+                r2_core::text::py_repr(key)
+            )));
+        }
         crate::env::apply_env(&[(key, value)]);
         r2_provider::Provider::shutdown(self)
+    }
+}
+
+/// Why `std::env::set_var(key, value)` would panic (empty key, `=` or NUL in the key, NUL
+/// in the value), in Python's `os.environ` wording; None = settable.
+pub(crate) fn env_refusal(key: &str, value: &str) -> Option<&'static str> {
+    if key.contains('\0') || value.contains('\0') {
+        Some("embedded null byte")
+    } else if key.is_empty() || key.contains('=') {
+        Some("illegal environment variable name")
+    } else {
+        None
     }
 }
 

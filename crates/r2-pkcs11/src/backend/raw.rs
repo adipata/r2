@@ -187,7 +187,7 @@ impl RawFns {
         let code = crate::ulong_to_u64(unsafe { f(session, object, &mut attr, 1) });
         match code {
             rv::CKR_OK => {}
-            rv::CKR_ATTRIBUTE_SENSITIVE | rv::CKR_ATTRIBUTE_TYPE_INVALID => return Ok(None),
+            refused if super::is_attribute_refusal(refused) => return Ok(None),
             other => {
                 return Err(BackendError::Ckr(Ckr {
                     code: other,
@@ -465,7 +465,8 @@ pub(crate) fn acquire(library: &Path) -> BResult<(PathBuf, Rc<SharedModule>)> {
         users: Cell::new(1),
     });
     MODULES.with(|m| m.borrow_mut().insert(key.clone(), Rc::clone(&module)));
-    tracing::info!(target: "r2::pkcs11", "loaded PKCS#11 library {}", library.display());
+    // the provider logs c2's INFO "{provider}: loaded PKCS#11 library {library}"
+    tracing::debug!(target: "r2::pkcs11", "acquired shared module {}", key.display());
     Ok((key, module))
 }
 

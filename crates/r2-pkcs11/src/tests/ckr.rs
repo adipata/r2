@@ -194,10 +194,15 @@ fn library_unavailable_is_provider_unavailable() {
     let e = translate(
         BackendError::LibraryUnavailable("x".into()),
         "hsm",
-        "load",
+        "/opt/lib.so",
         None,
     );
     assert_eq!(e.kind, ErrorKind::ProviderUnavailable);
+    assert_eq!(e.message, "cannot load PKCS#11 library /opt/lib.so: x");
+    assert_eq!(
+        e.hint.as_deref(),
+        Some("check providers.pkcs11[].library in the configuration")
+    );
 }
 
 #[test]

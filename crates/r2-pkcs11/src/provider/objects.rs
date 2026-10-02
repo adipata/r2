@@ -257,7 +257,21 @@ pub(crate) fn material_attrs(material: &KeyMaterial) -> Result<Vec<RawAttr>> {
     }
 }
 
+/// c2's `load_der_*_key` gate: the r2-core pyca port decides acceptance and the detail
+/// text (§4.4.3); r2's error prefix is replaced by c2's provider prefix.
+fn pyca_gate(checked: Result<Vec<u8>>, r2_prefix: &str, c2_prefix: &str) -> Result<()> {
+    checked.map(drop).map_err(|err| {
+        let detail = err.message.strip_prefix(r2_prefix).unwrap_or(&err.message);
+        ConsoleError::key_parse(format!("{c2_prefix}{detail}"))
+    })
+}
+
 fn private_material_attrs(data: &[u8]) -> Result<Vec<RawAttr>> {
+    pyca_gate(
+        r2_core::formats::pkcs8_public_spki(data),
+        "exported private key is not valid unencrypted PKCS#8 DER: ",
+        "private key material is not DER PKCS#8: ",
+    )?;
     let key = PKey::private_key_from_der(data).map_err(|err| {
         ConsoleError::key_parse(format!(
             "private key material is not DER PKCS#8: {}",
@@ -325,7 +339,18 @@ fn public_material_attrs(data: &[u8]) -> Result<Vec<RawAttr>> {
             reason(&err)
         ))
     };
-    let key = PKey::public_key_from_der(data).map_err(invalid)?;
+    pyca_gate(
+        r2_core::formats::public_key_bytes(data, r2_core::formats::Encoding::Pem),
+        "exported public key is not valid DER SubjectPublicKeyInfo: ",
+        "public key material is not DER SPKI: ",
+    )?;
+    // pyca also loads a bare PKCS#1 RSAPublicKey
+    let key = match PKey::public_key_from_der(data) {
+        Ok(key) => key,
+        Err(err) => openssl::rsa::Rsa::public_key_from_der_pkcs1(data)
+            .and_then(PKey::from_rsa)
+            .map_err(|_| invalid(err))?,
+    };
     match key.id() {
         Id::RSA | Id::RSA_PSS => {
             let rsa = key.rsa().map_err(invalid)?;
@@ -386,7 +411,9 @@ impl Pkcs11Provider {
     /// A CKO_/CKK_/CKC_/CKM_ symbol → its value (PyKCS11 tables, c2 `_resolve_symbol`).
     pub(crate) fn resolve_symbol(&self, symbol: &str) -> Result<u64> {
         let known = attributes::is_symbol(symbol);
-        match crate::catalog::symbol_value(symbol) {
+        let value = crate::catalog::symbol_value(symbol)
+            .or_else(|| crate::capability::listed_vendor_symbol(symbol));
+        match value {
             Some(value) if known => Ok(value),
             _ => Err(ConsoleError::param(
                 format!("unknown PKCS#11 constant {}", py_repr(symbol)),

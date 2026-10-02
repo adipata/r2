@@ -1214,3 +1214,123 @@ fn every_kind_imports_and_lists() {
     }
     assert_eq!(provider.list_keys().unwrap().len(), 7);
 }
+
+#[test]
+fn arguments_bad_attribute_reads_count_as_absent() {
+    // PyKCS11 getAttributeValue(_fragmented) reports CKR_ARGUMENTS_BAD (like
+    // TYPE_INVALID / SENSITIVE) as a None value: the object still lists, size unknown
+    let (backend, provider) = logged_in();
+    let handle = backend.plant_object(
+        0,
+        vec![
+            (CKA_CLASS, ul(CKO_SECRET_KEY)),
+            (CKA_KEY_TYPE, ul(CKK_AES)),
+            (CKA_LABEL, b"argsbad".to_vec()),
+            (CKA_ID, vec![9]),
+            (CKA_VALUE_LEN, ul(16)),
+        ],
+        &[7; 16],
+    );
+    backend.refuse_read(handle, CKA_VALUE_LEN, 0x07); // CKR_ARGUMENTS_BAD
+    backend.refuse_read(handle, CKA_APPLICATION, 0x07);
+    let listed = provider.list_keys().unwrap();
+    let info = listed
+        .iter()
+        .find(|k| k.key_ref.label == "argsbad")
+        .unwrap();
+    assert_eq!(info.size_bits, None);
+    assert_eq!(info.algorithm, KeyAlgorithm::Aes);
+    // any other size-pass CKR still fails the listing
+    backend.refuse_read(handle, CKA_VALUE_LEN, 0x30); // CKR_DEVICE_ERROR
+    let err = provider.list_keys().unwrap_err();
+    assert!(err.message.contains("CKR_DEVICE_ERROR"), "{}", err.message);
+}
+
+#[test]
+fn listed_vendor_mechanisms_resolve_by_pykcs11_name() {
+    // PyKCS11's getMechanismList adds CKM_VENDOR_DEFINED_0x<HEX> for every listed vendor
+    // CKM to its global CKM table, which c2's _resolve_symbol reads
+    let mut mechs = crate::backend::fake::DEFAULT_MECHANISMS.to_vec();
+    mechs.push(0x8000_0C03);
+    let backend = Rc::new(FakeBackend::with_slots(vec![(
+        0,
+        FakeBackend::token("T", "0001"),
+        mechs,
+    )]));
+    let provider = super::provider_over(&backend);
+    assert!(provider.resolve_symbol("CKM_VENDOR_DEFINED_0xC03").is_err()); // nothing listed yet
+    let token = token_at(&provider, 0);
+    provider.login(&token, &pin(USER_PIN), false).unwrap();
+    assert_eq!(
+        provider.resolve_symbol("CKM_VENDOR_DEFINED_0xC03").unwrap(),
+        0x8000_0C03
+    );
+    let template = tpl(vec![
+        ulong_attr("CKA_KEY_GEN_MECHANISM", symbol("CKM_VENDOR_DEFINED_0xC03")),
+        boolean("CKA_EXTRACTABLE", true),
+    ]);
+    provider
+        .import_key(&aes(), "vendor-gen", Some(&template), None)
+        .unwrap();
+    assert_eq!(
+        object_of(&backend, "vendor-gen")[&CKA_KEY_GEN_MECHANISM],
+        ul(0x8000_0C03)
+    );
+    // exactly PyKCS11's spelling (uppercase, unpadded) and only listed codes
+    for other in [
+        "CKM_VENDOR_DEFINED_0xc03",
+        "CKM_VENDOR_DEFINED_0x0C03",
+        "CKM_VENDOR_DEFINED_0xC02",
+    ] {
+        let err = provider.resolve_symbol(other).unwrap_err();
+        assert_eq!(err.message, format!("unknown PKCS#11 constant '{other}'"));
+    }
+}
+
+#[test]
+fn key_material_is_gated_by_pycas_der_loaders() {
+    // c2 load_der_private_key / load_der_public_key: pyca refuses trailing data that
+    // OpenSSL's d2i decoders ignore; the detail is pyca's
+    const PYCA: &str = "Could not deserialize key data. The data may be in an incorrect \
+        format, it may be encrypted with an unsupported algorithm, or it may be an \
+        unsupported key type (e.g. EC curves with explicit parameters). Details: ";
+    let (_backend, provider) = logged_in();
+    let group = openssl::ec::EcGroup::from_curve_name(openssl::nid::Nid::X9_62_PRIME256V1).unwrap();
+    let key =
+        openssl::pkey::PKey::from_ec_key(openssl::ec::EcKey::generate(&group).unwrap()).unwrap();
+    let mut private = key.private_key_to_pkcs8().unwrap();
+    private.push(0);
+    let mut material = KeyMaterial::new(KeyAlgorithm::Ec, KeyClass::Private, private);
+    material.curve = Some(Curve::P256);
+    let err = provider
+        .import_key(&material, "trail-priv", None, None)
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::KeyParse);
+    // (which of pyca's parser errors is reported differs in the detail only, §11 D11)
+    assert!(
+        err.message.starts_with(&format!(
+            "private key material is not DER PKCS#8: {PYCA}ASN.1 parsing error: "
+        )),
+        "{}",
+        err.message
+    );
+    let mut public = key.public_key_to_der().unwrap();
+    public.push(0);
+    let mut material = KeyMaterial::new(KeyAlgorithm::Ec, KeyClass::Public, public);
+    material.curve = Some(Curve::P256);
+    let err = provider
+        .import_key(&material, "trail-pub", None, None)
+        .unwrap_err();
+    assert_eq!(
+        err.message,
+        format!("public key material is not DER SPKI: {PYCA}ASN.1 parsing error: extra data")
+    );
+    // pyca's public loader also takes a bare PKCS#1 RSAPublicKey
+    let rsa = openssl::rsa::Rsa::generate(2048).unwrap();
+    let pkcs1 = rsa.public_key_to_der_pkcs1().unwrap();
+    let material = KeyMaterial::new(KeyAlgorithm::Rsa, KeyClass::Public, pkcs1);
+    let info = provider
+        .import_key(&material, "pkcs1-pub", None, None)
+        .unwrap();
+    assert_eq!(info.key_class, KeyClass::Public);
+}

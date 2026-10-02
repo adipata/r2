@@ -8,6 +8,19 @@ use zeroize::Zeroizing;
 /// material on import/unwrap (D3).
 pub(crate) type RawAttr = (u64, Zeroizing<Vec<u8>>);
 
+/// The size-pass CKRs a one-attribute read reports as "no value" (`Ok(None)`) instead of
+/// an error — PyKCS11 `getAttributeValue`/`getAttributeValue_fragmented` parity, which c2's
+/// key listing, class/identity probes and export reads go through: TYPE_INVALID, SENSITIVE
+/// and ARGUMENTS_BAD (§4.5.5 "Attribute reads").
+pub(crate) fn is_attribute_refusal(code: u64) -> bool {
+    matches!(
+        code,
+        crate::ckr::rv::CKR_ATTRIBUTE_TYPE_INVALID
+            | crate::ckr::rv::CKR_ATTRIBUTE_SENSITIVE
+            | crate::ckr::rv::CKR_ARGUMENTS_BAD
+    )
+}
+
 /// A CK_RV failure with its call context (cryptoki `Function`, or the RawFns call name).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Ckr {
@@ -132,7 +145,7 @@ pub(crate) trait Backend {
     fn init_token(&self, slot: u64, so_pin: &SecretString, label: &str) -> BResult<()>;
     fn init_pin(&self, pin: &SecretString) -> BResult<()>;
     fn find_objects(&self, template: &[RawAttr]) -> BResult<Vec<u64>>;
-    /// One attribute per call; None = sensitive, type-invalid or unavailable.
+    /// One attribute per call; None = sensitive, type-invalid, arguments-bad or unavailable.
     fn get_attr(&self, object: u64, attribute: u64) -> BResult<Option<Zeroizing<Vec<u8>>>>;
     /// One C_SetAttributeValue call (all-or-nothing).
     fn set_attrs(&self, object: u64, template: &[RawAttr]) -> BResult<()>;
