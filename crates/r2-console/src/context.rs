@@ -1,4 +1,4 @@
-// R0 skeleton — owner R7 (generated from spec §4)
+// AppContext (spec §4.9.4; owner R7) — c2 `console/repl.py` AppContext.
 use r2_config::model::{AppConfig, LoadedConfig};
 use r2_core::io::{ConsoleIo, TemplateEditor};
 use r2_ops::OperationRegistry;
@@ -19,6 +19,6 @@ pub struct AppContext {
 impl AppContext {
     /// `&self.config.config`.
     pub fn cfg(&self) -> &AppConfig {
-        unimplemented!("R7")
+        &self.config.config
     }
 }

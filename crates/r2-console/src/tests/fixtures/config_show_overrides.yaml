@@ -1,0 +1,36 @@
+app:
+  log:
+    level: debug
+    max_bytes: 0
+providers:
+  memory:
+    name: ram
+  pkcs11:
+    - name: prodhsm
+      library: ~/lib/p11.so
+      slot: 3
+      token_label: "Main HSM: ключ"
+      env:
+        VENDOR_CONF: /etc/vendor.conf
+templates:
+  pkcs11:
+    aes:
+      CKA_ID: '0x0A 0B'
+      CKA_LABEL: "yes"
+      CKA_TOKEN: false
+    data:
+      CKA_APPLICATION: a very long application name that goes on and on and on beyond the eighty column limit of the emitter
+  custom_attributes:
+    CKA_ACME_USAGE: {code: 0x80000101, kind: bytes}
+custom_mechanisms:
+  - id: vendor.acme.kcv
+    verb: sign
+    algorithm: aes
+    cli_name: acme-kcv
+    label: ACME key check value
+    ckm: 0x80000A01
+    param_struct: raw
+    params:
+      - {name: rounds, kind: int, prompt: KCV rounds, required: false, default: 1}
+      - {name: blob, kind: bytes, prompt: Blob, required: false, default: "hex:0A0B"}
+      - {name: tag, kind: enum, prompt: Tag, choices: ["96", "128"], required: false, default: 128}

@@ -1,4 +1,4 @@
-// R0 skeleton — owner R0 (generated from spec §4)
+// build.rs discovery seed test (R0, handed to R7, spec §4.1.1).
 #[test]
 fn build_rs_lists_every_command_module() {
     let stems: Vec<&str> = crate::commands::module_commands()

@@ -1,0 +1,130 @@
+app:
+  history_file: /home/tester/.local/state/c2/history
+  log:
+    level: debug
+    file: /home/tester/.local/state/c2/c2.log
+    max_bytes: 0
+    backups: 3
+ui:
+  color: auto
+  hex_group: 2
+  hex_width: 32
+  confirm_delete: true
+providers:
+  memory:
+    enabled: true
+    name: ram
+  pkcs11:
+  - name: prodhsm
+    library: /home/tester/lib/p11.so
+    slot: 3
+    token_label: "Main HSM: \u043A\u043B\u044E\u0447"
+    env:
+      VENDOR_CONF: /etc/vendor.conf
+softhsm:
+  autodetect: true
+  provider_name: softhsm
+  search_paths:
+  - /opt/homebrew/lib/softhsm/libsofthsm2.so
+  - /usr/local/lib/softhsm/libsofthsm2.so
+  - /opt/homebrew/opt/softhsm/lib/softhsm/libsofthsm2.so
+  - /usr/lib/softhsm/libsofthsm2.so
+  - /usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so
+  - /usr/lib/aarch64-linux-gnu/softhsm/libsofthsm2.so
+  - /usr/lib64/softhsm/libsofthsm2.so
+  - /usr/lib64/pkcs11/libsofthsm2.so
+  - C:/SoftHSM2/lib/softhsm2-x64.dll
+  conf_dir: /home/tester/.config/c2/softhsm2
+  token_dir: /home/tester/.local/state/c2/softhsm2/tokens
+templates:
+  pkcs11:
+    aes:
+      CKA_TOKEN: false
+      CKA_PRIVATE: true
+      CKA_SENSITIVE: true
+      CKA_EXTRACTABLE: false
+      CKA_ENCRYPT: true
+      CKA_DECRYPT: true
+      CKA_SIGN: true
+      CKA_VERIFY: true
+      CKA_WRAP: false
+      CKA_UNWRAP: false
+      CKA_ID: 0x0A 0B
+      CKA_LABEL: 'yes'
+    generic_secret:
+      CKA_TOKEN: true
+      CKA_PRIVATE: true
+      CKA_SENSITIVE: true
+      CKA_EXTRACTABLE: false
+      CKA_SIGN: true
+      CKA_VERIFY: true
+      CKA_DERIVE: true
+    rsa_private:
+      CKA_TOKEN: true
+      CKA_PRIVATE: true
+      CKA_SENSITIVE: true
+      CKA_EXTRACTABLE: false
+      CKA_DECRYPT: true
+      CKA_SIGN: true
+      CKA_UNWRAP: false
+    rsa_public:
+      CKA_TOKEN: true
+      CKA_PRIVATE: false
+      CKA_ENCRYPT: true
+      CKA_VERIFY: true
+      CKA_WRAP: false
+    ec_private:
+      CKA_TOKEN: true
+      CKA_PRIVATE: true
+      CKA_SENSITIVE: true
+      CKA_EXTRACTABLE: false
+      CKA_SIGN: true
+      CKA_DERIVE: true
+    ec_public:
+      CKA_TOKEN: true
+      CKA_PRIVATE: false
+      CKA_VERIFY: true
+      CKA_DERIVE: true
+    certificate:
+      CKA_TOKEN: true
+      CKA_PRIVATE: false
+    data:
+      CKA_TOKEN: true
+      CKA_PRIVATE: true
+      CKA_APPLICATION: a very long application name that goes on and on and on beyond
+        the eighty column limit of the emitter
+  custom_attributes:
+    CKA_ACME_USAGE:
+      code: 2147483905
+      kind: bytes
+custom_mechanisms:
+- id: vendor.acme.kcv
+  verb: sign
+  algorithm: aes
+  cli_name: acme-kcv
+  label: ACME key check value
+  ckm: 2147486209
+  param_struct: raw
+  params:
+  - name: rounds
+    kind: int
+    prompt: KCV rounds
+    required: false
+    default: 1
+    choices: null
+  - name: blob
+    kind: bytes
+    prompt: Blob
+    required: false
+    default: hex:0A0B
+    choices: null
+  - name: tag
+    kind: enum
+    prompt: Tag
+    required: false
+    default: 128
+    choices:
+    - '96'
+    - '128'
+  provider_types: null
+  providers: null

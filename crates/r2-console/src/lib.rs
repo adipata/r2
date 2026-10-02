@@ -1,4 +1,4 @@
-// R0 skeleton — owner R7 (generated from spec §4)
+// r2-console (owner R7): REPL, terminal I/O, parser, completer, command framework.
 #![forbid(unsafe_code)]
 pub mod cmdutil;
 pub mod commands;

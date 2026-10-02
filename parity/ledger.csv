@@ -92,55 +92,55 @@ tests/integration/test_wizard.py::test_wizard_yields_working_provider,1,R11,todo
 tests/integration/test_wizard.py::test_wizard_falls_back_to_softhsm2_util,1,R11,todo,,softhsm
 tests/unit/console/test_app.py::test_build_operation_registry_registers_builtins_and_customs,1,R3,ported,r2-ops::build_registry test_build_operation_registry_registers_builtins_and_customs,build_operation_registry moved to R3 (spec §4.1.1): r2_ops::registry
 tests/unit/console/test_app.py::test_custom_op_resolves_via_cli_name,1,R3,ported,r2-ops::build_registry test_custom_op_resolves_via_cli_name,build_operation_registry + resolve_cli moved to R3 (spec §4.1.1): r2_ops::registry
-tests/unit/console/test_app.py::test_custom_ckm_map,1,R7,todo,,
+tests/unit/console/test_app.py::test_custom_ckm_map,1,R7,ported,r2-cli::bin/r2 bootstrap::tests::test_custom_ckm_map,
 tests/unit/console/test_app.py::test_template_editor_wiring_matches_l10_presence,1,R7,n/a:lazy-import-wiring,,importlib.find_spec optional-module wiring; r2 constructs the editor directly (covered by test_template_editor.py::test_bootstrap_picks_up_the_real_editor)
 tests/unit/console/test_app.py::test_template_editor_uses_factory_when_module_present,1,R7,n/a:lazy-import-wiring,,sys.modules factory injection; r2 constructs the editor directly
-tests/unit/console/test_app.py::test_bootstrap_registers_memory_and_pkcs11_with_ckm_map,1,R7,todo,,Python stubs the provider modules via sys.modules: inject provider constructors / a fake library path in Rust
-tests/unit/console/test_app.py::test_bootstrap_memory_disabled,1,R7,todo,,Python stubs the provider modules via sys.modules: inject provider constructors / a fake library path in Rust
-tests/unit/console/test_app.py::test_bootstrap_softhsm_autodetect_registers_provider,1,R7,todo,,Python stubs the provider modules via sys.modules: inject provider constructors / a fake library path in Rust
-tests/unit/console/test_app.py::test_bootstrap_softhsm_not_found,1,R7,todo,,Python stubs the provider modules via sys.modules: inject provider constructors / a fake library path in Rust
-tests/unit/console/test_app.py::test_bootstrap_softhsm_name_collision_skips_autodetect,1,R7,todo,,Python stubs the provider modules via sys.modules: inject provider constructors / a fake library path in Rust
-tests/unit/console/test_app.py::test_version_flag,1,R7,todo,,
-tests/unit/console/test_app.py::test_config_flag_missing_file_is_a_hard_error,1,R7,todo,,
-tests/unit/console/test_app.py::test_main_runs_a_scripted_session_with_stub_providers,1,R7,todo,,Python stubs the provider modules via sys.modules: inject provider constructors / a fake library path in Rust
-tests/unit/console/test_app.py::test_main_debug_flag_forces_debug_and_stderr_mirror,1,R7,todo,,Python stubs the provider modules via sys.modules: inject provider constructors / a fake library path in Rust
-tests/unit/console/test_app.py::test_main_shuts_providers_down_in_the_finally,1,R7,todo,,Python stubs the provider modules via sys.modules: inject provider constructors / a fake library path in Rust; Drop guard replaces the finally (PLAN §6)
-tests/unit/console/test_app.py::test_main_end_to_end_with_real_providers,1,R7,todo,,skipif in c2; skipped in c2 until L4/L5 merged; in r2 it always runs (R7 merges after R4/R5a)
-tests/unit/console/test_commands.py::test_help_lists_every_command,1,R7,todo,,
-tests/unit/console/test_commands.py::test_help_detail_shows_usage_and_flags,1,R7,todo,,
-tests/unit/console/test_commands.py::test_help_unknown_command_suggests,1,R7,todo,,
-tests/unit/console/test_commands.py::test_exit_and_quit_raise_repl_exit,2,R7,todo,,Rust: exit/quit return Ok(Flow::Exit)
-tests/unit/console/test_commands.py::test_clear_falls_back_to_ansi_for_plain_io,1,R7,todo,,
-tests/unit/console/test_commands.py::test_clear_uses_io_clear_when_available,1,R7,todo,,
-tests/unit/console/test_commands.py::test_config_path_with_external_file,1,R7,todo,,
-tests/unit/console/test_commands.py::test_config_path_defaults_only,1,R7,todo,,
-tests/unit/console/test_commands.py::test_config_show_dumps_effective_yaml,1,R7,todo,,
-tests/unit/console/test_commands.py::test_config_show_origin_renders_all_six_sections,1,R7,todo,,
-tests/unit/console/test_commands.py::test_config_show_defaults_prints_embedded_annotated_yaml,1,R7,todo,,
-tests/unit/console/test_commands.py::test_config_show_defaults_and_origin_conflict,1,R7,todo,,
-tests/unit/console/test_commands.py::test_config_unknown_subcommand,1,R7,todo,,
-tests/unit/console/test_commands.py::test_config_bare_defaults_to_show,1,R7,todo,,
-tests/unit/console/test_completer.py::test_first_token_completes_command_names,1,R7,todo,,
-tests/unit/console/test_completer.py::test_second_token_delegates_to_command_complete,1,R7,todo,,
-tests/unit/console/test_completer.py::test_no_completion_inside_open_quote,1,R7,todo,,
-tests/unit/console/test_completer.py::test_no_completion_for_unknown_command,1,R7,todo,,
-tests/unit/console/test_completer.py::test_command_complete_errors_are_swallowed,1,R7,todo,,
-tests/unit/console/test_completer.py::test_help_arg_completion_stops_after_first_arg,1,R7,todo,,
-tests/unit/console/test_completer.py::test_complete_provider_names,1,R7,todo,,
-tests/unit/console/test_completer.py::test_complete_refs_without_colon_yields_provider_prefixes,1,R7,todo,,
-tests/unit/console/test_completer.py::test_complete_refs_lists_keys_of_browsable_provider,1,R7,todo,,
-tests/unit/console/test_completer.py::test_complete_refs_suffixes_keypair_family,1,R7,todo,,
-tests/unit/console/test_completer.py::test_complete_refs_logged_out_provider_completes_prefix_only,1,R7,todo,,
-tests/unit/console/test_completer.py::test_complete_refs_unknown_provider,1,R7,todo,,
-tests/unit/console/test_completer.py::test_complete_refs_class_stage_for_plain_label,1,R7,todo,,
-tests/unit/console/test_completer.py::test_complete_refs_id_selector_stages,1,R7,todo,,
-tests/unit/console/test_completer.py::test_complete_refs_keypair_family_selector_stages,1,R7,todo,,
-tests/unit/console/test_completer.py::test_complete_refs_label_stage_matches_keys_table,1,R7,todo,,
-tests/unit/console/test_completer.py::test_complete_refs_ambiguous_selector_not_offered,1,R7,todo,,
-tests/unit/console/test_completer.py::test_complete_refs_labels_containing_delimiters,1,R7,todo,,
-tests/unit/console/test_completer.py::test_complete_refs_selector_stage_logged_out_prefix_only,1,R7,todo,,
-tests/unit/console/test_completer.py::test_complete_refs_candidates_always_parse,1,R7,todo,,
-tests/unit/console/test_completer.py::test_selector_stage_through_console_completer,1,R7,todo,,
+tests/unit/console/test_app.py::test_bootstrap_registers_memory_and_pkcs11_with_ckm_map,1,R7,ported,r2-cli::bin/r2 bootstrap::tests::test_bootstrap_registers_memory_and_pkcs11_with_ckm_map ; r2-cli::bin/r2 bootstrap::tests::duplicate_provider_names_are_startup_errors,Python stubs the provider modules via sys.modules: inject provider constructors / a fake library path in Rust
+tests/unit/console/test_app.py::test_bootstrap_memory_disabled,1,R7,ported,r2-cli::bin/r2 bootstrap::tests::test_bootstrap_memory_disabled,Python stubs the provider modules via sys.modules: inject provider constructors / a fake library path in Rust
+tests/unit/console/test_app.py::test_bootstrap_softhsm_autodetect_registers_provider,1,R7,ported,r2-cli::bin/r2 bootstrap::tests::test_bootstrap_softhsm_autodetect_registers_provider,Python stubs the provider modules via sys.modules: inject provider constructors / a fake library path in Rust
+tests/unit/console/test_app.py::test_bootstrap_softhsm_not_found,1,R7,ported,r2-cli::bin/r2 bootstrap::tests::test_bootstrap_softhsm_not_found,Python stubs the provider modules via sys.modules: inject provider constructors / a fake library path in Rust
+tests/unit/console/test_app.py::test_bootstrap_softhsm_name_collision_skips_autodetect,1,R7,ported,r2-cli::bin/r2 bootstrap::tests::test_bootstrap_softhsm_name_collision_skips_autodetect,Python stubs the provider modules via sys.modules: inject provider constructors / a fake library path in Rust
+tests/unit/console/test_app.py::test_version_flag,1,R7,ported,r2-cli::e2e_repl test_version_flag ; r2-cli::bin/r2 args::tests::usage_errors_exit_2_and_version_has_no_short_flag,
+tests/unit/console/test_app.py::test_config_flag_missing_file_is_a_hard_error,1,R7,ported,r2-cli::e2e_repl test_config_flag_missing_file_is_a_hard_error ; r2-cli::bin/r2 tests::test_config_flag_missing_file_is_a_hard_error ; r2-cli::bin/r2 tests::startup_errors_after_logging_exit_2,
+tests/unit/console/test_app.py::test_main_runs_a_scripted_session_with_stub_providers,1,R7,ported,r2-cli::bin/r2 tests::test_main_runs_a_scripted_session_with_stub_providers,Python stubs the provider modules via sys.modules: inject provider constructors / a fake library path in Rust
+tests/unit/console/test_app.py::test_main_debug_flag_forces_debug_and_stderr_mirror,1,R7,ported,r2-cli::bin/r2 tests::test_main_debug_flag_forces_debug_and_stderr_mirror ; r2-cli::e2e_repl debug_flag_logs_debug_records,Python stubs the provider modules via sys.modules: inject provider constructors / a fake library path in Rust
+tests/unit/console/test_app.py::test_main_shuts_providers_down_in_the_finally,1,R7,ported,r2-cli::bin/r2 tests::test_main_shuts_providers_down_in_the_finally ; r2-cli::bin/r2 tests::shutdown_failures_are_logged_as_warnings,Python stubs the provider modules via sys.modules: inject provider constructors / a fake library path in Rust; Drop guard replaces the finally (PLAN §6)
+tests/unit/console/test_app.py::test_main_end_to_end_with_real_providers,1,R7,ported,r2-cli::e2e_repl test_main_end_to_end_with_real_providers,skipif in c2; skipped in c2 until L4/L5 merged | R7: #[ignore] (reported as skipped) until R7 merges after R4/R5a; the merge removes the ignore so it always runs
+tests/unit/console/test_commands.py::test_help_lists_every_command,1,R7,ported,r2-console tests::commands::test_help_lists_every_command,
+tests/unit/console/test_commands.py::test_help_detail_shows_usage_and_flags,1,R7,ported,r2-console tests::commands::test_help_detail_shows_usage_and_flags,
+tests/unit/console/test_commands.py::test_help_unknown_command_suggests,1,R7,ported,r2-console tests::commands::test_help_unknown_command_suggests,
+tests/unit/console/test_commands.py::test_exit_and_quit_raise_repl_exit,2,R7,ported,r2-console tests::commands::test_exit_and_quit_raise_repl_exit,Rust: exit/quit return Ok(Flow::Exit)
+tests/unit/console/test_commands.py::test_clear_falls_back_to_ansi_for_plain_io,1,R7,ported,r2-console tests::commands::test_clear_falls_back_to_ansi_for_plain_io,
+tests/unit/console/test_commands.py::test_clear_uses_io_clear_when_available,1,R7,ported,r2-console tests::commands::test_clear_uses_io_clear_when_available,R7: ConsoleIo::clear override
+tests/unit/console/test_commands.py::test_config_path_with_external_file,1,R7,ported,r2-console tests::commands::test_config_path_with_external_file ; r2-cli::e2e_repl config_path_and_origin_render_provenance,
+tests/unit/console/test_commands.py::test_config_path_defaults_only,1,R7,ported,r2-console tests::commands::test_config_path_defaults_only ; r2-cli::e2e_repl config_path_without_external_file_names_the_discovery_order,e2e half #[ignore] (reported as skipped) until R7 merges after R4/R5a (the defaults construct MemoryProvider); the merge removes the ignore
+tests/unit/console/test_commands.py::test_config_show_dumps_effective_yaml,1,R7,ported,r2-console tests::commands::test_config_show_dumps_effective_yaml ; r2-console tests::commands::config_show_is_byte_identical_to_c2 ; r2-cli::e2e_repl config_show_defaults_and_effective,
+tests/unit/console/test_commands.py::test_config_show_origin_renders_all_six_sections,1,R7,ported,r2-console tests::commands::test_config_show_origin_renders_all_six_sections ; r2-console tests::commands::config_show_origin_appends_unknown_sections_and_defaults_missing_ones ; r2-cli::e2e_repl config_path_and_origin_render_provenance,
+tests/unit/console/test_commands.py::test_config_show_defaults_prints_embedded_annotated_yaml,1,R7,ported,r2-console tests::commands::test_config_show_defaults_prints_embedded_annotated_yaml,
+tests/unit/console/test_commands.py::test_config_show_defaults_and_origin_conflict,1,R7,ported,r2-console tests::commands::test_config_show_defaults_and_origin_conflict,
+tests/unit/console/test_commands.py::test_config_unknown_subcommand,1,R7,ported,r2-console tests::commands::test_config_unknown_subcommand,
+tests/unit/console/test_commands.py::test_config_bare_defaults_to_show,1,R7,ported,r2-console tests::commands::test_config_bare_defaults_to_show,
+tests/unit/console/test_completer.py::test_first_token_completes_command_names,1,R7,ported,r2-console tests::completer::test_first_token_completes_command_names,
+tests/unit/console/test_completer.py::test_second_token_delegates_to_command_complete,1,R7,ported,r2-console tests::completer::test_second_token_delegates_to_command_complete,
+tests/unit/console/test_completer.py::test_no_completion_inside_open_quote,1,R7,ported,r2-console tests::completer::test_no_completion_inside_open_quote,
+tests/unit/console/test_completer.py::test_no_completion_for_unknown_command,1,R7,ported,r2-console tests::completer::test_no_completion_for_unknown_command,
+tests/unit/console/test_completer.py::test_command_complete_errors_are_swallowed,1,R7,ported,r2-console tests::completer::test_command_complete_errors_are_swallowed,
+tests/unit/console/test_completer.py::test_help_arg_completion_stops_after_first_arg,1,R7,ported,r2-console tests::completer::test_help_arg_completion_stops_after_first_arg,
+tests/unit/console/test_completer.py::test_complete_provider_names,1,R7,ported,r2-console tests::completer::test_complete_provider_names,
+tests/unit/console/test_completer.py::test_complete_refs_without_colon_yields_provider_prefixes,1,R7,ported,r2-console tests::completer::test_complete_refs_without_colon_yields_provider_prefixes,
+tests/unit/console/test_completer.py::test_complete_refs_lists_keys_of_browsable_provider,1,R7,ported,r2-console tests::completer::test_complete_refs_lists_keys_of_browsable_provider ; r2-console tests::completer::suggestion_spans_are_byte_ranges_of_the_raw_token ; r2-console tests::completer::suggestions_never_append_whitespace_and_paths_show_their_last_component ; r2-console tests::completer::highlighting_styles_follow_the_grammar,
+tests/unit/console/test_completer.py::test_complete_refs_suffixes_keypair_family,1,R7,ported,r2-console tests::completer::test_complete_refs_suffixes_keypair_family,
+tests/unit/console/test_completer.py::test_complete_refs_logged_out_provider_completes_prefix_only,1,R7,ported,r2-console tests::completer::test_complete_refs_logged_out_provider_completes_prefix_only,
+tests/unit/console/test_completer.py::test_complete_refs_unknown_provider,1,R7,ported,r2-console tests::completer::test_complete_refs_unknown_provider,
+tests/unit/console/test_completer.py::test_complete_refs_class_stage_for_plain_label,1,R7,ported,r2-console tests::completer::test_complete_refs_class_stage_for_plain_label,
+tests/unit/console/test_completer.py::test_complete_refs_id_selector_stages,1,R7,ported,r2-console tests::completer::test_complete_refs_id_selector_stages,
+tests/unit/console/test_completer.py::test_complete_refs_keypair_family_selector_stages,1,R7,ported,r2-console tests::completer::test_complete_refs_keypair_family_selector_stages,
+tests/unit/console/test_completer.py::test_complete_refs_label_stage_matches_keys_table,1,R7,ported,r2-console tests::completer::test_complete_refs_label_stage_matches_keys_table,
+tests/unit/console/test_completer.py::test_complete_refs_ambiguous_selector_not_offered,1,R7,ported,r2-console tests::completer::test_complete_refs_ambiguous_selector_not_offered,
+tests/unit/console/test_completer.py::test_complete_refs_labels_containing_delimiters,1,R7,ported,r2-console tests::completer::test_complete_refs_labels_containing_delimiters,
+tests/unit/console/test_completer.py::test_complete_refs_selector_stage_logged_out_prefix_only,1,R7,ported,r2-console tests::completer::test_complete_refs_selector_stage_logged_out_prefix_only,
+tests/unit/console/test_completer.py::test_complete_refs_candidates_always_parse,1,R7,ported,r2-console tests::completer::test_complete_refs_candidates_always_parse,
+tests/unit/console/test_completer.py::test_selector_stage_through_console_completer,1,R7,ported,r2-console tests::completer::test_selector_stage_through_console_completer,R7: console path driven with a `delete` stand-in command (R8's keys module not merged in R7)
 tests/unit/console/test_copy_cmd.py::test_copy_is_auto_discovered,1,R10,todo,,Rust: the build.rs aggregator registers `copy`
 tests/unit/console/test_copy_cmd.py::test_copy_mem_to_pkcs11_end_to_end,1,R10,todo,,
 tests/unit/console/test_copy_cmd.py::test_copy_editor_defaults_keep_the_copy_locked_down,1,R10,todo,,
@@ -154,12 +154,12 @@ tests/unit/console/test_copy_cmd.py::test_complete_offers_refs_providers_and_opt
 tests/unit/console/test_copy_cmd.py::test_complete_source_ref_offers_key_refs_and_selectors,1,R10,todo,,
 tests/unit/console/test_copy_cmd.py::test_copy_template_seeds_destination_editor,1,R14,todo,,--template / key template / templatefile -> R14
 tests/unit/console/test_copy_cmd.py::test_copy_template_memory_destination_raises,1,R14,todo,,--template / key template / templatefile -> R14
-tests/unit/console/test_discovery.py::test_discovery_finds_the_l7_commands,1,R7,todo,,
+tests/unit/console/test_discovery.py::test_discovery_finds_the_l7_commands,1,R7,ported,r2-console tests::discovery::test_discovery_finds_the_l7_commands ; r2-console tests::discovery::duplicate_command_names_are_a_config_error ; r2-console tests::build_discovery::build_rs_lists_every_command_module,
 tests/unit/console/test_discovery.py::test_every_module_exports_a_commands_list,1,R7,n/a:pkgutil-discovery,,the build.rs-generated aggregator does not compile if a commands/*.rs lacks its export
-tests/unit/console/test_discovery.py::test_command_metadata_is_complete,1,R7,todo,,the frozenset type check on flags is Python-only
-tests/unit/console/test_discovery.py::test_config_declares_its_boolean_flags,1,R7,todo,,
+tests/unit/console/test_discovery.py::test_command_metadata_is_complete,1,R7,ported,r2-console tests::discovery::test_command_metadata_is_complete,the frozenset type check on flags is Python-only
+tests/unit/console/test_discovery.py::test_config_declares_its_boolean_flags,1,R7,ported,r2-console tests::discovery::test_config_declares_its_boolean_flags,
 tests/unit/console/test_discovery.py::test_all_commands_is_cached,1,R7,n/a:python-caching,,functools cache identity of the discovery result; the Rust aggregator is static
-tests/unit/console/test_discovery.py::test_there_is_no_central_registration_table,1,R7,todo,,port as a check that commands/mod.rs include!s the build.rs-generated aggregator (no hand-maintained list)
+tests/unit/console/test_discovery.py::test_there_is_no_central_registration_table,1,R7,ported,r2-console tests::discovery::test_there_is_no_central_registration_table,port as a check that commands/mod.rs include!s the build.rs-generated aggregator (no hand-maintained list)
 tests/unit/console/test_export_kek.py::test_wrapped_export_writes_a_loadable_blob,1,R15,todo,,
 tests/unit/console/test_export_kek.py::test_outformat_encodings,3,R15,todo,,
 tests/unit/console/test_export_kek.py::test_mech_params_travel_as_name_value_tokens,1,R15,todo,,
@@ -187,28 +187,28 @@ tests/unit/console/test_export_kek.py::test_refusal_fires_before_the_mech_menu_a
 tests/unit/console/test_export_kek.py::test_public_target_refused_before_the_mech_menu,1,R15,todo,,
 tests/unit/console/test_export_kek.py::test_cross_provider_message_is_worded_for_export,1,R15,todo,,
 tests/unit/console/test_export_kek.py::test_success_line_reports_the_blob_length_not_the_file_size,1,R15,todo,,
-tests/unit/console/test_io.py::test_prompt_returns_typed_line,1,R7,todo,,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
-tests/unit/console/test_io.py::test_prompt_ctrl_c_raises_user_abort,1,R7,todo,,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
-tests/unit/console/test_io.py::test_prompt_eof_raises_user_abort,1,R7,todo,,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
-tests/unit/console/test_io.py::test_prompt_secret_returns_text,1,R7,todo,,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
-tests/unit/console/test_io.py::test_prompt_secret_does_not_mask_later_prompts,1,R7,n/a:prompt-toolkit-sticky-kwargs,,rpassword reads secrets outside reedline: no shared session state to leak
-tests/unit/console/test_io.py::test_param_completer_does_not_leak_to_later_prompts,1,R7,n/a:prompt-toolkit-sticky-kwargs,,"if TerminalIo reuses one Reedline across prompts, R7 adds a per-prompt completer-reset test"
-tests/unit/console/test_io.py::test_prompt_multiline_until_empty_line,1,R7,todo,,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
-tests/unit/console/test_io.py::test_prompt_multiline_eof_ends_paste,1,R7,todo,,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
-tests/unit/console/test_io.py::test_select_by_number_is_one_based,1,R7,todo,,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
-tests/unit/console/test_io.py::test_select_by_option_text,1,R7,todo,,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
-tests/unit/console/test_io.py::test_select_reprompts_on_invalid,1,R7,todo,,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
-tests/unit/console/test_io.py::test_select_empty_options_raises,1,R7,todo,,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
-tests/unit/console/test_io.py::test_confirm_empty_answer_picks_default,1,R7,todo,,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
-tests/unit/console/test_io.py::test_confirm_yes_no_and_reprompt,1,R7,todo,,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
-tests/unit/console/test_io.py::test_confirm_ctrl_c_raises_user_abort,1,R7,todo,,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
-tests/unit/console/test_io.py::test_print_error_renders_red_panel_text,1,R7,todo,,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
-tests/unit/console/test_io.py::test_read_command_reads_a_raw_line,1,R7,todo,,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
-tests/unit/console/test_io.py::test_read_command_propagates_eof,1,R7,todo,,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
-tests/unit/console/test_io.py::test_completer_for_enum_offers_choices,1,R7,todo,,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist; WordCompleter is prompt_toolkit: port as the per-ParamSpec completion word list
-tests/unit/console/test_io.py::test_completer_for_bool_and_plain_kinds,1,R7,todo,,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist; WordCompleter is prompt_toolkit: port as the per-ParamSpec completion word list
-tests/unit/console/test_io.py::test_history_filters_pin_and_password_lines,1,R7,todo,,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist; reedline History wrapper dropping --pin/--password lines (PLAN §6)
-tests/unit/console/test_io.py::test_bad_history_path_falls_back_to_memory,1,R7,todo,,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
+tests/unit/console/test_io.py::test_prompt_returns_typed_line,1,R7,ported,r2-console tests::io::test_prompt_returns_typed_line,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
+tests/unit/console/test_io.py::test_prompt_ctrl_c_raises_user_abort,1,R7,ported,r2-console tests::io::test_prompt_ctrl_c_raises_user_abort,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
+tests/unit/console/test_io.py::test_prompt_eof_raises_user_abort,1,R7,ported,r2-console tests::io::test_prompt_eof_raises_user_abort,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
+tests/unit/console/test_io.py::test_prompt_secret_returns_text,1,R7,ported,r2-console tests::io::test_prompt_secret_returns_text,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
+tests/unit/console/test_io.py::test_prompt_secret_does_not_mask_later_prompts,1,R7,ported,r2-console tests::io::test_prompt_secret_does_not_mask_later_prompts,per-read reader calls: the secret read leaves no state behind; the next prompt is an ordinary param read
+tests/unit/console/test_io.py::test_param_completer_does_not_leak_to_later_prompts,1,R7,ported,r2-console tests::io::test_param_completer_does_not_leak_to_later_prompts ; r2-console tests::io::test_completer_for_bool_and_plain_kinds,choices are passed per read: the confirm after an ENUM prompt carries none
+tests/unit/console/test_io.py::test_prompt_multiline_until_empty_line,1,R7,ported,r2-console tests::io::test_prompt_multiline_until_empty_line,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
+tests/unit/console/test_io.py::test_prompt_multiline_eof_ends_paste,1,R7,ported,r2-console tests::io::test_prompt_multiline_eof_ends_paste,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
+tests/unit/console/test_io.py::test_select_by_number_is_one_based,1,R7,ported,r2-console tests::io::test_select_by_number_is_one_based,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
+tests/unit/console/test_io.py::test_select_by_option_text,1,R7,ported,r2-console tests::io::test_select_by_option_text,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
+tests/unit/console/test_io.py::test_select_reprompts_on_invalid,1,R7,ported,r2-console tests::io::test_select_reprompts_on_invalid ; r2-console tests::io::select_answer_rules_follow_c2,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
+tests/unit/console/test_io.py::test_select_empty_options_raises,1,R7,ported,r2-console tests::io::test_select_empty_options_raises,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
+tests/unit/console/test_io.py::test_confirm_empty_answer_picks_default,1,R7,ported,r2-console tests::io::test_confirm_empty_answer_picks_default,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
+tests/unit/console/test_io.py::test_confirm_yes_no_and_reprompt,1,R7,ported,r2-console tests::io::test_confirm_yes_no_and_reprompt,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
+tests/unit/console/test_io.py::test_confirm_ctrl_c_raises_user_abort,1,R7,ported,r2-console tests::io::test_confirm_ctrl_c_raises_user_abort,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
+tests/unit/console/test_io.py::test_print_error_renders_red_panel_text,1,R7,ported,r2-console tests::io::test_print_error_renders_red_panel_text ; r2-console tests::io::sink_styles_choose_the_rendering,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
+tests/unit/console/test_io.py::test_read_command_reads_a_raw_line,1,R7,ported,r2-console tests::io::test_read_command_reads_a_raw_line,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
+tests/unit/console/test_io.py::test_read_command_propagates_eof,1,R7,ported,r2-console tests::io::test_read_command_propagates_eof ; r2-console tests::io::reader_errors_become_console_errors ; r2-console tests::repl::reader_errors_are_rendered_and_end_the_repl,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
+tests/unit/console/test_io.py::test_completer_for_enum_offers_choices,1,R7,ported,r2-console tests::io::test_completer_for_enum_offers_choices,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist; WordCompleter is prompt_toolkit: port as the per-ParamSpec completion word list
+tests/unit/console/test_io.py::test_completer_for_bool_and_plain_kinds,1,R7,ported,r2-console tests::io::test_completer_for_bool_and_plain_kinds,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist; WordCompleter is prompt_toolkit: port as the per-ParamSpec completion word list
+tests/unit/console/test_io.py::test_history_filters_pin_and_password_lines,1,R7,ported,r2-console tests::io::test_history_filters_pin_and_password_lines ; r2-console tests::io::history_save_answers_ok_and_update_never_smuggles_a_secret ; r2-cli::e2e_repl history_file_drops_secret_lines,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist; reedline History wrapper dropping --pin/--password lines (PLAN §6)
+tests/unit/console/test_io.py::test_bad_history_path_falls_back_to_memory,1,R7,ported,r2-console tests::io::test_bad_history_path_falls_back_to_memory,PromptToolkitIO over pipe input: port against the piped PlainIo where the behavior is reader-level; reedline-only behavior goes to the R13 manual terminal checklist
 tests/unit/console/test_keys_cmd.py::test_keys_lists_all_browsable_providers,1,R8,todo,,
 tests/unit/console/test_keys_cmd.py::test_keys_skips_logged_out_provider_with_note,1,R8,todo,,
 tests/unit/console/test_keys_cmd.py::test_keys_single_provider,1,R8,todo,,
@@ -343,31 +343,31 @@ tests/unit/console/test_load_kek.py::test_completion_of_kek_labels_is_provider_l
 tests/unit/console/test_load_kek.py::test_kek_completion_never_browses_a_logged_out_provider,1,R15,todo,,
 tests/unit/console/test_load_kek.py::test_outformat_is_rejected_on_load,1,R15,todo,,
 tests/unit/console/test_load_kek.py::test_cross_provider_message_is_worded_for_load,1,R15,todo,,
-tests/unit/console/test_logging_setup.py::test_log_lines_reach_the_rotating_file,1,R7,todo,,
-tests/unit/console/test_logging_setup.py::test_pin_and_password_values_are_redacted,1,R7,todo,,
-tests/unit/console/test_logging_setup.py::test_redaction_applies_to_percent_formatted_args,1,R7,todo,,
-tests/unit/console/test_logging_setup.py::test_level_comes_from_config,1,R7,todo,,
-tests/unit/console/test_logging_setup.py::test_debug_forces_debug_and_adds_stderr_mirror,1,R7,todo,,
-tests/unit/console/test_logging_setup.py::test_rotation_parameters_applied,1,R7,todo,,
-tests/unit/console/test_logging_setup.py::test_setup_is_idempotent,1,R7,todo,,
-tests/unit/console/test_logging_setup.py::test_unwritable_log_path_raises_config_error,1,R7,todo,,
-tests/unit/console/test_logging_setup.py::test_redacting_filter_leaves_clean_messages_untouched,1,R7,todo,,
-tests/unit/console/test_parser.py::test_tokenize_table,17,R7,todo,,
-tests/unit/console/test_parser.py::test_tokenize_unterminated_quote_caret_at_opening_quote,1,R7,todo,,
-tests/unit/console/test_parser.py::test_line_is_complete,7,R7,todo,,
-tests/unit/console/test_parser.py::test_bind_positionals_in_order_with_quoted_flags,1,R7,todo,,
-tests/unit/console/test_parser.py::test_bind_named_split_at_first_equals,1,R7,todo,,
-tests/unit/console/test_parser.py::test_bind_flag_option_consumes_no_value,1,R7,todo,,
-tests/unit/console/test_parser.py::test_bind_value_option_consumes_next_token,1,R7,todo,,
-tests/unit/console/test_parser.py::test_bind_option_value_may_be_quoted,1,R7,todo,,
-tests/unit/console/test_parser.py::test_bind_option_value_may_be_option_shaped,1,R7,todo,,
-tests/unit/console/test_parser.py::test_bind_quoted_tokens_never_classified,1,R7,todo,,
-tests/unit/console/test_parser.py::test_bind_mixed_order_preserved,1,R7,todo,,
-tests/unit/console/test_parser.py::test_bind_missing_option_value_caret,1,R7,todo,,
-tests/unit/console/test_parser.py::test_bind_empty_option_name_caret,1,R7,todo,,
-tests/unit/console/test_parser.py::test_bind_empty_parameter_name_caret,1,R7,todo,,
-tests/unit/console/test_parser.py::test_bind_duplicate_named_last_wins,1,R7,todo,,
-tests/unit/console/test_parser.py::test_bind_pem_paste_inside_quotes_is_one_positional,1,R7,todo,,
+tests/unit/console/test_logging_setup.py::test_log_lines_reach_the_rotating_file,1,R7,ported,r2-cli::bin/r2 logging::tests::test_log_lines_reach_the_rotating_file,
+tests/unit/console/test_logging_setup.py::test_pin_and_password_values_are_redacted,1,R7,ported,r2-cli::bin/r2 logging::tests::test_pin_and_password_values_are_redacted,
+tests/unit/console/test_logging_setup.py::test_redaction_applies_to_percent_formatted_args,1,R7,ported,r2-cli::bin/r2 logging::tests::test_redaction_applies_to_percent_formatted_args,
+tests/unit/console/test_logging_setup.py::test_level_comes_from_config,1,R7,ported,r2-cli::bin/r2 logging::tests::test_level_comes_from_config,
+tests/unit/console/test_logging_setup.py::test_debug_forces_debug_and_adds_stderr_mirror,1,R7,ported,r2-cli::bin/r2 logging::tests::test_debug_forces_debug_and_adds_stderr_mirror ; r2-cli::e2e_repl debug_flag_logs_debug_records,
+tests/unit/console/test_logging_setup.py::test_rotation_parameters_applied,1,R7,ported,r2-cli::bin/r2 logging::tests::test_rotation_parameters_applied ; r2-cli::bin/r2 logging::tests::zero_max_bytes_or_backups_never_rotate ; r2-cli::e2e_repl log_files_follow_the_python_rules,
+tests/unit/console/test_logging_setup.py::test_setup_is_idempotent,1,R7,ported,r2-cli::bin/r2 logging::tests::test_setup_is_idempotent,
+tests/unit/console/test_logging_setup.py::test_unwritable_log_path_raises_config_error,1,R7,ported,r2-cli::bin/r2 logging::tests::test_unwritable_log_path_raises_config_error ; r2-cli::bin/r2 logging::tests::missing_parent_directories_are_created ; r2-cli::e2e_repl log_files_follow_the_python_rules,
+tests/unit/console/test_logging_setup.py::test_redacting_filter_leaves_clean_messages_untouched,1,R7,ported,r2-cli::bin/r2 logging::tests::test_redacting_filter_leaves_clean_messages_untouched,
+tests/unit/console/test_parser.py::test_tokenize_table,17,R7,ported,r2-console tests::parser::test_tokenize_table ; r2-console tests::parser::tokenize_closing_quote_rules_and_token_ends ; r2-console tests::parser::tokenize_positions_are_byte_offsets,
+tests/unit/console/test_parser.py::test_tokenize_unterminated_quote_caret_at_opening_quote,1,R7,ported,r2-console tests::parser::test_tokenize_unterminated_quote_caret_at_opening_quote,
+tests/unit/console/test_parser.py::test_line_is_complete,7,R7,ported,r2-console tests::parser::test_line_is_complete,
+tests/unit/console/test_parser.py::test_bind_positionals_in_order_with_quoted_flags,1,R7,ported,r2-console tests::parser::test_bind_positionals_in_order_with_quoted_flags,
+tests/unit/console/test_parser.py::test_bind_named_split_at_first_equals,1,R7,ported,r2-console tests::parser::test_bind_named_split_at_first_equals,
+tests/unit/console/test_parser.py::test_bind_flag_option_consumes_no_value,1,R7,ported,r2-console tests::parser::test_bind_flag_option_consumes_no_value,
+tests/unit/console/test_parser.py::test_bind_value_option_consumes_next_token,1,R7,ported,r2-console tests::parser::test_bind_value_option_consumes_next_token,
+tests/unit/console/test_parser.py::test_bind_option_value_may_be_quoted,1,R7,ported,r2-console tests::parser::test_bind_option_value_may_be_quoted,
+tests/unit/console/test_parser.py::test_bind_option_value_may_be_option_shaped,1,R7,ported,r2-console tests::parser::test_bind_option_value_may_be_option_shaped,
+tests/unit/console/test_parser.py::test_bind_quoted_tokens_never_classified,1,R7,ported,r2-console tests::parser::test_bind_quoted_tokens_never_classified,
+tests/unit/console/test_parser.py::test_bind_mixed_order_preserved,1,R7,ported,r2-console tests::parser::test_bind_mixed_order_preserved,
+tests/unit/console/test_parser.py::test_bind_missing_option_value_caret,1,R7,ported,r2-console tests::parser::test_bind_missing_option_value_caret ; r2-console tests::parser::bind_error_line_is_the_full_original_input,
+tests/unit/console/test_parser.py::test_bind_empty_option_name_caret,1,R7,ported,r2-console tests::parser::test_bind_empty_option_name_caret,
+tests/unit/console/test_parser.py::test_bind_empty_parameter_name_caret,1,R7,ported,r2-console tests::parser::test_bind_empty_parameter_name_caret,
+tests/unit/console/test_parser.py::test_bind_duplicate_named_last_wins,1,R7,ported,r2-console tests::parser::test_bind_duplicate_named_last_wins,
+tests/unit/console/test_parser.py::test_bind_pem_paste_inside_quotes_is_one_positional,1,R7,ported,r2-console tests::parser::test_bind_pem_paste_inside_quotes_is_one_positional,
 tests/unit/console/test_parser.py::test_token_dataclass_is_frozen,1,R7,n/a:frozen-dataclass,,FrozenInstanceError/AttributeError on assignment; Rust value objects are immutable behind & (no interior mutability)
 tests/unit/console/test_providers_cmd.py::test_providers_table_lists_types_and_states,1,R8,todo,,
 tests/unit/console/test_providers_cmd.py::test_providers_logged_out_state,1,R8,todo,,
@@ -410,23 +410,23 @@ tests/unit/console/test_render.py::test_caret_text_clamps_out_of_range_pos,1,R1,
 tests/unit/console/test_render.py::test_hex_panel_groups_and_length,1,R1,ported,r2-core::render test_hex_panel_groups_and_length ; r2-core::render hex_panel_matches_rich_vectors,renderer moved to R1 (spec §4.1.1): r2_core::render::hex_panel
 tests/unit/console/test_render.py::test_hex_panel_empty,1,R1,ported,r2-core::render test_hex_panel_empty ; r2-core::render hex_panel_matches_rich_vectors,renderer moved to R1 (spec §4.1.1): r2_core::render::hex_panel
 tests/unit/console/test_render.py::test_make_table_cells_are_stringified,1,R1,ported,r2-core::render test_make_table_cells_are_stringified ; r2-core::render table_layout_is_simple_head,renderer moved to R1 (spec §4.1.1): r2_core::render::make_table
-tests/unit/console/test_render.py::test_suggest_close_match_and_none,1,R7,todo,,
-tests/unit/console/test_repl.py::test_help_then_exit,1,R7,todo,,
-tests/unit/console/test_repl.py::test_exit_via_repl_exit_ends_the_session,1,R7,todo,,
-tests/unit/console/test_repl.py::test_quit_is_an_alias,1,R7,todo,,
-tests/unit/console/test_repl.py::test_ctrl_d_exits_cleanly,1,R7,todo,,
-tests/unit/console/test_repl.py::test_unknown_command_gets_suggestion,1,R7,todo,,
-tests/unit/console/test_repl.py::test_quoted_multiline_paste_binds_one_positional,1,R7,todo,,
-tests/unit/console/test_repl.py::test_empty_lines_are_ignored,1,R7,todo,,
-tests/unit/console/test_repl.py::test_user_abort_renders_single_aborted_line,1,R7,todo,,
-tests/unit/console/test_repl.py::test_parse_error_echoes_caret,1,R7,todo,,
-tests/unit/console/test_repl.py::test_unexpected_error_short_message_and_log_pointer,1,R7,todo,,
-tests/unit/console/test_repl.py::test_unexpected_error_with_debug_prints_traceback,1,R7,todo,,D4: Rust backtrace instead of a Python traceback
-tests/unit/console/test_repl.py::test_console_error_rendered_only_at_repl_boundary,1,R7,todo,,
+tests/unit/console/test_render.py::test_suggest_close_match_and_none,1,R7,ported,r2-console tests::render::test_suggest_close_match_and_none,
+tests/unit/console/test_repl.py::test_help_then_exit,1,R7,ported,r2-console tests::repl::test_help_then_exit ; r2-cli::e2e_repl help_then_exit_transcript,
+tests/unit/console/test_repl.py::test_exit_via_repl_exit_ends_the_session,1,R7,ported,r2-console tests::repl::test_exit_via_repl_exit_ends_the_session,
+tests/unit/console/test_repl.py::test_quit_is_an_alias,1,R7,ported,r2-console tests::repl::test_quit_is_an_alias,
+tests/unit/console/test_repl.py::test_ctrl_d_exits_cleanly,1,R7,ported,r2-console tests::repl::test_ctrl_d_exits_cleanly ; r2-cli::e2e_repl ctrl_d_at_the_prompt_exits_zero ; r2-console tests::repl::eof_in_a_continuation_leaves_the_repl,
+tests/unit/console/test_repl.py::test_unknown_command_gets_suggestion,1,R7,ported,r2-console tests::repl::test_unknown_command_gets_suggestion ; r2-cli::e2e_repl unknown_command_suggestion_transcript,
+tests/unit/console/test_repl.py::test_quoted_multiline_paste_binds_one_positional,1,R7,ported,r2-console tests::repl::test_quoted_multiline_paste_binds_one_positional ; r2-cli::e2e_repl quoted_multiline_pem_paste_is_one_token,
+tests/unit/console/test_repl.py::test_empty_lines_are_ignored,1,R7,ported,r2-console tests::repl::test_empty_lines_are_ignored,
+tests/unit/console/test_repl.py::test_user_abort_renders_single_aborted_line,1,R7,ported,r2-console tests::repl::test_user_abort_renders_single_aborted_line ; r2-console tests::repl::ctrl_c_at_the_prompt_prints_aborted_and_reprompts ; r2-console tests::repl::ctrl_c_in_a_continuation_aborts_the_whole_buffer ; r2-console tests::repl::a_user_abort_inside_a_prompt_flow_is_aborted_too,
+tests/unit/console/test_repl.py::test_parse_error_echoes_caret,1,R7,ported,r2-console tests::repl::test_parse_error_echoes_caret ; r2-cli::e2e_repl parse_error_echoes_caret_transcript,
+tests/unit/console/test_repl.py::test_unexpected_error_short_message_and_log_pointer,1,R7,ported,r2-console tests::repl::test_unexpected_error_short_message_and_log_pointer ; r2-console tests::repl::unexpected_error_without_a_hook_uses_the_payload ; r2-cli::bin/r2 tests::a_panic_inside_a_command_renders_unexpected_error_and_is_logged ; r2-cli::bin/r2 tests::the_panic_hook_records_message_location_and_backtrace,
+tests/unit/console/test_repl.py::test_unexpected_error_with_debug_prints_traceback,1,R7,ported,r2-console tests::repl::test_unexpected_error_with_debug_prints_traceback ; r2-cli::bin/r2 tests::debug_prints_the_backtrace_before_the_panel,D4: Rust backtrace instead of a Python traceback | R7: Rust backtrace instead of a Python traceback (§11 D4)
+tests/unit/console/test_repl.py::test_console_error_rendered_only_at_repl_boundary,1,R7,ported,r2-console tests::repl::test_console_error_rendered_only_at_repl_boundary,
 tests/unit/console/test_repl.py::test_repl_exit_is_not_a_console_error,1,R7,n/a:exception-hierarchy,,"issubclass check; r2 exit is Flow::Exit, not an error, by type"
-tests/unit/console/test_repl.py::test_scripted_io_drives_the_repl_fallback_read_path,1,R7,todo,,
-tests/unit/console/test_repl.py::test_scripted_io_multiline_continuation_prompt,1,R7,todo,,
-tests/unit/console/test_repl.py::test_exit_command_raises_repl_exit_directly,1,R7,todo,,Rust: exit returns Ok(Flow::Exit)
+tests/unit/console/test_repl.py::test_scripted_io_drives_the_repl_fallback_read_path,1,R7,ported,r2-console tests::repl::test_scripted_io_drives_the_repl_fallback_read_path ; r2-console tests::repl::the_interrupt_flag_is_reset_before_every_dispatch,
+tests/unit/console/test_repl.py::test_scripted_io_multiline_continuation_prompt,1,R7,ported,r2-console tests::repl::test_scripted_io_multiline_continuation_prompt,
+tests/unit/console/test_repl.py::test_exit_command_raises_repl_exit_directly,1,R7,ported,r2-console tests::repl::test_exit_command_raises_repl_exit_directly,Rust: exit returns Ok(Flow::Exit)
 tests/unit/console/test_template_editor.py::test_ok_returns_copy_and_leaves_input_untouched,1,R10,todo,,
 tests/unit/console/test_template_editor.py::test_cancel_raises_user_abort,1,R10,todo,,
 tests/unit/console/test_template_editor.py::test_abort_synonym_raises_user_abort_after_edits,1,R10,todo,,
@@ -1021,16 +1021,16 @@ tests/unit/test_l13_hardening.py::test_encrypted_traditional_pem_paste_keeps_hea
 tests/unit/test_l13_hardening.py::test_encrypted_traditional_pem_survives_indented_paste,1,R6,ported,r2-core::keyparse encrypted_traditional_pem_survives_indented_paste,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; decode_data (R1) + parse_key_material (R6)
 tests/unit/test_l13_hardening.py::test_headerless_pem_rewrap_unchanged_by_header_support,1,R1,ported,r2-core::codec test_headerless_pem_rewrap_unchanged_by_header_support,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; codec
 tests/unit/test_l13_hardening.py::test_headers_without_body_raise_codec_error,1,R1,ported,r2-core::codec test_headers_without_body_raise_codec_error,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; codec
-tests/unit/test_l13_hardening.py::test_complete_paths_lists_directory,1,R7,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; completer::complete_paths
-tests/unit/test_l13_hardening.py::test_complete_paths_partial_and_hidden,1,R7,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; completer::complete_paths
-tests/unit/test_l13_hardening.py::test_complete_paths_never_raises,1,R7,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; completer::complete_paths
+tests/unit/test_l13_hardening.py::test_complete_paths_lists_directory,1,R7,ported,r2-console tests::completer::test_complete_paths_lists_directory ; r2-console tests::completer::complete_paths_keeps_the_typed_directory_part_and_expands_tilde,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; completer::complete_paths
+tests/unit/test_l13_hardening.py::test_complete_paths_partial_and_hidden,1,R7,ported,r2-console tests::completer::test_complete_paths_partial_and_hidden,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; completer::complete_paths
+tests/unit/test_l13_hardening.py::test_complete_paths_never_raises,1,R7,ported,r2-console tests::completer::test_complete_paths_never_raises,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; completer::complete_paths
 tests/unit/test_l13_hardening.py::test_crypto_file_options_complete_paths,1,R9,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; crypto command completion
 tests/unit/test_l13_hardening.py::test_export_and_csr_path_positionals_complete,1,R8,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; export/csr completion
 tests/unit/test_l13_hardening.py::test_load_file_option_completes_paths,1,R8,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; load --file completion
 tests/unit/test_l13_hardening.py::test_public_half_fallback_prefers_public_then_cert,1,R9,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; verify fallback
 tests/unit/test_l13_hardening.py::test_public_half_fallback_honors_key_id,1,R9,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; verify fallback
 tests/unit/test_l13_hardening.py::test_verify_on_keypair_ref_offers_mechanisms_and_verifies,1,R9,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; verify fallback
-tests/unit/test_l13_hardening.py::test_prompttoolkitio_print_does_not_eat_markup_lookalikes,1,R7,todo,,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; rich markup hazard: keep as a verbatim-render assertion on the r2 renderer (D1)
+tests/unit/test_l13_hardening.py::test_prompttoolkitio_print_does_not_eat_markup_lookalikes,1,R7,ported,r2-console tests::io::test_prompttoolkitio_print_does_not_eat_markup_lookalikes,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; rich markup hazard: keep as a verbatim-render assertion on the r2 renderer (D1)
 tests/unit/test_l13_hardening.py::test_make_table_cells_render_verbatim,1,R1,ported,r2-core::render test_make_table_cells_render_verbatim,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; rich markup hazard: '[x]'/'[ ]' cells must render verbatim (D1)
 tests/unit/test_l13_hardening.py::test_hex_panel_title_renders_verbatim,1,R1,ported,r2-core::render test_hex_panel_title_renders_verbatim,L13 glue-fix regression (PLAN R13 card lists the file); assigned to the loop owning the code under test; rich markup hazard: panel title renders verbatim (D1)
 tests/unit/test_memory_objects.py::test_hmac_matches_stdlib_for_every_hash,5,R4,ported,r2-memory::memory_objects test_hmac_matches_stdlib_for_every_hash,
@@ -1154,30 +1154,30 @@ tests/unit/test_ops_registry.py::TestLoadCustom::test_raw_param_struct_appends_m
 tests/unit/test_ops_registry.py::TestLoadCustom::test_explicit_provider_types_pass_through,1,R3,ported,r2-ops::ops_registry test_explicit_provider_types_pass_through,
 tests/unit/test_ops_registry.py::TestLoadCustom::test_duplicate_custom_id_raises_config_error,1,R3,ported,r2-ops::ops_registry test_duplicate_custom_id_raises_config_error,
 tests/unit/test_ops_registry.py::TestLoadCustom::test_custom_op_available_only_where_advertised,1,R3,ported,r2-ops::ops_registry test_custom_op_available_only_where_advertised,
-tests/unit/test_params.py::test_inline_values_parse_without_prompting,1,R7,todo,,
-tests/unit/test_params.py::test_prompted_value_equals_inline_value,1,R7,todo,,
-tests/unit/test_params.py::test_unknown_given_name_lists_valid_names,1,R7,todo,,
-tests/unit/test_params.py::test_optional_defaults_apply_without_prompting,1,R7,todo,,
-tests/unit/test_params.py::test_default_from_mirrors_earlier_param,1,R7,todo,,
-tests/unit/test_params.py::test_default_from_loses_to_explicit_given,1,R7,todo,,
-tests/unit/test_params.py::test_default_from_defaults_chain_from_defaults,1,R7,todo,,
-tests/unit/test_params.py::test_default_from_referencing_unresolved_param_is_a_spec_bug,1,R7,todo,,
-tests/unit/test_params.py::test_required_param_prompts_and_reprompts_until_valid,1,R7,todo,,
-tests/unit/test_params.py::test_ctrl_c_in_prompt_raises_user_abort,1,R7,todo,,
-tests/unit/test_params.py::test_eof_in_prompt_raises_user_abort,1,R7,todo,,
-tests/unit/test_params.py::test_int_accepts_decimal_and_negative_only,1,R7,todo,,
-tests/unit/test_params.py::test_bool_accepted_spellings,8,R7,todo,,
-tests/unit/test_params.py::test_bool_rejects_other_spellings,1,R7,todo,,
-tests/unit/test_params.py::test_enum_valid_invalid_and_choices_hint,1,R7,todo,,
-tests/unit/test_params.py::test_enum_prompt_reprompts_and_receives_choices,1,R7,todo,,
-tests/unit/test_params.py::test_str_kept_verbatim,1,R7,todo,,
-tests/unit/test_params.py::test_bytes_hex_base64_and_prefix,1,R7,todo,,
-tests/unit/test_params.py::test_bytes_exact_length_enforced,1,R7,todo,,
-tests/unit/test_params.py::test_bytes_codec_failure_becomes_param_error,1,R7,todo,,
-tests/unit/test_params.py::test_keyref_resolves_to_key_info,1,R7,todo,,
-tests/unit/test_params.py::test_keyref_failures_become_param_errors,3,R7,todo,,
-tests/unit/test_params.py::test_validate_callback_runs_for_inline_and_prompted,1,R7,todo,,
-tests/unit/test_params.py::test_resolved_dict_covers_every_declared_param,1,R7,todo,,
+tests/unit/test_params.py::test_inline_values_parse_without_prompting,1,R7,ported,r2-ops::params test_inline_values_parse_without_prompting ; r2-ops::params parse_value_is_the_shared_parser,
+tests/unit/test_params.py::test_prompted_value_equals_inline_value,1,R7,ported,r2-ops::params test_prompted_value_equals_inline_value,
+tests/unit/test_params.py::test_unknown_given_name_lists_valid_names,1,R7,ported,r2-ops::params test_unknown_given_name_lists_valid_names,
+tests/unit/test_params.py::test_optional_defaults_apply_without_prompting,1,R7,ported,r2-ops::params test_optional_defaults_apply_without_prompting,
+tests/unit/test_params.py::test_default_from_mirrors_earlier_param,1,R7,ported,r2-ops::params test_default_from_mirrors_earlier_param,
+tests/unit/test_params.py::test_default_from_loses_to_explicit_given,1,R7,ported,r2-ops::params test_default_from_loses_to_explicit_given,
+tests/unit/test_params.py::test_default_from_defaults_chain_from_defaults,1,R7,ported,r2-ops::params test_default_from_defaults_chain_from_defaults,
+tests/unit/test_params.py::test_default_from_referencing_unresolved_param_is_a_spec_bug,1,R7,ported,r2-ops::params test_default_from_referencing_unresolved_param_is_a_spec_bug ; r2-ops::params default_from_of_a_resolved_but_absent_param_stays_absent,
+tests/unit/test_params.py::test_required_param_prompts_and_reprompts_until_valid,1,R7,ported,r2-ops::params test_required_param_prompts_and_reprompts_until_valid,
+tests/unit/test_params.py::test_ctrl_c_in_prompt_raises_user_abort,1,R7,ported,r2-ops::params test_ctrl_c_in_prompt_raises_user_abort,R7: ScriptedIo CTRL_C sentinel (the IO itself returns UserAbort in r2)
+tests/unit/test_params.py::test_eof_in_prompt_raises_user_abort,1,R7,ported,r2-ops::params test_eof_in_prompt_raises_user_abort,R7: ScriptedIo CTRL_D sentinel
+tests/unit/test_params.py::test_int_accepts_decimal_and_negative_only,1,R7,ported,r2-ops::params test_int_accepts_decimal_and_negative_only,
+tests/unit/test_params.py::test_bool_accepted_spellings,8,R7,ported,r2-ops::params test_bool_accepted_spellings,
+tests/unit/test_params.py::test_bool_rejects_other_spellings,1,R7,ported,r2-ops::params test_bool_rejects_other_spellings,
+tests/unit/test_params.py::test_enum_valid_invalid_and_choices_hint,1,R7,ported,r2-ops::params test_enum_valid_invalid_and_choices_hint,
+tests/unit/test_params.py::test_enum_prompt_reprompts_and_receives_choices,1,R7,ported,r2-console tests::io::test_enum_prompt_reprompts_and_receives_choices ; r2-ops::params test_enum_prompt_reprompts_and_receives_choices,R7: choices asserted at the LineReader through ParamResolver+LineIo (r2-console tests::io)
+tests/unit/test_params.py::test_str_kept_verbatim,1,R7,ported,r2-ops::params test_str_kept_verbatim,
+tests/unit/test_params.py::test_bytes_hex_base64_and_prefix,1,R7,ported,r2-ops::params test_bytes_hex_base64_and_prefix,
+tests/unit/test_params.py::test_bytes_exact_length_enforced,1,R7,ported,r2-ops::params test_bytes_exact_length_enforced,
+tests/unit/test_params.py::test_bytes_codec_failure_becomes_param_error,1,R7,ported,r2-ops::params test_bytes_codec_failure_becomes_param_error,
+tests/unit/test_params.py::test_keyref_resolves_to_key_info,1,R7,ported,r2-ops::params test_keyref_resolves_to_key_info,
+tests/unit/test_params.py::test_keyref_failures_become_param_errors,3,R7,ported,r2-ops::params test_keyref_failures_become_param_errors ; r2-ops::params keyref_user_abort_propagates_unchanged,
+tests/unit/test_params.py::test_validate_callback_runs_for_inline_and_prompted,1,R7,ported,r2-ops::params test_validate_callback_runs_for_inline_and_prompted,
+tests/unit/test_params.py::test_resolved_dict_covers_every_declared_param,1,R7,ported,r2-ops::params test_resolved_dict_covers_every_declared_param,R7: r2: a None-default param is ABSENT (spec §4.6.1)
 tests/unit/test_provider_base.py::TestProviderDefaults::test_list_tokens_defaults_to_empty,1,R3,ported,r2-provider::provider_base test_list_tokens_defaults_to_empty,
 tests/unit/test_provider_base.py::TestProviderDefaults::test_login_default_raises_unsupported,1,R3,ported,r2-provider::provider_base test_login_default_raises_unsupported,
 tests/unit/test_provider_base.py::TestProviderDefaults::test_logout_default_is_noop,1,R3,ported,r2-provider::provider_base test_logout_default_is_noop,
@@ -1218,8 +1218,8 @@ tests/unit/test_smoke.py::test_subpackage_imports,9,R0,n/a:python-import-mechani
 tests/unit/test_smoke.py::test_version_string,1,R0,ported,r2-cli::smoke test_version_string,R0 card: test_smoke (version part) | CARGO_PKG_VERSION is a non-empty MAJOR.MINOR.PATCH
 tests/unit/test_smoke.py::test_version_matches_distribution_metadata,1,R0,ported,r2-cli::smoke test_version_matches_distribution_metadata,Rust: `r2 --version` prints CARGO_PKG_VERSION (workspace version) | [workspace.package] version == CARGO_PKG_VERSION == `r2 --version` output
 tests/unit/test_smoke.py::test_main_version_flag,1,R0,ported,r2-cli::smoke test_main_version_flag,"R0 card: r2-cli stub --version | assert_cmd: `r2 --version` exits 0, stdout exactly ""r2 <version>\n"""
-tests/unit/test_smoke.py::test_main_help_flag_lists_cli_options,1,R7,todo,,clap --help lists --version/--config/--debug
-tests/unit/test_smoke.py::test_main_config_flag_with_missing_file_is_a_hard_error,1,R7,todo,,
+tests/unit/test_smoke.py::test_main_help_flag_lists_cli_options,1,R7,ported,r2-cli::e2e_repl test_main_help_flag_lists_cli_options ; r2-cli::e2e_repl usage_errors_exit_2 ; r2-cli::bin/r2 args::tests::flags_parse,clap --help lists --version/--config/--debug
+tests/unit/test_smoke.py::test_main_config_flag_with_missing_file_is_a_hard_error,1,R7,ported,r2-cli::e2e_repl test_main_config_flag_with_missing_file_is_a_hard_error,
 tests/unit/test_transfer.py::TestAesTransport::test_sensitive_but_extractable_key_copies_via_wrap,1,R10,todo,,
 tests/unit/test_transfer.py::TestAesTransport::test_transport_key_destroyed_on_success,1,R10,todo,,
 tests/unit/test_transfer.py::TestAesTransport::test_transport_key_destroyed_when_unwrap_fails,1,R10,todo,,
