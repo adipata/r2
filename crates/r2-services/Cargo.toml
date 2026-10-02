@@ -26,3 +26,4 @@ tracing = { workspace = true }
 r2-testkit = { workspace = true }
 r2-memory = { workspace = true }
 r2-pkcs11 = { workspace = true }
+tempfile = { workspace = true }
