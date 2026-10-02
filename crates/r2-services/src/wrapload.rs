@@ -508,6 +508,9 @@ pub fn load_wrapped(
     let mut request = UnwrapRequest::new(job.result_algorithm, job.result_class, job.label);
     request.key_id = job.key_id;
     request.template = template;
+    // §11 D13: a Ctrl-C raised while the editor was open (plain IO swallows SIGINT) must
+    // never be followed by C_UnwrapKey.
+    r2_core::runtime::check_interrupt()?;
     let info = provider.unwrap_key(job.kek, &mech, job.wrapped, &request)?;
     tracing::info!(
         "loaded wrapped {}-byte blob into {} via {} (KEK {})",

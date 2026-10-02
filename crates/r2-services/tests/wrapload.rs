@@ -750,6 +750,47 @@ fn test_load_wrapped_opens_the_editor_for_pkcs11_seeded_from_the_result() {
     );
 }
 
+/// Resets the process-global Ctrl-C flag even when an assertion fails.
+struct ResetInterrupt;
+
+impl Drop for ResetInterrupt {
+    fn drop(&mut self) {
+        r2_core::runtime::reset_interrupt();
+    }
+}
+
+#[test]
+fn load_wrapped_checks_interrupt_between_the_editor_and_unwrap() {
+    // §11 D13: a Ctrl-C raised while the §5.12 editor is open never reaches C_UnwrapKey.
+    let _lock = r2_testkit::global_state_lock();
+    let _reset = ResetInterrupt;
+    r2_core::runtime::reset_interrupt();
+    let provider = hsm();
+    let kek = import_aes(provider.as_ref(), "aeskek");
+    let editor = RecordingEditor::with(|template| {
+        r2_core::runtime::request_interrupt();
+        Ok(template)
+    });
+    let templates = make_templates();
+    let entry = entry_for("kwp");
+    let err = wrapload::load_wrapped(
+        provider.as_ref(),
+        job(
+            &kek,
+            &entry,
+            &[0; 40],
+            (KeyAlgorithm::Aes, KeyClass::Secret),
+            "unwrapped",
+        ),
+        &seeding(&editor, &templates),
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::UserAbort);
+    assert_eq!(err.message, "interrupted");
+    assert_eq!(editor.titles().len(), 1);
+    assert!(calls_of(&provider, "unwrap_key").is_empty());
+}
+
 #[test]
 fn test_load_wrapped_skips_the_editor_for_memory_targets() {
     let provider = make_provider("mem", "memory");
@@ -1134,11 +1175,18 @@ fn test_export_and_wrap_refuse_unmodelled_key_types() {
     assert!(err.message.contains("not supported"), "{}", err.message);
     let err = wrapload::refuse_non_wrappable(&info).unwrap_err();
     assert_eq!(err.kind, ErrorKind::UnsupportedOperation);
-    assert!(
-        err.message
-            .ends_with("is not supported by r2 and cannot be wrapped"),
-        "{}",
-        err.message
+    assert_eq!(
+        err.message,
+        "key type unknown of 'mem:des3#01' is not supported by r2 and cannot be wrapped"
+    );
+    // a PKCS#11 object carries its CKK symbol, rendered verbatim (c2's str())
+    let mut des3 = info.clone();
+    des3.attributes
+        .insert("CKA_KEY_TYPE".into(), AttrValue::Symbol("CKK_DES3".into()));
+    let err = wrapload::refuse_non_wrappable(&des3).unwrap_err();
+    assert_eq!(
+        err.message,
+        "key type CKK_DES3 of 'mem:des3#01' is not supported by r2 and cannot be wrapped"
     );
     assert_eq!(
         hint(&err),

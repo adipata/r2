@@ -400,8 +400,8 @@ fn test_load_wrapped_aes_under_an_rsa_kek_softhsm() {
     s.ok(&format!("export hsm:{oa} {}", oaep_out.display()));
     s.ok(&format!("delete hsm:{p1}"));
     s.ok(&format!("delete hsm:{oa}"));
-    s.ok(&format!("delete hsm:{pair}:priv"));
-    s.ok(&format!("delete hsm:{pair}:pub"));
+    s.ok(&format!("delete hsm:{pair}"));
+    s.ok(&format!("delete hsm:{pair}")); // the public half
     assert_eq!(read(&pkcs1_out), TARGET_BYTES);
     assert_eq!(read(&oaep_out), TARGET_BYTES);
 }
@@ -713,8 +713,8 @@ fn rsa_public_kek_wraps_on_the_token_softhsm() {
         Some(format!("wrapping uses the public half: `--kek {pair}:pub`").as_str())
     );
     s.ok(&format!("delete hsm:{src}"));
-    s.ok(&format!("delete hsm:{pair}:priv"));
-    s.ok(&format!("delete hsm:{pair}:pub"));
+    s.ok(&format!("delete hsm:{pair}"));
+    s.ok(&format!("delete hsm:{pair}")); // the public half
 }
 
 #[test]
@@ -791,8 +791,8 @@ fn test_load_wrapped_aes_under_an_rsa_kek_with_template_file_softhsm() {
     s.ok(&format!("export hsm:{oa} {}", oaep_out.display()));
     s.ok(&format!("delete hsm:{p1}"));
     s.ok(&format!("delete hsm:{oa}"));
-    s.ok(&format!("delete hsm:{pair}:priv"));
-    s.ok(&format!("delete hsm:{pair}:pub"));
+    s.ok(&format!("delete hsm:{pair}"));
+    s.ok(&format!("delete hsm:{pair}")); // the public half
     assert_eq!(read(&pkcs1_out), TARGET_BYTES);
     assert_eq!(read(&oaep_out), TARGET_BYTES);
 }
