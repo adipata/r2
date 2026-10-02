@@ -271,6 +271,27 @@ fn row_token_over_4300_digits_is_out_of_range() {
 }
 
 #[test]
+fn row_token_over_4300_digits_is_out_of_range_even_with_a_small_value() {
+    // §11 D18: leading zeros keep the value small, but c2's `int()` still hit the digit
+    // limit (unexpected-error path) and changed nothing — neither the toggle (row 3,
+    // CKA_TOKEN) nor the `=value` form (row 5, CKA_VALUE_LEN) may edit the row
+    let toggle = format!("{}3", "0".repeat(4300));
+    let set = format!("{}5=5", "0".repeat(4300));
+    let zeros = "0".repeat(4301);
+    let (editor, io) = make_editor(&[&toggle, &set, &zeros, "ok"]);
+    let result = editor.edit(make_template(), "t").unwrap();
+    assert_eq!(
+        errors(&io),
+        [
+            "error: row 3 is out of range (1..7)",
+            "error: row 5 is out of range (1..7)",
+            "error: row 0 is out of range (1..7)",
+        ]
+    );
+    assert_eq!(result, make_template());
+}
+
+#[test]
 fn str_values_keep_the_raw_text_after_the_equals_sign() {
     let result = edit(&["7=  two words = x ", "ok"]).unwrap();
     // the line is stripped first; the value text after the first '=' is kept verbatim

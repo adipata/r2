@@ -246,15 +246,25 @@ fn row<'a>(template: &'a mut KeyTemplate, token: &str) -> Result<(usize, &'a mut
         );
     }
     let rows = template.attrs.len();
-    let index = token.parse::<u64>().ok();
+    // CPython's int(str) digit limit: c2 raised (unexpected-error path) and changed nothing;
+    // r2 refuses it as out of range (§11 D18) — also when leading zeros keep the value small.
+    // py_isdigit is ASCII-only, so bytes are digits.
+    let index = if token.len() > PY_INT_MAX_STR_DIGITS {
+        None
+    } else {
+        token.parse::<u64>().ok()
+    };
     match index.and_then(|i| usize::try_from(i).ok()) {
         Some(index) if (1..=rows).contains(&index) => Ok((index, &mut template.attrs[index - 1])),
         _ => {
-            // Python int(): the decimal value — leading zeros dropped (u64 overflow: the
-            // token with its leading zeros stripped).
+            // Python int(): the decimal value — leading zeros dropped (u64 overflow or the
+            // digit limit: the token with its leading zeros stripped).
             let shown = match index {
                 Some(index) => index.to_string(),
-                None => token.trim_start_matches('0').to_owned(),
+                None => match token.trim_start_matches('0') {
+                    "" => "0".to_owned(),
+                    digits => digits.to_owned(),
+                },
             };
             Err(ConsoleError::param(
                 format!("row {shown} is out of range (1..{rows})"),

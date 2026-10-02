@@ -24,7 +24,7 @@ use r2_core::template::{AttrKind, AttrValue, KeyTemplate, TemplateAttr};
 use r2_provider::{KeySelector, MechanismInvocation, Provider, UnwrapRequest, WrapOptions};
 use r2_services::templatefile::EditorSeeding;
 use r2_services::transfer::{TRANSPORT_PREFIX, copy_key};
-use r2_testkit::{FakeHooks, FakeProvider, RecordingEditor, ScriptedIo, global_state_lock};
+use r2_testkit::{FakeHooks, FakeProvider, RecordingEditor, ScriptedIo};
 use secrecy::SecretString;
 
 const AES_BYTES: [u8; 32] = {
@@ -1119,77 +1119,9 @@ fn test_copy_refuses_unmodelled_key_types() {
 }
 
 // ---------------------------------------------------------------------------------------
-// §11 D13 step boundaries and the cleanup guard
+// §11 D13 cleanup guard (the Ctrl-C step-boundary tests live in transfer_interrupt.rs: the
+// interrupt flag is process-global, so they get their own test binary)
 // ---------------------------------------------------------------------------------------
-
-/// Sets the Ctrl-C flag when a chosen method runs (the flag is then seen at the next
-/// step boundary).
-struct InterruptOn(&'static str);
-impl FakeHooks for InterruptOn {
-    fn wrap_key(
-        &self,
-        _next: &dyn Provider,
-        _wrapping_key: &KeyInfo,
-        _mech: &MechanismInvocation,
-        _target: &KeyInfo,
-        _options: &WrapOptions,
-    ) -> Option<Result<Vec<u8>>> {
-        if self.0 == "wrap_key" {
-            r2_core::runtime::request_interrupt();
-        }
-        None
-    }
-    fn export_key(&self, _next: &dyn Provider, _key: &KeyInfo) -> Option<Result<KeyMaterial>> {
-        if self.0 == "export_key" {
-            r2_core::runtime::request_interrupt();
-        }
-        None
-    }
-}
-
-#[test]
-fn ctrl_c_between_wrap_and_unwrap_aborts_and_still_destroys_the_transport_keys() {
-    let _lock = global_state_lock();
-    r2_core::runtime::reset_interrupt();
-    let src = make_hsm("srchsm").with_hooks(Rc::new(InterruptOn("wrap_key")));
-    let dst = make_hsm("dsthsm");
-    let key = import_aes(&src, "aeskey", true, true);
-    let editor = RecordingEditor::new();
-    let result = Run::new().editor(&editor).copy(&src, &key, &dst);
-    r2_core::runtime::reset_interrupt();
-    let err = result.unwrap_err();
-    assert_eq!(err.kind, ErrorKind::UserAbort);
-    assert!(editor.titles().is_empty()); // stopped before the editor / unwrap
-    assert!(called(&dst, "unwrap_key").is_empty());
-    assert!(transport_labels(&src).is_empty() && transport_labels(&dst).is_empty());
-}
-
-#[test]
-fn ctrl_c_after_a_plain_export_aborts_before_the_destination_is_touched() {
-    let _lock = global_state_lock();
-    r2_core::runtime::reset_interrupt();
-    let src = FakeProvider::new("m1").with_hooks(Rc::new(InterruptOn("export_key")));
-    let dst = make_hsm("dsthsm");
-    let key = import_aes(&src, "aeskey", false, true);
-    let result = do_copy(&src, &key, &dst);
-    r2_core::runtime::reset_interrupt();
-    assert_eq!(result.unwrap_err().kind, ErrorKind::UserAbort);
-    assert!(dst.calls().is_empty());
-}
-
-#[test]
-fn ctrl_c_before_the_ladder_creates_nothing() {
-    let _lock = global_state_lock();
-    r2_core::runtime::reset_interrupt();
-    let (src, dst) = (make_hsm("srchsm"), make_hsm("dsthsm"));
-    let key = import_aes(&src, "aeskey", true, true);
-    r2_core::runtime::request_interrupt();
-    let result = do_copy(&src, &key, &dst);
-    r2_core::runtime::reset_interrupt();
-    assert_eq!(result.unwrap_err().kind, ErrorKind::UserAbort);
-    assert_eq!(called(&src, "import_key").len(), 1);
-    assert!(dst.calls().is_empty());
-}
 
 /// delete_key fails: a provider error is logged and ignored (c2 `_destroy_quietly`), a
 /// UserAbort is never swallowed (§4.2) and replaces the copy's own outcome.
