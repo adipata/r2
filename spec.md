@@ -372,7 +372,8 @@ agreement). `S0` documents, `R0`..`R15` (incl. `R5a`/`R5b`) are the loops of PLA
 ```
 Cargo.toml                    workspace manifest: members, [workspace.package],
                               [workspace.dependencies], [workspace.lints]          R0
-                              ...except the [profile.release] table               R12
+                              ...except the [profile.release] table and the
+                              [workspace.dependencies] openssl-src line            R12
 Cargo.lock                    R0 creates; any loop may let cargo update it, but only
                               for dependencies already declared in §4.1.4
 rust-toolchain.toml           pinned stable 1.94.1 (= MSRV), components rustfmt+clippy R0
@@ -644,8 +645,10 @@ another loop's test file, loops.md rule 6):
    them after R5a merged.
 5. `crates/r2-core/src/catalog.rs`: R0 writes the table verbatim from §4.5.5; R5a owns it.
 6. Sub-file ownerships inside R0-owned manifests: R12 owns the root `[profile.release]`
-   table and the `vendored-openssl` lines of the `[features]` tables of `r2-cli` and
-   `r2-core`. Any loop owning files in a crate may add a dependency line (normal or dev) to
+   table, the `vendored-openssl` lines of the `[features]` tables of `r2-cli` and
+   `r2-core`, the root `[workspace.dependencies]` `openssl-src` line, and r2-core's
+   `[build-dependencies]` `openssl-src` entry (optional, enabled only by
+   `vendored-openssl`; §4.1.4). Any loop owning files in a crate may add a dependency line (normal or dev) to
    that crate's `Cargo.toml` when the dependency is pinned in §4.1.4 and permitted for that
    crate by §4.1.2 — no §4.11 procedure; anything else is a §4 change.
 7. Everything else has exactly one owner for the whole project (R13 owns everything
@@ -705,7 +708,7 @@ Third-party dependencies per crate (normal dependencies; versions in §4.1.4):
 
 | crate | third-party dependencies |
 |---|---|
-| r2-core | `openssl`, `der`, `spki`, `x509-cert`, `const-oid`, `secrecy`, `zeroize`, `indexmap`, `hex`, `base64`, `comfy-table`, `anstyle`, `tracing` |
+| r2-core | `openssl`, `der`, `spki`, `x509-cert`, `const-oid`, `secrecy`, `zeroize`, `indexmap`, `hex`, `base64`, `comfy-table`, `anstyle`, `tracing`; optional build-dependency `openssl-src` (feature `vendored-openssl` only, §4.1.4) |
 | r2-config | `serde_yaml_ng`, `yaml-rust2`, `indexmap`, `tracing` |
 | r2-provider | `openssl`, `secrecy`, `zeroize`, `tracing` |
 | r2-ops | `indexmap`, `tracing` |
@@ -725,6 +728,7 @@ reviews can check a new line quickly):
 | `cryptoki`, `cryptoki-sys`, `libloading` | `r2-pkcs11` only. No cryptoki type appears in any `pub` item. |
 | `openssl` | `r2-core`, `r2-provider`, `r2-memory`, `r2-pkcs11` (software fallbacks and attribute-material conversion, as c2's `provider.py` used pyca), `r2-testkit` — never `r2-config`, `r2-ops`, `r2-services`, `r2-console`, `r2-cli` |
 | `der`, `spki`, `x509-cert`, `const-oid` | `r2-core` only |
+| `openssl-src` | `r2-core` only, as an optional `[build-dependencies]` entry enabled by `vendored-openssl` (it is never called; it only unifies features with openssl-sys's own openssl-src build-dependency) |
 | `serde_yaml_ng`, `yaml-rust2` | `r2-config` only (other crates use `r2_config::yaml`, §4.8.5) |
 | `reedline`, `crossterm`, `nu-ansi-term`, `rpassword`, `indicatif`, `console` | `r2-console` only (`nu-ansi-term` is reedline 0.49's `Style` type: `StyledText`, `DefaultHinter::with_style`; reedline does not re-export it) |
 | `comfy-table`, `anstyle` | `r2-core` (renderer), `r2-console` |
@@ -859,6 +863,9 @@ clap           = { version = "4", features = ["derive"] }
 tracing        = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "registry", "std"] }
 regex          = "1"              # r2-cli log redaction only
+# vendored-openssl only (§9): openssl-sys's openssl-src build-dependency, with OpenSSL's
+# default cipher set restored (openssl-src alone configures no-camellia/no-idea/no-seed)
+openssl-src    = { version = "300.6.1", features = ["camellia", "idea", "seed"] }
 # dev
 tempfile       = "3"
 assert_cmd     = "2"
@@ -867,7 +874,18 @@ insta          = "1"
 
 Release builds enable `openssl/vendored` through the feature chain
 `r2-cli/vendored-openssl → r2-core/vendored-openssl → openssl/vendored` (R12 owns the
-feature definitions in those two manifests' `[features]` tables only).
+feature definitions in those two manifests' `[features]` tables, the `openssl-src` line
+above and r2-core's `[build-dependencies]` `openssl-src` entry; §4.1.1 item 6). The
+`vendored-openssl` feature of r2-core also enables its optional build-dependency
+`openssl-src` (§4.1.2) with the features `camellia`, `idea` and `seed`: Cargo unifies them
+with openssl-sys's openssl-src build-dependency, so the vendored libcrypto keeps the cipher
+set c2's pyca build has (openssl-src alone configures `no-camellia no-idea no-seed`).
+CAMELLIA is a default-provider cipher; SEED and IDEA (like RC2) are legacy-provider
+ciphers, usable because the vendored build compiles the legacy provider in. Without the
+features, PKCS#12 files with PBES2 CAMELLIA, SEED or IDEA bags — which c2/pyca load — fail
+in the release binary with the wrong-password text (R12; verified by the release smoke
+test, §9). The system-OpenSSL development build loads the legacy-provider ones only when
+the distro's `legacy` module is available and has the cipher (§5.4: non-fatal).
 
 ### 4.2 Errors (`r2_core::error`, `r2_core::text`)
 
@@ -7355,7 +7373,9 @@ custom_mechanisms: []      # entry schema: spec §4.8 / example §5.14
   (→ `openssl/vendored`: openssl-src 300.x — OpenSSL 3.6.3 at S0 — built `no-shared
   no-module` and statically linked; openssl-sys's vendored feature already enables
   openssl-src's `legacy`, so the legacy provider is compiled into libcrypto and needs no
-  runtime module file, even with `OPENSSL_MODULES` pointing nowhere). The vendored build
+  runtime module file, even with `OPENSSL_MODULES` pointing nowhere; r2-core's optional
+  `openssl-src` build-dependency adds openssl-src's `camellia`, `idea` and `seed`
+  features, restoring OpenSSL's default cipher set, §4.1.4). The vendored build
   needs Perl and make (Windows: Strawberry Perl). Development and CI test builds may link
   the system OpenSSL 3 dynamically; there the legacy provider is the distro's `legacy`
   module, and its absence is non-fatal (§5.4). OpenSSL 4 (openssl-src 400.x) is not used
@@ -7376,6 +7396,24 @@ custom_mechanisms: []      # entry schema: spec §4.8 / example §5.14
   session on **all** OSes (c2's Windows leg could smoke `--version` only, because
   prompt_toolkit's Win32 input reads the console device, not piped stdin). Code signing and
   notarization are out of scope, as in c2.
+
+  As built (R12): the steps live in `scripts/release/` (`build.sh` — `cargo zigbuild
+  --target <triple>.2.28` on Linux, native `cargo build` elsewhere; `check-binary.sh` —
+  vendored OpenSSL ≥ 3.2 with the built-in default and legacy providers, no shared
+  libssl/libcrypto, and on Linux a dynamically linked glibc ELF needing no `GLIBC_*` symbol
+  version above 2.28; `smoke.sh` — `--version`, the piped `help`/`providers`/`exit`
+  session, and a piped `load` of the legacy RC2-40/3DES, PBES2-CAMELLIA, PBES2-SEED and
+  PBES2-IDEA PKCS#12 fixtures with `OPENSSL_MODULES`/`OPENSSL_CONF` pointing nowhere;
+  `package.sh`; `sha256sums.sh`). Native runners per target (`ubuntu-24.04`,
+  `ubuntu-24.04-arm`, `macos-15-intel`, `macos-15`, `windows-2025`); the Linux archives are
+  smoke-tested again inside `rockylinux:8`. Assets are `r2-<version>-<target>.tar.gz`
+  (`.zip` on Windows; the binary plus `LICENSE`), the optional
+  `r2-<version>-universal-apple-darwin.tar.gz`, and `SHA256SUMS` over them. The five
+  per-target archives and the `rockylinux:8` smoke are required; a failed universal job
+  only drops its asset (the publish job still runs). The smoke uses R8's `providers`,
+  `load` and `keys` commands, so the release workflow is green only once R8 is merged. A pushed tag `v<version>` must equal `[workspace.package]
+  version` and publishes a GitHub release; a manual dispatch is a dry run (workflow
+  artifacts only).
 - **Supply chain**: `cargo deny` checks advisories, bans (single `der`) and licenses
   compatible with GPL-3.0 — r2 keeps c2's GPL-3.0; OpenSSL 3 is Apache-2.0, rust-openssl
   Apache-2.0/MIT.

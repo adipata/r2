@@ -15,6 +15,9 @@ workspace = true
 
 [features]
 softhsm = ["r2-testkit/softhsm"]
+# spec §9 (owner R12): release builds statically link a vendored OpenSSL 3 (legacy provider
+# compiled in): r2-cli/vendored-openssl → r2-core/vendored-openssl → openssl/vendored.
+vendored-openssl = ["r2-core/vendored-openssl"]
 
 [dependencies]
 r2-console = { workspace = true }

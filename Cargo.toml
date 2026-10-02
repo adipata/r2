@@ -55,6 +55,9 @@ clap           = { version = "4", features = ["derive"] }
 tracing        = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "registry", "std"] }
 regex          = "1"              # r2-cli log redaction only
+# vendored-openssl only (§9): openssl-sys's openssl-src build-dependency, with OpenSSL's
+# default cipher set restored (openssl-src alone configures no-camellia/no-idea/no-seed)
+openssl-src    = { version = "300.6.1", features = ["camellia", "idea", "seed"] }
 # dev
 tempfile       = "3"
 assert_cmd     = "2"
@@ -79,3 +82,11 @@ unwrap_used = "deny"
 expect_used = "deny"
 todo = "allow"
 unimplemented = "allow"
+
+# spec §9 (owner R12): release builds. `panic = "unwind"` is load-bearing: the per-command
+# catch_unwind and the Drop-based provider shutdown / transport-key cleanup rely on it.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "unwind"
