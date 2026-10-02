@@ -270,8 +270,10 @@ fn completion_key(ctx: &AppContext, reference: &str) -> Option<(Rc<dyn Provider>
 
 /// The provider verb inside the IO's busy section. §6: the idempotent
 /// `Provider::initialize()` runs first, so no lazy initialization runs inside `busy()`.
-/// §11 D13: the Ctrl-C flag is honored as soon as the provider verb returns, before any
-/// result is rendered or written (c2's KeyboardInterrupt surfaced right after the C call).
+/// §11 D13: the Ctrl-C flag is honored at the step boundaries around the verb: before it
+/// (a Ctrl-C during ref/param resolution or input reads never issues the operation — c2's
+/// KeyboardInterrupt surfaced right after the find_key/list_keys C call), after
+/// `initialize()`, and as soon as the verb returns, before any result is rendered or written.
 fn busy<T>(
     ctx: &AppContext,
     provider: &dyn Provider,
@@ -279,7 +281,9 @@ fn busy<T>(
     mech: &MechanismInvocation,
     f: impl FnOnce() -> r2_core::Result<T>,
 ) -> r2_core::Result<T> {
+    check_interrupt()?;
     provider.initialize()?;
+    check_interrupt()?;
     let message = format!("{} — {}", verb.as_str(), mech.mechanism);
     let value = busy_with(ctx.io.as_ref(), &message, f)?;
     check_interrupt()?;

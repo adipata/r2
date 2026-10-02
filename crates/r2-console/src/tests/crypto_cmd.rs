@@ -1805,6 +1805,108 @@ fn interrupt_flag_stops_the_resident_derive_line() {
     assert!(io.output().is_empty(), "{:?}", io.output());
 }
 
+/// §11 D13: a Ctrl-C during ref resolution (the HSM lookup) → UserAbort, and the provider
+/// verb is never issued (no signature, decrypt or resident derived object after a cancel).
+#[test]
+fn interrupt_flag_during_resolution_never_issues_the_verb() {
+    let _lock = r2_testkit::global_state_lock();
+    struct InterruptOnLookup(Rc<RefCell<Vec<&'static str>>>);
+    impl FakeHooks for InterruptOnLookup {
+        fn find_key(
+            &self,
+            _next: &dyn Provider,
+            _selector: &KeySelector,
+        ) -> Option<Result<KeyInfo>> {
+            r2_core::runtime::request_interrupt();
+            None
+        }
+        fn encrypt(
+            &self,
+            _next: &dyn Provider,
+            _key: &KeyInfo,
+            _mech: &MechanismInvocation,
+            _data: &[u8],
+        ) -> Option<Result<Vec<u8>>> {
+            self.0.borrow_mut().push("encrypt");
+            None
+        }
+        fn decrypt(
+            &self,
+            _next: &dyn Provider,
+            _key: &KeyInfo,
+            _mech: &MechanismInvocation,
+            _data: &[u8],
+        ) -> Option<Result<zeroize::Zeroizing<Vec<u8>>>> {
+            self.0.borrow_mut().push("decrypt");
+            None
+        }
+        fn sign(
+            &self,
+            _next: &dyn Provider,
+            _key: &KeyInfo,
+            _mech: &MechanismInvocation,
+            _data: &[u8],
+        ) -> Option<Result<Vec<u8>>> {
+            self.0.borrow_mut().push("sign");
+            None
+        }
+        fn verify(
+            &self,
+            _next: &dyn Provider,
+            _key: &KeyInfo,
+            _mech: &MechanismInvocation,
+            _data: &[u8],
+            _signature: &[u8],
+        ) -> Option<Result<bool>> {
+            self.0.borrow_mut().push("verify");
+            None
+        }
+        fn derive(
+            &self,
+            _next: &dyn Provider,
+            _key: &KeyInfo,
+            _mech: &MechanismInvocation,
+        ) -> Option<Result<DeriveResult>> {
+            self.0.borrow_mut().push("derive");
+            None
+        }
+    }
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let hsm = FakeProvider::new("hsm")
+        .with_type_name("pkcs11")
+        .with_hooks(Rc::new(InterruptOnLookup(Rc::clone(&calls))));
+    hsm.import_key(
+        &material(KeyAlgorithm::Aes, KeyClass::Secret, &AES_KEY),
+        "aeskey",
+        None,
+        None,
+    )
+    .unwrap();
+    hsm.import_key(&ec_material(&[0x22; 32]), "eckey", None, None)
+        .unwrap();
+    let io = scripted(&[]);
+    let ctx = ctx_with(dyn_io(&io), registry(&[Rc::new(hsm)]));
+    for line in [
+        "encrypt hsm:aeskey ecb 0xdeadbeef",
+        "decrypt hsm:aeskey ecb 0x00112233445566778899aabbccddeeff",
+        "sign hsm:aeskey cmac 0xdeadbeef",
+        "verify hsm:aeskey cmac 0xdeadbeef --sig 0x00112233445566778899aabbccddeeff",
+        "derive hsm:eckey ecdh peer=0x04",
+    ] {
+        r2_core::runtime::reset_interrupt();
+        let result = crate::testing::run_line(&ctx, line);
+        r2_core::runtime::reset_interrupt();
+        let err = result.unwrap_err();
+        assert_eq!(err.kind, ErrorKind::UserAbort, "{line}: {err:?}");
+    }
+    assert!(
+        calls.borrow().is_empty(),
+        "verb ran after Ctrl-C: {:?}",
+        calls.borrow()
+    );
+    assert!(io.output().is_empty(), "{:?}", io.output());
+}
+
 /// §6: the idempotent `Provider::initialize()` runs before the busy section.
 #[test]
 fn provider_is_initialized_before_the_busy_section() {
