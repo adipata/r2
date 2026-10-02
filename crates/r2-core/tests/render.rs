@@ -389,6 +389,36 @@ fn table_layout_is_simple_head() {
         rendered(&unwrap).lines().next(),
         Some("unwrapped into mem (RSA-PKCS1)")
     );
+    // … but never wider than the console: rich's table (edges included) is at most the
+    // console width, so a body filling the console wraps its title there (rich 15,
+    // Console(width=30): "aaaaaaaaaa bbbbbbbbbb" / "cccccccccc dddddddddd"; width 40:
+    // three lines of twenty "y"s).
+    let full = table(
+        Some("aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd"),
+        &["c1", "c2"],
+        vec![vec!["x".repeat(15), "word ".repeat(10)]],
+    );
+    let out = render_plain(&full, &at(30));
+    let titles: Vec<&str> = out.lines().take(2).map(str::trim).collect();
+    assert_eq!(
+        titles,
+        ["aaaaaaaaaa bbbbbbbbbb", "cccccccccc dddddddddd"],
+        "{out}"
+    );
+    let wide = table(
+        Some(&"y ".repeat(60)),
+        &["name", "value"],
+        vec![vec!["a".into(), "x".repeat(200)]],
+    );
+    let out = render_plain(&wide, &at(40));
+    let titles: Vec<&str> = out.lines().take(3).map(str::trim_end).collect();
+    assert_eq!(titles, [["y"; 20].join(" ").as_str(); 3], "{out}");
+    for (renderable, width) in [(&full, 30), (&wide, 40)] {
+        let out = render_plain(renderable, &at(width));
+        for line in out.lines() {
+            assert!(line.chars().count() <= width, "{line:?} wider than {width}");
+        }
+    }
     // rich `if self.title:` — an empty (or all-control-code) title is no title; a table
     // with no columns renders nothing, title included.
     let untitled = table(None, &["a"], vec![vec!["x".into()]]);
