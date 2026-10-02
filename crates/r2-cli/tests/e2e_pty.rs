@@ -48,14 +48,21 @@ fn pty_session(term: &str, chunks: &[(u64, &str)]) -> String {
     );
     let dir = tempfile::tempdir().unwrap();
     let config = write_config(dir.path());
+    // `env -i` drops LLVM_PROFILE_FILE: forward it so a coverage run counts this child
+    // and never writes default_*.profraw into the source tree (R13).
+    let coverage: String = r2_testkit::coverage_env()
+        .into_iter()
+        .map(|(name, value)| format!("{name}='{}' ", value.to_string_lossy()))
+        .collect();
     let inner = format!(
-        "env -i HOME={} TERM={term} {} --config {}",
+        "env -i {coverage}HOME={} TERM={term} {} --config {}",
         dir.path().display(),
         env!("CARGO_BIN_EXE_r2"),
         config.display()
     );
     let mut child = Command::new("script")
         .args(["-qec", &inner, "/dev/null"])
+        .current_dir(dir.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

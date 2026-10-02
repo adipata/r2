@@ -17,3 +17,14 @@ pub mod softhsm;
 pub use env::{EnvGuard, set_env};
 pub use fake_provider::{FakeHooks, FakeProvider};
 pub use scripted_io::{RecordingEditor, ScriptedIo, global_state_lock};
+
+/// The coverage-instrumentation variables a test must forward after `env_clear()` when it
+/// spawns the instrumented `r2` binary (R13): without `LLVM_PROFILE_FILE` the child writes
+/// `default_*.profraw` into its working directory and its run is missing from the
+/// `cargo llvm-cov` total. Empty outside coverage runs.
+pub fn coverage_env() -> Vec<(&'static str, std::ffi::OsString)> {
+    ["LLVM_PROFILE_FILE"]
+        .into_iter()
+        .filter_map(|name| std::env::var_os(name).map(|value| (name, value)))
+        .collect()
+}

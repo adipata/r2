@@ -52,6 +52,7 @@ fn test_generate_honors_template_editor_cka_id_e2e_softhsm() {
         + "\n";
     let output = Command::new(env!("CARGO_BIN_EXE_r2"))
         .env_clear()
+        .envs(r2_testkit::coverage_env())
         .env("HOME", dir.path())
         .env("SOFTHSM2_CONF", &token.conf_path)
         .current_dir(dir.path())

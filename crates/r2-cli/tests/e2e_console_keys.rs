@@ -34,7 +34,10 @@ use r2_testkit::ScriptedIo;
 /// working directory.
 fn r2(dir: &Path, softhsm_conf: Option<&Path>) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_r2"));
-    cmd.env_clear().env("HOME", dir).current_dir(dir);
+    cmd.env_clear()
+        .envs(r2_testkit::coverage_env())
+        .env("HOME", dir)
+        .current_dir(dir);
     if let Some(conf) = softhsm_conf {
         cmd.env("SOFTHSM2_CONF", conf);
     }
