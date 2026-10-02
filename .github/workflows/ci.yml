@@ -1,6 +1,8 @@
-# r2 CI (spec §8 "CI"; owner R0). Jobs: lint, test (ubuntu/macos/windows + doc tests),
-# softhsm (SoftHSM 2.6.1 distro + 2.7.0 built from its tag), msrv. `coverage` and `parity`
-# are added by R13; release.yml is R12's.
+# r2 CI (spec §8 "CI"; owner R0, coverage + parity added by R13). Jobs: lint, test
+# (ubuntu/macos/windows + doc tests), softhsm (SoftHSM 2.6.1 distro + 2.7.0 built from its
+# tag), msrv, coverage (cargo llvm-cov, 80% line floor over the workspace incl. the
+# softhsm feature) and the optional parity job (differential harness against c2@408d6f2,
+# parity/harness/README.md). release.yml is R12's.
 name: CI
 
 on:
@@ -132,3 +134,62 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build with the pinned toolchain
         run: cargo build --workspace --all-targets --all-features --locked
+
+  coverage:
+    # spec §8: `cargo llvm-cov` with an 80% line floor on the workspace (R13). The softhsm
+    # feature is on so the PKCS#11 provider is measured against a real token.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain (rust-toolchain.toml) + llvm-tools
+        run: rustup toolchain install && rustup component add llvm-tools-preview && cargo --version
+      - name: Install SoftHSM2 (distro) + OpenSC
+        run: sudo apt-get update && sudo apt-get install -y softhsm2 opensc
+      - name: Initialize the fixture token (scripts/softhsm-init.sh)
+        run: scripts/softhsm-init.sh "$RUNNER_TEMP/softhsm" --github-env
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: coverage
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,cargo-nextest
+      - name: Coverage (nextest, workspace, --features softhsm; fails under 80% lines)
+        run: |
+          cargo llvm-cov nextest --workspace --features softhsm --locked --profile ci \
+            --fail-under-lines 80 --lcov --output-path lcov.info
+          cargo llvm-cov report --summary-only
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lcov
+          path: lcov.info
+
+  parity:
+    # Optional (spec §8): the differential harness against the frozen Python reference.
+    # Runs on manual dispatch and on pushes to the default branch; a red parity job means an
+    # unlisted difference from c2 (fix r2 or record a spec §11 deviation).
+    if: github.event_name == 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    env:
+      C2_REPOSITORY: ${{ vars.C2_REPOSITORY || format('{0}/c2', github.repository_owner) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out c2@408d6f2 (the frozen reference)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.C2_REPOSITORY }}
+          ref: 408d6f2
+          path: c2
+      - uses: astral-sh/setup-uv@v6
+      - name: c2 virtualenv (uv sync)
+        run: cd c2 && uv sync --frozen
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && cargo --version
+      - name: Install SoftHSM2 (distro) + OpenSC
+        run: sudo apt-get update && sudo apt-get install -y softhsm2 opensc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: parity
+      - name: Build r2
+        run: cargo build -p r2-cli --locked
+      - name: Differential parity harness (transcript, interop, shared SoftHSM token)
+        run: python3 parity/harness/run_parity.py --c2-dir c2 --r2-bin target/debug/r2 --softhsm

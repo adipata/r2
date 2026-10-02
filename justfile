@@ -54,3 +54,14 @@ ledger LOOP:
 
 # The whole done gate of one loop, in order.
 gate LOOP: fmt-check clippy test deny (ledger LOOP)
+
+# Differential parity harness against c2@408d6f2 (../c2 with `uv sync`), e.g.
+# `just parity --softhsm` (spec §8; parity/harness/README.md).
+parity *ARGS:
+    cargo build -p r2-cli
+    python3 parity/harness/run_parity.py {{ARGS}}
+
+# Line coverage with the 80% floor (spec §8; needs cargo-llvm-cov). Pass `--features softhsm`
+# after `eval "$(scripts/softhsm-init.sh)"` to include the SoftHSM suites, as CI does.
+coverage *ARGS:
+    cargo llvm-cov nextest --workspace --fail-under-lines 80 {{ARGS}}

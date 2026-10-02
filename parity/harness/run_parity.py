@@ -105,6 +105,7 @@ def run_tool(
     lines: list[str],
     env_extra: dict[str, str],
     extra_config: str = "",
+    columns: str = "200",
 ) -> str:
     work.mkdir(parents=True, exist_ok=True)
     home = work / "home"
@@ -114,7 +115,7 @@ def run_tool(
     env = {
         "HOME": str(home),
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-        "COLUMNS": "200",
+        "COLUMNS": columns,
         "LINES": "50",
         "LANG": "C.UTF-8",
         "PYTHONIOENCODING": "utf-8",
@@ -251,13 +252,15 @@ def suite_token(ctx: Ctx) -> None:
             for user in TOOLS:
                 cwork = ctx.base / "token" / stem / f"create-{creator}-for-{user}"
                 lines, _ = load_session(create, {"WORK": str(cwork), "FIX": str(FIXTURES)})
-                run_tool(ctx, creator, cwork, lines, {})
+                run_tool(ctx, creator, cwork, lines, {}, columns="1000")
                 uwork = ctx.base / "token" / stem / f"use-{creator}-by-{user}"
                 lines, _ = load_session(
                     use, {"WORK": str(uwork), "SRC": str(cwork), "FIX": str(FIXTURES)}
                 )
                 label = f"{creator}->{user}:{user}"
-                outputs[label] = run_tool(ctx, user, uwork, lines, {}).replace(str(cwork), "{SRC}")
+                outputs[label] = run_tool(ctx, user, uwork, lines, {}, columns="1000").replace(
+                    str(cwork), "{SRC}"
+                )
                 works[label] = uwork
                 inputs[label] = [line.replace(str(cwork), "{SRC}") for line in lines]
         compare(ctx, stem, outputs, works, inputs)

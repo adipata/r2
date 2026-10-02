@@ -1,0 +1,118 @@
+## Shared SoftHSM token, use half: the using tool lists, inspects, uses, copies, dumps,
+## re-seeds (from the CREATOR's `key template` dumps) and finally deletes every object.
+login hsm R2TEST --pin 1234
+keys hsm
+keys hsm tk-rsa
+key info hsm:tk-aes
+key info hsm:tk-gen
+key info hsm:tk-rsa
+key info hsm:tk-rsa:public
+key info hsm:tk-ec
+key info hsm:tk-ec:public
+key info hsm:tk-cert
+key info hsm:tk-p12
+key info hsm:tk-p12:cert
+key info hsm:tk-data
+key info hsm:tk-gen-ec:public
+ops hsm
+encrypt hsm:tk-aes ecb 0x00112233445566778899aabbccddeeff
+encrypt hsm:tk-aes cbc iv=0x000102030405060708090a0b0c0d0e0f 0x00112233445566778899aabbccddeeff
+encrypt hsm:tk-aes ctr counter_block=0x000102030405060708090a0b0c0d0e0f 0x00112233
+encrypt hsm:tk-aes gcm iv=0x000102030405060708090a0b aad=0x0102 0x00112233
+sign hsm:tk-aes cmac 0x00112233445566778899aabbccddeeff
+sign hsm:tk-gen hmac 0x4869205468657265
+sign hsm:tk-gen hmac hash=sha512 mac_len=16 0x4869205468657265
+sign hsm:tk-rsa pkcs1 0x00112233
+sign hsm:tk-p12 pkcs1 0x00112233
+sign hsm:tk-rsa pss 0x00112233 --out {WORK}/pss.sig
+verify hsm:tk-rsa pss 0x00112233 --sig-file {WORK}/pss.sig
+verify hsm:tk-cert pss 0x00112233 --sig-file {WORK}/pss.sig
+sign hsm:tk-ec ecdsa 0x00112233 --out {WORK}/ec.sig
+verify hsm:tk-ec ecdsa 0x00112233 --sig-file {WORK}/ec.sig
+encrypt hsm:tk-rsa:public oaep 0x00112233 --out {WORK}/oaep.bin
+decrypt hsm:tk-rsa oaep --in {WORK}/oaep.bin
+encrypt hsm:tk-gen-aes ecb 0x00112233445566778899aabbccddeeff --out {WORK}/gen.ct
+decrypt hsm:tk-gen-aes ecb --in {WORK}/gen.ct
+sign hsm:tk-gen-rsa pss 0x00112233 --out {WORK}/genpss.sig
+verify hsm:tk-gen-rsa pss 0x00112233 --sig-file {WORK}/genpss.sig
+sign hsm:tk-gen-ec ecdsa 0x00112233 --out {WORK}/genec.sig
+verify hsm:tk-gen-ec ecdsa 0x00112233 --sig-file {WORK}/genec.sig
+sign hsm:tk-gen-gen hmac 0x00 --out {WORK}/genhmac.sig
+verify hsm:tk-gen-gen hmac 0x00 --sig-file {WORK}/genhmac.sig
+export hsm:tk-rsa {WORK}/tk-rsa-pub.pem --public
+export hsm:tk-ec {WORK}/tk-ec-pub.der --public --format der
+export hsm:tk-cert {WORK}/tk-cert.der --format der
+export hsm:tk-p12 {WORK}/tk-p12-cert.pem --public
+export hsm:tk-data {WORK}/data.bin
+export hsm:tk-aes {WORK}/aes.bin
+export hsm:tk-rsa {WORK}/rsa.pem
+export hsm:tk-aes {WORK}/aes_kwp.b64 --kek tk-gen-aes --mech kwp --outformat b64
+load hsm aes --file {WORK}/aes_kwp.b64 --kek tk-gen-aes --mech kwp --label tk-unwrapped --id a020
+ok
+encrypt hsm:tk-unwrapped ecb 0x00112233445566778899aabbccddeeff
+csr hsm:tk-rsa {WORK}/tk.csr --subject "CN=shared token,O=R2 Parity"
+load mem --file {WORK}/tk.csr --label csr
+key info mem:csr
+key template hsm:tk-gen {WORK}/tk-gen.yaml
+key template hsm:tk-data {WORK}/tk-data.yaml
+generate hsm aes size=256 --label tk-seeded --id a021 --template {SRC}/tk-aes.yaml
+ok
+generate hsm rsa size=2048 --label tk-seeded-rsa --id a022 --template {SRC}/tk-rsa.yaml
+ok
+ok
+key info hsm:tk-seeded
+copy hsm:tk-aes mem
+encrypt mem:tk-aes ecb 0x00112233445566778899aabbccddeeff
+copy hsm:tk-rsa mem
+n
+copy hsm:tk-rsa mem
+y
+key info mem:tk-rsa
+copy hsm:tk-cert mem
+copy hsm:tk-data mem
+key info mem:tk-data
+copy hsm:tk-aes hsm --label tk-aes-copy --id a0ff
+ok
+encrypt hsm:tk-aes-copy ecb 0x00112233445566778899aabbccddeeff
+copy hsm:tk-gen mem
+## the R10/R6 hand-off: a token private key unwrapped into memory (SoftHSM 2.6.1's
+## KW-PAD zero-pads the PKCS#8, which memory then refuses with pyca's text)
+key info hsm:tk-xrsa
+copy hsm:tk-xrsa mem
+copy hsm:tk-xec mem
+export hsm:tk-xrsa {WORK}/xrsa.pem
+sign hsm:tk-xrsa pkcs1 0x00112233
+load mem --file {FIX}/rsa2048.pem --label memrsa
+copy mem:memrsa hsm --label tk-from-mem --id a0fe
+ok
+sign hsm:tk-from-mem pkcs1 0x00112233
+key edit hsm:tk-aes --label tk-aes-renamed
+key edit hsm:tk-aes-renamed --label tk-aes --id a001
+keys hsm tk-
+delete hsm:tk-aes
+delete hsm:tk-gen
+delete hsm:tk-rsa
+delete hsm:tk-rsa
+delete hsm:tk-ec
+delete hsm:tk-ec
+delete hsm:tk-cert
+delete hsm:tk-p12
+delete hsm:tk-p12
+delete hsm:tk-data
+delete hsm:tk-xrsa
+delete hsm:tk-xec
+delete hsm:tk-gen-aes
+delete hsm:tk-gen-rsa
+delete hsm:tk-gen-rsa
+delete hsm:tk-gen-ec
+delete hsm:tk-gen-ec
+delete hsm:tk-gen-gen
+delete hsm:tk-unwrapped
+delete hsm:tk-seeded
+delete hsm:tk-seeded-rsa
+delete hsm:tk-seeded-rsa
+delete hsm:tk-aes-copy
+delete hsm:tk-from-mem
+keys hsm
+logout hsm
+exit

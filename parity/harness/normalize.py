@@ -13,6 +13,11 @@ records as a deviation (§11) or as non-TTY noise is normalized away, nothing el
   messages naming the tool); hex dump lines are left alone.
 - Table and panel glyphs (§11 D1): box-drawing characters become spaces, runs of
   whitespace collapse, blank lines are dropped — cell CONTENT, order and wording remain.
+- PKCS#11 ULONG values >= 2^63 (§11 D18): r2 shows CK_UNAVAILABLE_INFORMATION unsigned
+  (``18446744073709551615``) where c2 showed PyKCS11's signed ``-1``.
+- Token enumeration order (shared-token suite): SoftHSM hands out object handles and
+  find order from its token files, which differ between runs, so ``handle <n>`` loses its
+  number and each run of consecutive table rows starting with ``<provider>:`` is sorted.
 - The per-run work directory (``{WORK}``) and the fixture directory (``{FIX}``).
 """
 
@@ -25,9 +30,17 @@ _BOX_RE = re.compile(f"[{BOX}]")
 _WS_RE = re.compile(r"\s+")
 _HEX_LINE_RE = re.compile(r"^[│ ]*[0-9a-f]{2,4}( [0-9a-f]{2,4})*[│ ]*$")
 _TOOL_RE = re.compile(r"\bc2\b")
-# an r2 prompt: the REPL prompt, its continuation, the paste prompt, the template editor,
-# a select/confirm, or a param / secret prompt ending in ": " / "? " / "] "
-_R2_PROMPT_RE = re.compile(r"^(r2> |…> |\| |template> : |template> |.*?[:?\]] )")
+_HANDLE_RE = re.compile(r"^handle \d+$")
+_ROW_RE = re.compile(r"^[a-z][a-z0-9_-]*:\S+ ")
+_PROMPT_ENDS = (": ", "? ", "] ", "> ", "| ")
+
+
+def _is_echo(line: str, want: str) -> bool:
+    """``line`` is an r2 prompt followed by the input ``want`` (PlainIo echo)."""
+    if want and not line.endswith(want):
+        return False
+    prefix = line[: len(line) - len(want)]
+    return prefix.endswith(_PROMPT_ENDS)
 
 
 def _drop_r2_echo(lines: list[str], inputs: list[str]) -> list[str]:
@@ -36,20 +49,14 @@ def _drop_r2_echo(lines: list[str], inputs: list[str]) -> list[str]:
     for line in lines:
         if i < len(inputs):
             want = inputs[i]
-            match = _R2_PROMPT_RE.match(line)
-            if match and line[match.end() :] == want:
+            if _is_echo(line, want):
                 i += 1
                 continue
-            if want and match and line.endswith(": ") and line[match.end() :] == "":
-                # hidden input (PIN/password): the prompt alone (§11 D20)
+            if want and line.endswith(": "):
+                # hidden input (PIN/password): the prompt alone, nothing echoed (§11 D20)
                 i += 1
                 continue
-            if line in ("r2> " + want, "…> " + want):
-                i += 1
-                continue
-        elif line in ("r2> ", "…> ", "| ") or (
-            (match := _R2_PROMPT_RE.match(line)) is not None and line[match.end() :] == ""
-        ):
+        elif _is_echo(line, ""):
             continue  # a prompt answered by end of input
         out.append(line)
     return out
@@ -73,8 +80,24 @@ def normalize(
         line = line.replace(work, "{WORK}").replace(fixtures, "{FIX}")
         if tool == "c2" and not _HEX_LINE_RE.match(line):
             line = _TOOL_RE.sub("r2", line)
+        line = line.replace("18446744073709551615", "-1")  # §11 D18
         line = _BOX_RE.sub(" ", line)
         line = _WS_RE.sub(" ", line).strip()
+        line = _HANDLE_RE.sub("handle N", line)
+        if line:
+            out.append(line)
+    return _sort_rows(out)
+
+
+def _sort_rows(lines: list[str]) -> list[str]:
+    out: list[str] = []
+    run: list[str] = []
+    for line in lines + [""]:
+        if _ROW_RE.match(line):
+            run.append(line)
+            continue
+        out.extend(sorted(run))
+        run = []
         if line:
             out.append(line)
     return out

@@ -1,0 +1,48 @@
+## Shared SoftHSM token, create half: the creating tool puts objects of every kind on the
+## token (fixed material, explicit CKA_IDs where the command takes one); the template
+## editor is accepted ("ok") after each opening, CKA_EXTRACTABLE toggled where a copy
+## must wrap the key out.
+login hsm R2TEST --pin 1234
+load hsm aes 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f --label tk-aes --id a001
+6
+ok
+load hsm generic 0x0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b --label tk-gen --id a002
+ok
+load hsm --file {FIX}/rsa2048.pem --label tk-rsa --id a003
+ok
+load hsm --file {FIX}/rsa2048_pub.pem --label tk-rsa --id a003
+ok
+load hsm --file {FIX}/p256.pem --label tk-ec --id a004
+ok
+load hsm --file {FIX}/p256_pub.pem --label tk-ec --id a004
+ok
+load hsm --file {FIX}/rsa2048_cert.pem --label tk-cert --id a003
+ok
+load hsm --file {FIX}/rsa2048.p12 --label tk-p12 --id a005 --password p12pw
+ok
+ok
+load hsm --file {FIX}/p384.pem --label tk-xec --id a006
+6
+ok
+load hsm --file {FIX}/rsa2048.pem --label tk-xrsa --id a007
+5
+6
+ok
+load hsm data 0x7061726974792064617461206f626a656374 --label tk-data
+ok
+generate hsm aes size=128 --label tk-gen-aes --id a010
+11
+12
+ok
+generate hsm rsa size=2048 --label tk-gen-rsa --id a011
+ok
+ok
+generate hsm ec curve=p384 --label tk-gen-ec --id a012
+ok
+ok
+generate hsm generic size=256 --label tk-gen-gen --id a013
+ok
+key template hsm:tk-aes {WORK}/tk-aes.yaml
+key template hsm:tk-rsa {WORK}/tk-rsa.yaml
+logout hsm
+exit
