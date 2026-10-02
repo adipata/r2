@@ -177,8 +177,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.C2_REPOSITORY }}
-          ref: 408d6f2
+          # c2@408d6f2: actions/checkout fetches a commit directly only for a FULL 40-hex
+          # SHA (a short one is looked up as a branch/tag name and fails).
+          ref: 408d6f29aa968ad4afcd7888b5958ba4608c902c
+          # A private c2 repository needs a token with read access (repository secret
+          # C2_TOKEN); the default token only reaches this repository and public ones.
+          token: ${{ secrets.C2_TOKEN || github.token }}
           path: c2
+      - name: Verify the c2 reference commit
+        run: test "$(git -C c2 rev-parse HEAD)" = 408d6f29aa968ad4afcd7888b5958ba4608c902c
       - uses: astral-sh/setup-uv@v6
       - name: c2 virtualenv (uv sync)
         run: cd c2 && uv sync --frozen
