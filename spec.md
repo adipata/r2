@@ -6506,7 +6506,7 @@ DC → IA5String; everything else UTF8String).
 |---|---|---|---|
 | AES-ECB | `symm::Crypter` over `Cipher::aes_{128,192,256}_ecb()` with `pad(false)`; PKCS7 (block 16) in r2 code when `padding=pkcs7` | `Mechanism::AesEcb` (`CKM_AES_ECB`); **no** `_PAD` variant exists → **Pkcs11Provider** applies/strips PKCS7 around the token call (padding is always provider-side, symmetric with memory) | `padding=none` requires 16-B-aligned input (checked, `Param`: `padding=none requires input length to be a multiple of 16 bytes`) |
 | AES-CBC | `Crypter` over `aes_*_cbc()` with the IV and `pad(false)` + r2-owned PKCS7 | `padding=none` → `Mechanism::AesCbc(iv)` (`CKM_AES_CBC`); `padding=pkcs7` → `Mechanism::AesCbcPad(iv)` (`CKM_AES_CBC_PAD`) | memory-PKCS7 and `_PAD` must be byte-identical (KAT cross-check, §8; S0-verified); `iv` must be 16 bytes (`Param`) |
-| AES-GCM | `symm::encrypt_aead(Cipher::aes_*_gcm(), key, Some(iv), aad, pt, &mut tag[..tag_bits/8])`, output **ct‖tag**; decrypt `symm::decrypt_aead(…, ct, &tag)` (a bad tag is an error) | `Mechanism::AesGcm(GcmParams::new(&mut iv_copy, &aad, tag_bits))` [V, S0] returns ct‖tag natively (`GcmParams` needs an owned mutable IV copy) | AAD: always pass a non-NULL (possibly empty) buffer — SoftHSM builds reject NULL [V] (cryptoki passes a non-NULL pointer with length 0 for empty AAD, S0 capture). **[U]** FIPS HSMs may ignore the supplied IV and append their own — detect via output length, surface "HSM-generated IV" to the operator. Tamper on SoftHSM: `CKR_GENERAL_ERROR` (2.6.1) / `CKR_ENCRYPTED_DATA_INVALID` (2.7.0) |
+| AES-GCM | `symm::Crypter` over `Cipher::aes_*_gcm()` (the `symm::encrypt_aead` computation, with AAD and data fed in ≤ 2³⁰-byte updates, §11 D12(m)), output **ct‖tag** truncated to `tag_bits/8`; decrypt sets the tag before `finalize` (a bad tag is an error) | `Mechanism::AesGcm(GcmParams::new(&mut iv_copy, &aad, tag_bits))` [V, S0] returns ct‖tag natively (`GcmParams` needs an owned mutable IV copy) | AAD: always pass a non-NULL (possibly empty) buffer — SoftHSM builds reject NULL [V] (cryptoki passes a non-NULL pointer with length 0 for empty AAD, S0 capture). **[U]** FIPS HSMs may ignore the supplied IV and append their own — detect via output length, surface "HSM-generated IV" to the operator. Tamper on SoftHSM: `CKR_GENERAL_ERROR` (2.6.1) / `CKR_ENCRYPTED_DATA_INVALID` (2.7.0) |
 | AES-CTR | `Cipher::aes_*_ctr()` with the full 16-B counter block as IV (OpenSSL increments the whole block big-endian, = pyca) | `Mechanism::VendorDefined(VendorDefinedMechanism::new(MechanismType::AES_CTR, Some(&CK_AES_CTR_PARAMS { ulCounterBits: counter_bits, cb: counter_block })))` [V, S0] (cryptoki has no CTR variant; no `unsafe`) | default `counter_bits=128` reproduces pyca's semantics; cross-provider KAT required. Memory accepts only `counter_bits=128` and a full 16-byte `counter_block` (`Param`, c2 texts). SoftHSM refuses a counter that would wrap within `counter_bits` (`CKR_DATA_LEN_RANGE`) |
 | RSA-OAEP | `encrypt::Encrypter`/`Decrypter` with `Padding::PKCS1_OAEP`, `set_rsa_oaep_md(hash)`, `set_rsa_mgf1_md(mgf_hash)`, `set_rsa_oaep_label(label)` only when the label is non-empty | `Mechanism::RsaPkcsOaep(PkcsOaepParams::new(hash, mgf, PkcsOaepSource::empty() \| data_specified(&label)))` [V, S0]; tokens that reject non-SHA1 OAEP params (SoftHSM: SHA-1/MGF1-SHA1 with an empty label only) fall back to on-token raw RSA (`Mechanism::RsaX509`) + provider-side OAEP en/decoding (c2 L5/L13 fold-back), triggered by `CKR_ARGUMENTS_BAD` / `CKR_MECHANISM_PARAM_INVALID` | hash/MGF pair (CKM_SHAx, CKG_MGF1_SHAx); mgf_hash defaults to hash; an empty label is sent as NULL source data (c2 parity, S0 capture). Decrypt failures are detail-free (`RSA-OAEP decryption failed`) |
 | RSA-PKCS1 | `Encrypter`/`Decrypter` with `Padding::PKCS1` | `Mechanism::RsaPkcs` (`CKM_RSA_PKCS`) | decrypt failures detail-free (`RSA-PKCS1 decryption failed`). A malformed ciphertext or wrong key follows the linked OpenSSL (§11 D26): an error on OpenSSL < 3.2 (the system 3.0 of source builds), implicit rejection (pseudo-random plaintext, no error) on 3.2+ (the vendored release build, as pyca/c2) |
@@ -7588,6 +7588,16 @@ merges).**
     allocate the KDF output` when the allocator refuses the buffer (never a
     capacity-overflow panic or an allocation-failure abort). A length that is allocatable
     but exceeds physical memory still exhausts it, as in c2.
+  - (m) memory AES payloads of 2 GiB or more: rust-openssl panics when one cipher update
+    exceeds `c_int::MAX` bytes, so the memory engine feeds AES-ECB/CBC/CTR/GCM data and
+    GCM AAD to OpenSSL in chunks of 2³⁰ bytes (as pyca chunks its updates). AES
+    encrypt/decrypt therefore succeeds as in c2, and AES-GMAC / AES-GCM over an AAD of
+    2³¹ bytes or more, where c2 raised a pyo3 `PanicException` from
+    `authenticate_additional_data`, returns the tag. Key wrap cannot be chunked: an
+    AES-KEY-WRAP(-PAD) unwrap blob over 2³¹ − 1 bytes is pyca's message-less
+    `InvalidUnwrap` (the integrity failure c2 reached), and a wrap payload over 2³¹ − 1
+    bytes is the ValueError `The key to wrap must be at most 2147483647 bytes (OpenSSL key
+    wrap limit)` where c2's pure-Python RFC 3394/5649 loop would have wrapped it.
 - *Reason*: every expected failure must be a `ConsoleError`; OpenSSL would reject the CN
   with a different text anyway.
 - *Verified by*: R8 certops test (a), R6 keyparse/x509info/formats fixtures (b, h, i, j:
@@ -7601,7 +7611,9 @@ merges).**
   `invalid_rsa_private_keys_are_pycas_value_errors`,
   `passwords_over_1023_bytes_are_refused_as_pyca`, k:
   `pbkdf2_iteration_counts_above_c_int_are_the_wrong_password_text`), R4 memory test (l:
-  `ecdh_kdf_out_len_above_the_x963_limit_is_a_param_error`), R7 repl test (c), R1
+  `ecdh_kdf_out_len_above_the_x963_limit_is_a_param_error`; m: engine
+  `chunked_crypt_matches_a_single_update`, `chunked_gcm_matches_one_shot_aead`, and the
+  opt-in `test_aes_payloads_past_2_gib_are_chunked_not_a_panic`), R7 repl test (c), R1
   codec differential vectors (e), R2 loader tests (d, f: `invalid_utf8_is_a_read_error`,
   `deleted_working_directory_skips_the_cwd_candidate`, the `LOAD` vectors; g:
   `discovery::expand_user_is_python_expanduser`,

@@ -200,6 +200,39 @@ fn test_kat_aes_ctr_sp800_38a() {
     );
 }
 
+/// R4 fix round 2: a payload past `c_int::MAX` bytes is fed to OpenSSL in chunks, never
+/// one update (rust-openssl panics there). Needs ~7 GiB of RAM, so it is opt-in:
+/// `cargo nextest run -p r2-memory --run-ignored only -E 'test(aes_payloads_past_2_gib)'`.
+#[test]
+#[ignore = "allocates several GiB"]
+fn test_aes_payloads_past_2_gib_are_chunked_not_a_panic() {
+    let provider = make();
+    let info = import_aes(&provider, &[7u8; 16], "aes", None, None);
+    let len = (1usize << 31) + 16;
+    let data = vec![0u8; len];
+    let ctr = mech("AES-CTR", &[("counter_block", bytes(&[0u8; 16]))]);
+    let ct = provider.encrypt(&info, &ctr, &data).unwrap();
+    assert_eq!(ct.len(), len);
+    // The keystream past the chunk boundary continues the counter: the last block
+    // matches a short CTR run started at that block's counter value.
+    let mut last_counter = [0u8; 16];
+    last_counter[8..].copy_from_slice(&u64::try_from(len / 16 - 1).unwrap().to_be_bytes());
+    let tail = mech("AES-CTR", &[("counter_block", bytes(&last_counter))]);
+    assert_eq!(
+        provider.encrypt(&info, &tail, &[0u8; 16]).unwrap(),
+        ct[len - 16..]
+    );
+    let pt = provider.decrypt(&info, &ctr, &ct).unwrap();
+    drop(ct);
+    assert!(pt.iter().all(|b| *b == 0));
+    drop(pt);
+    // AES-GMAC: the whole message is GCM AAD.
+    let gmac = mech("AES-GMAC", &[("iv", bytes(&[1u8; 12]))]);
+    let tag = provider.sign(&info, &gmac, &data).unwrap();
+    assert_eq!(tag.len(), 16);
+    assert!(provider.verify(&info, &gmac, &data, &tag).unwrap());
+}
+
 fn gcm_tc16() -> r2_provider::MechanismInvocation {
     mech(
         "AES-GCM",

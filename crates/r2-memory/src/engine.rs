@@ -154,7 +154,16 @@ fn aes(mode: AesMode, key_len: usize) -> Result<Cipher> {
     })
 }
 
-/// One-shot Crypter run without padding; the output is zeroizing (it may be plaintext).
+/// The largest slice handed to one OpenSSL cipher update: rust-openssl's
+/// `cipher_update_unchecked` panics on an input longer than `c_int::MAX`, so every update
+/// is chunked. A multiple of the AES block size, so ECB/CBC block alignment holds.
+const UPDATE_CHUNK: usize = 1 << 30;
+
+/// The longest key-wrap input: OpenSSL's `CRYPTO128_WRAP_MAX` (2^31) capped to what one
+/// cipher update takes (`c_int::MAX`; key wrap cannot be chunked).
+const WRAP_MAX: usize = (1 << 31) - 1;
+
+/// Crypter run without padding; the output is zeroizing (it may be plaintext).
 fn crypt(
     cipher: Cipher,
     mode: Mode,
@@ -162,10 +171,25 @@ fn crypt(
     iv: Option<&[u8]>,
     data: &[u8],
 ) -> std::result::Result<Zeroizing<Vec<u8>>, ErrorStack> {
+    crypt_chunked(cipher, mode, key, iv, data, UPDATE_CHUNK)
+}
+
+/// `crypt` feeding `data` in updates of at most `chunk` bytes (a multiple of 16).
+fn crypt_chunked(
+    cipher: Cipher,
+    mode: Mode,
+    key: &[u8],
+    iv: Option<&[u8]>,
+    data: &[u8],
+    chunk: usize,
+) -> std::result::Result<Zeroizing<Vec<u8>>, ErrorStack> {
     let mut crypter = Crypter::new(cipher, mode, key, iv)?;
     crypter.pad(false);
     let mut out = Zeroizing::new(vec![0u8; data.len() + cipher.block_size()]);
-    let mut written = crypter.update(data, &mut out)?;
+    let mut written = 0;
+    for part in data.chunks(chunk) {
+        written += crypter.update(part, &mut out[written..])?;
+    }
     written += crypter.finalize(&mut out[written..])?;
     out.truncate(written);
     Ok(out)
@@ -303,20 +327,38 @@ pub(crate) fn gcm_encrypt_raw(
     aad: &[u8],
     plaintext: &[u8],
 ) -> Result<(Vec<u8>, [u8; 16])> {
+    gcm_encrypt_chunked(key, iv, aad, plaintext, UPDATE_CHUNK)
+}
+
+/// `gcm_encrypt_raw` feeding AAD and plaintext in updates of at most `chunk` bytes.
+fn gcm_encrypt_chunked(
+    key: &[u8],
+    iv: &[u8],
+    aad: &[u8],
+    plaintext: &[u8],
+    chunk: usize,
+) -> Result<(Vec<u8>, [u8; 16])> {
     check_gcm_iv(iv)?;
-    let mut tag = [0u8; 16];
-    let ciphertext = openssl::symm::encrypt_aead(
-        aes(AesMode::Gcm, key.len())?,
-        key,
-        Some(iv),
-        aad,
-        plaintext,
-        &mut tag,
-    )
-    .map_err(|err| {
+    let cipher = aes(AesMode::Gcm, key.len())?;
+    let run = || -> std::result::Result<(Vec<u8>, [u8; 16]), ErrorStack> {
+        let mut crypter = Crypter::new(cipher, Mode::Encrypt, key, Some(iv))?;
+        for part in aad.chunks(chunk) {
+            crypter.aad_update(part)?;
+        }
+        let mut out = vec![0u8; plaintext.len() + cipher.block_size()];
+        let mut written = 0;
+        for part in plaintext.chunks(chunk) {
+            written += crypter.update(part, &mut out[written..])?;
+        }
+        written += crypter.finalize(&mut out[written..])?;
+        out.truncate(written);
+        let mut tag = [0u8; 16];
+        crypter.get_tag(&mut tag)?;
+        Ok((out, tag))
+    };
+    run().map_err(|err| {
         ConsoleError::crypto(format!("AES-GCM encryption failed: {}", ossl_reason(&err)))
-    })?;
-    Ok((ciphertext, tag))
+    })
 }
 
 fn gcm(key: &[u8], params: &Params, data: &[u8], encrypt: bool) -> Result<Zeroizing<Vec<u8>>> {
@@ -337,17 +379,35 @@ fn gcm(key: &[u8], params: &Params, data: &[u8], encrypt: bool) -> Result<Zeroiz
         )));
     }
     let (ciphertext, tag) = data.split_at(data.len() - tag_len);
+    gcm_decrypt_chunked(key, iv, aad, ciphertext, tag, UPDATE_CHUNK)
+}
+
+/// AES-GCM decrypt + tag check, feeding AAD and ciphertext in updates of at most `chunk`
+/// bytes.
+fn gcm_decrypt_chunked(
+    key: &[u8],
+    iv: &[u8],
+    aad: &[u8],
+    ciphertext: &[u8],
+    tag: &[u8],
+    chunk: usize,
+) -> Result<Zeroizing<Vec<u8>>> {
     check_gcm_iv(iv)?;
     let auth_failed = || ConsoleError::crypto("AES-GCM authentication failed (tag mismatch)");
     let cipher = aes(AesMode::Gcm, key.len())?;
     let mut crypter = Crypter::new(cipher, Mode::Decrypt, key, Some(iv)).map_err(|err| {
         ConsoleError::crypto(format!("AES-GCM decryption failed: {}", ossl_reason(&err)))
     })?;
-    crypter.aad_update(aad).map_err(|_| auth_failed())?;
+    for part in aad.chunks(chunk) {
+        crypter.aad_update(part).map_err(|_| auth_failed())?;
+    }
     let mut out = Zeroizing::new(vec![0u8; ciphertext.len() + cipher.block_size()]);
-    let written = crypter
-        .update(ciphertext, &mut out)
-        .map_err(|_| auth_failed())?;
+    let mut written = 0;
+    for part in ciphertext.chunks(chunk) {
+        written += crypter
+            .update(part, &mut out[written..])
+            .map_err(|_| auth_failed())?;
+    }
     crypter.set_tag(tag).map_err(|_| auth_failed())?;
     let tail = crypter
         .finalize(&mut out[written..])
@@ -476,6 +536,16 @@ fn evp_wrap(
     Ok(out)
 }
 
+/// A payload longer than WRAP_MAX cannot go through one OpenSSL wrap update (§11 D12(m)).
+fn check_wrap_len(payload: &[u8]) -> std::result::Result<(), KwError> {
+    if payload.len() > WRAP_MAX {
+        return Err(KwError::Value(format!(
+            "The key to wrap must be at most {WRAP_MAX} bytes (OpenSSL key wrap limit)"
+        )));
+    }
+    Ok(())
+}
+
 /// pyca `aes_key_wrap` (RFC 3394).
 pub(crate) fn kw_wrap(kek: &[u8], payload: &[u8]) -> std::result::Result<Vec<u8>, KwError> {
     let cipher = wrap_cipher(kek.len(), false)?;
@@ -489,6 +559,7 @@ pub(crate) fn kw_wrap(kek: &[u8], payload: &[u8]) -> std::result::Result<Vec<u8>
             "The key to wrap must be a multiple of 8 bytes".to_owned(),
         ));
     }
+    check_wrap_len(payload)?;
     evp_wrap(cipher, kek, payload, true)
         .map(|out| out.to_vec())
         .map_err(|err| KwError::Value(ossl_reason(&err)))
@@ -502,6 +573,7 @@ pub(crate) fn kwp_wrap(kek: &[u8], payload: &[u8]) -> std::result::Result<Vec<u8
             "key_to_wrap must be between 1 and 2^32 bytes".to_owned(),
         ));
     }
+    check_wrap_len(payload)?;
     evp_wrap(cipher, kek, payload, true)
         .map(|out| out.to_vec())
         .map_err(|err| KwError::Value(ossl_reason(&err)))
@@ -522,6 +594,10 @@ pub(crate) fn kw_unwrap(
         ));
     }
     let cipher = wrap_cipher(kek.len(), false)?;
+    if wrapped.len() > WRAP_MAX {
+        // Beyond the wrap limit: no such blob unwraps (pyca's integrity failure).
+        return Err(KwError::Invalid(String::new()));
+    }
     evp_wrap(cipher, kek, wrapped, false).map_err(|_| KwError::Invalid(String::new()))
 }
 
@@ -539,6 +615,10 @@ pub(crate) fn kwp_unwrap(
         return Err(KwError::Value(
             "The length of the provided data is not a multiple of the block length.".to_owned(),
         ));
+    }
+    if wrapped.len() > WRAP_MAX {
+        // Beyond the wrap limit: no such blob unwraps (pyca's integrity failure).
+        return Err(KwError::Invalid(String::new()));
     }
     evp_wrap(cipher, kek, wrapped, false).map_err(|_| KwError::Invalid(String::new()))
 }
@@ -716,4 +796,85 @@ pub(crate) fn x963_kdf(
     }
     out.truncate(length);
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pattern(len: usize) -> Vec<u8> {
+        (0..len)
+            .map(|i| u8::try_from(i % 251).unwrap_or(0))
+            .collect()
+    }
+
+    /// The chunked update loop is byte-identical to a single update for every AES mode,
+    /// including chunk boundaries that leave a partial final chunk.
+    #[test]
+    fn chunked_crypt_matches_a_single_update() {
+        let key = [7u8; 16];
+        let iv = [3u8; 16];
+        let data = pattern(16 * 13);
+        for cipher in [
+            Cipher::aes_128_ecb(),
+            Cipher::aes_128_cbc(),
+            Cipher::aes_128_ctr(),
+        ] {
+            let iv = cipher.iv_len().map(|_| &iv[..]);
+            for mode in [Mode::Encrypt, Mode::Decrypt] {
+                let whole = crypt_chunked(cipher, mode, &key, iv, &data, usize::MAX).unwrap();
+                for chunk in [16, 32, 48, 64 * 3] {
+                    let parts = crypt_chunked(cipher, mode, &key, iv, &data, chunk).unwrap();
+                    assert_eq!(*parts, *whole, "chunk {chunk}");
+                }
+            }
+        }
+        // CTR over a length that is not a block multiple.
+        let odd = pattern(16 * 5 + 7);
+        let ctr = Cipher::aes_128_ctr();
+        let whole = crypt_chunked(ctr, Mode::Encrypt, &key, Some(&iv), &odd, usize::MAX).unwrap();
+        let parts = crypt_chunked(ctr, Mode::Encrypt, &key, Some(&iv), &odd, 16).unwrap();
+        assert_eq!(*parts, *whole);
+    }
+
+    /// Chunked GCM (AAD and plaintext) equals OpenSSL's one-shot AEAD, and the chunked
+    /// decrypt inverts it and still rejects a bad tag.
+    #[test]
+    fn chunked_gcm_matches_one_shot_aead() {
+        let key = [9u8; 32];
+        let iv = [1u8; 12];
+        let aad = pattern(83);
+        let plaintext = pattern(16 * 6 + 5);
+        let mut tag = [0u8; 16];
+        let expected = openssl::symm::encrypt_aead(
+            Cipher::aes_256_gcm(),
+            &key,
+            Some(&iv),
+            &aad,
+            &plaintext,
+            &mut tag,
+        )
+        .unwrap();
+        for chunk in [16, 32, 1 << 30] {
+            let (ct, t) = gcm_encrypt_chunked(&key, &iv, &aad, &plaintext, chunk).unwrap();
+            assert_eq!(ct, expected);
+            assert_eq!(t, tag);
+            let pt = gcm_decrypt_chunked(&key, &iv, &aad, &ct, &t, chunk).unwrap();
+            assert_eq!(*pt, plaintext);
+            let mut bad = t;
+            bad[0] ^= 1;
+            assert!(gcm_decrypt_chunked(&key, &iv, &aad, &ct, &bad, chunk).is_err());
+        }
+        // GMAC shape: empty plaintext, the message as AAD.
+        let (_, gmac_whole) = gcm_encrypt_chunked(&key, &iv, &aad, b"", 1 << 30).unwrap();
+        let (_, gmac_parts) = gcm_encrypt_chunked(&key, &iv, &aad, b"", 16).unwrap();
+        assert_eq!(gmac_parts, gmac_whole);
+    }
+
+    #[test]
+    fn update_chunk_fits_one_openssl_update_and_keeps_block_alignment() {
+        assert!(i32::try_from(UPDATE_CHUNK).is_ok());
+        assert!(UPDATE_CHUNK.is_multiple_of(16));
+        assert!(i32::try_from(WRAP_MAX).is_ok());
+    }
 }
