@@ -20,6 +20,10 @@ target="${1:?usage: scripts/release/build.sh <target-triple>}"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 glibc="${R2_GLIBC_BASELINE:-2.28}"
 target_dir="${CARGO_TARGET_DIR:-$root/target}"
+if [[ ! "$glibc" =~ ^[0-9]+\.[0-9]+$ ]]; then
+    echo "error: R2_GLIBC_BASELINE must be <major>.<minor> (got '$glibc')" >&2
+    exit 1
+fi
 
 common=(--release --locked -p r2-cli --features vendored-openssl)
 

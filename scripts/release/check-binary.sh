@@ -22,11 +22,15 @@ fail() {
 }
 
 [[ -f "$binary" ]] || fail "no such file: $binary"
+[[ "$baseline" =~ ^[0-9]+\.[0-9]+$ ]] || fail "R2_GLIBC_BASELINE must be <major>.<minor> (got '$baseline')"
 
-# "a.b" → a*1000+b, for numeric comparison of glibc versions.
+# "a.b[.c]" → a*1000+b, for numeric comparison of glibc versions (a missing minor is 0).
 version_key() {
-    local major="${1%%.*}" rest="${1#*.}"
-    local minor="${rest%%.*}"
+    local major="${1%%.*}" minor=0
+    if [[ "$1" == *.* ]]; then
+        minor="${1#*.}"
+        minor="${minor%%.*}"
+    fi
     echo $((10#$major * 1000 + 10#$minor))
 }
 

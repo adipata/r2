@@ -172,8 +172,13 @@ jobs:
           path: out/*
           if-no-files-found: error
 
+  # The universal binary is optional (spec §9): its failure drops only that asset, so
+  # publish runs whenever the required per-target builds and the rocky8 smoke succeeded.
   publish:
     needs: [prepare, build, rocky8, universal-macos]
+    if: >-
+      ${{ !cancelled() && needs.prepare.result == 'success' && needs.build.result == 'success'
+      && needs.rocky8.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -187,6 +192,14 @@ jobs:
           pattern: r2-*
           path: dist
           merge-multiple: true
+      - name: Required per-target archives are present
+        run: |
+          for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu \
+            x86_64-apple-darwin aarch64-apple-darwin; do
+            test -f "dist/r2-$VERSION-$target.tar.gz" || { echo "missing r2-$VERSION-$target.tar.gz" >&2; exit 1; }
+          done
+          test -f "dist/r2-$VERSION-x86_64-pc-windows-msvc.zip" || { echo "missing the Windows archive" >&2; exit 1; }
+          ls -l dist
       - name: SHA256SUMS
         run: scripts/release/sha256sums.sh dist
       - uses: actions/upload-artifact@v4

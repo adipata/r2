@@ -372,7 +372,8 @@ agreement). `S0` documents, `R0`..`R15` (incl. `R5a`/`R5b`) are the loops of PLA
 ```
 Cargo.toml                    workspace manifest: members, [workspace.package],
                               [workspace.dependencies], [workspace.lints]          R0
-                              ...except the [profile.release] table               R12
+                              ...except the [profile.release] table and the
+                              [workspace.dependencies] openssl-src line            R12
 Cargo.lock                    R0 creates; any loop may let cargo update it, but only
                               for dependencies already declared in §4.1.4
 rust-toolchain.toml           pinned stable 1.94.1 (= MSRV), components rustfmt+clippy R0
@@ -644,8 +645,10 @@ another loop's test file, loops.md rule 6):
    them after R5a merged.
 5. `crates/r2-core/src/catalog.rs`: R0 writes the table verbatim from §4.5.5; R5a owns it.
 6. Sub-file ownerships inside R0-owned manifests: R12 owns the root `[profile.release]`
-   table and the `vendored-openssl` lines of the `[features]` tables of `r2-cli` and
-   `r2-core`. Any loop owning files in a crate may add a dependency line (normal or dev) to
+   table, the `vendored-openssl` lines of the `[features]` tables of `r2-cli` and
+   `r2-core`, the root `[workspace.dependencies]` `openssl-src` line, and r2-core's
+   `[build-dependencies]` `openssl-src` entry (optional, enabled only by
+   `vendored-openssl`; §4.1.4). Any loop owning files in a crate may add a dependency line (normal or dev) to
    that crate's `Cargo.toml` when the dependency is pinned in §4.1.4 and permitted for that
    crate by §4.1.2 — no §4.11 procedure; anything else is a §4 change.
 7. Everything else has exactly one owner for the whole project (R13 owns everything
@@ -871,14 +874,18 @@ insta          = "1"
 
 Release builds enable `openssl/vendored` through the feature chain
 `r2-cli/vendored-openssl → r2-core/vendored-openssl → openssl/vendored` (R12 owns the
-feature definitions in those two manifests' `[features]` tables only). The
+feature definitions in those two manifests' `[features]` tables, the `openssl-src` line
+above and r2-core's `[build-dependencies]` `openssl-src` entry; §4.1.1 item 6). The
 `vendored-openssl` feature of r2-core also enables its optional build-dependency
 `openssl-src` (§4.1.2) with the features `camellia`, `idea` and `seed`: Cargo unifies them
-with openssl-sys's openssl-src build-dependency, so the vendored libcrypto keeps OpenSSL's
-default cipher set (openssl-src alone configures `no-camellia no-idea no-seed`). Without it,
-PKCS#12 files with PBES2 CAMELLIA or SEED bags — which c2/pyca and the system-OpenSSL
-build load — fail in the release binary with the wrong-password text (R12; verified by
-the release smoke test, §9).
+with openssl-sys's openssl-src build-dependency, so the vendored libcrypto keeps the cipher
+set c2's pyca build has (openssl-src alone configures `no-camellia no-idea no-seed`).
+CAMELLIA is a default-provider cipher; SEED and IDEA (like RC2) are legacy-provider
+ciphers, usable because the vendored build compiles the legacy provider in. Without the
+features, PKCS#12 files with PBES2 CAMELLIA, SEED or IDEA bags — which c2/pyca load — fail
+in the release binary with the wrong-password text (R12; verified by the release smoke
+test, §9). The system-OpenSSL development build loads the legacy-provider ones only when
+the distro's `legacy` module is available and has the cipher (§5.4: non-fatal).
 
 ### 4.2 Errors (`r2_core::error`, `r2_core::text`)
 
@@ -7354,13 +7361,16 @@ custom_mechanisms: []      # entry schema: spec §4.8 / example §5.14
   vendored OpenSSL ≥ 3.2 with the built-in default and legacy providers, no shared
   libssl/libcrypto, and on Linux a dynamically linked glibc ELF needing no `GLIBC_*` symbol
   version above 2.28; `smoke.sh` — `--version`, the piped `help`/`providers`/`exit`
-  session, and a piped `load` of the legacy RC2-40/3DES, PBES2-CAMELLIA and PBES2-SEED
-  PKCS#12 fixtures with `OPENSSL_MODULES`/`OPENSSL_CONF` pointing nowhere; `package.sh`;
-  `sha256sums.sh`). Native runners per target (`ubuntu-24.04`, `ubuntu-24.04-arm`,
-  `macos-15-intel`, `macos-15`, `windows-2025`); the Linux archives are smoke-tested again
-  inside `rockylinux:8`. Assets are `r2-<version>-<target>.tar.gz` (`.zip` on Windows; the
-  binary plus `LICENSE`), the optional `r2-<version>-universal-apple-darwin.tar.gz`, and
-  `SHA256SUMS` over them. A pushed tag `v<version>` must equal `[workspace.package]
+  session, and a piped `load` of the legacy RC2-40/3DES, PBES2-CAMELLIA, PBES2-SEED and
+  PBES2-IDEA PKCS#12 fixtures with `OPENSSL_MODULES`/`OPENSSL_CONF` pointing nowhere;
+  `package.sh`; `sha256sums.sh`). Native runners per target (`ubuntu-24.04`,
+  `ubuntu-24.04-arm`, `macos-15-intel`, `macos-15`, `windows-2025`); the Linux archives are
+  smoke-tested again inside `rockylinux:8`. Assets are `r2-<version>-<target>.tar.gz`
+  (`.zip` on Windows; the binary plus `LICENSE`), the optional
+  `r2-<version>-universal-apple-darwin.tar.gz`, and `SHA256SUMS` over them. The five
+  per-target archives and the `rockylinux:8` smoke are required; a failed universal job
+  only drops its asset (the publish job still runs). The smoke uses R8's `providers`,
+  `load` and `keys` commands, so the release workflow is green only once R8 is merged. A pushed tag `v<version>` must equal `[workspace.package]
   version` and publishes a GitHub release; a manual dispatch is a dry run (workflow
   artifacts only).
 - **Supply chain**: `cargo deny` checks advisories, bans (single `der`) and licenses
