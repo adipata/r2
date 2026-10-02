@@ -9,7 +9,7 @@ use indexmap::IndexMap;
 use r2_core::error::{ConsoleError, Result};
 use r2_core::text::os_error_text;
 
-use crate::dirs::{expand_user, user_config_dir};
+use crate::dirs::{expand_user_path, user_config_dir};
 use crate::model::{AppConfig, LoadedConfig};
 use crate::yaml::{self, Mapping, Value, py_value_repr};
 
@@ -101,7 +101,7 @@ pub fn deep_merge(base: &Value, overlay: &Value) -> Value {
 /// found: {path}" (the expanded path).
 pub fn discover(cli_path: Option<&Path>) -> Result<Option<PathBuf>> {
     if let Some(cli_path) = cli_path {
-        let path = expand_user(&cli_path.to_string_lossy());
+        let path = expand_user_path(cli_path);
         if !path.is_file() {
             return Err(
                 ConsoleError::config(format!("config file not found: {}", path.display()))
@@ -111,7 +111,7 @@ pub fn discover(cli_path: Option<&Path>) -> Result<Option<PathBuf>> {
         return Ok(Some(path));
     }
     if let Some(env_value) = std::env::var_os(ENV_VAR).filter(|v| !v.is_empty()) {
-        let path = expand_user(&env_value.to_string_lossy());
+        let path = expand_user_path(Path::new(&env_value));
         if !path.is_file() {
             return Err(
                 ConsoleError::config(format!("config file not found: {}", path.display()))
@@ -165,6 +165,12 @@ fn utf8_error_text(bytes: &[u8], error: &std::str::Utf8Error) -> String {
                 )
             }
         }
+        // CPython reports a truncated multi-byte sequence (maximal subpart, the same rule as
+        // `error_len`) as a byte range.
+        Some(len) if len > 1 => format!(
+            "'utf-8' codec can't decode bytes in position {start}-{}: invalid continuation byte",
+            start + len - 1
+        ),
         Some(_) => {
             let first = bytes[start];
             let reason = if (0x80..=0xc1).contains(&first) || first >= 0xf5 {

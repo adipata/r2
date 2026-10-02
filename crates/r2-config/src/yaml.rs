@@ -11,7 +11,7 @@ use std::fmt::Write as _;
 use std::rc::Rc;
 
 use r2_core::error::{ConsoleError, Result};
-use r2_core::text::{py_bytes_repr, py_repr};
+use r2_core::text::{is_py_space, py_bytes_repr, py_repr};
 use serde_yaml_ng::value::{Tag, TaggedValue};
 pub use serde_yaml_ng::{Mapping, Number, Value};
 use yaml_rust2::parser::{Event, Parser, Tag as EventTag};
@@ -24,11 +24,37 @@ use yaml_rust2::scanner::TScalarStyle;
 pub fn parse(text: &str) -> Result<Value> {
     // PyYAML's scanner skips a byte order mark at the start of the stream.
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let root = compose(text)?;
+    // PyYAML (YAML 1.1) treats NEL as a line break everywhere and its `scan_line_break`
+    // turns it into '\n'; yaml-rust2 (YAML 1.2) would keep it as content.
+    let text: std::borrow::Cow<'_, str> = if text.contains('\u{85}') {
+        std::borrow::Cow::Owned(text.replace('\u{85}', "\n"))
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    };
+    reject_line_separators(&text)?;
+    let root = compose(&text)?;
     match root {
         None => Ok(Value::Null),
         Some(node) => Constructor::default().construct(&node, 0),
     }
+}
+/// LS/PS (U+2028/U+2029) are line breaks to PyYAML but kept as the break character itself
+/// in folded content; yaml-rust2 treats them as ordinary characters. Rather than load a
+/// different value, r2 rejects them (§11 D17 (f)).
+fn reject_line_separators(text: &str) -> Result<()> {
+    let Some((offset, ch)) = text
+        .char_indices()
+        .find(|(_, c)| matches!(c, '\u{2028}' | '\u{2029}'))
+    else {
+        return Ok(());
+    };
+    let before = &text[..offset];
+    let line = before.matches('\n').count() + 1;
+    let column = before.rsplit('\n').next().unwrap_or("").chars().count() + 1;
+    Err(err(format!(
+        "unsupported line break character U+{:04X} at line {line}, column {column}",
+        u32::from(ch)
+    )))
 }
 /// PyYAML `safe_dump(sort_keys=False, default_flow_style=False)` port (§4.8.4); trailing "\n".
 pub fn dump(value: &Value) -> String {
@@ -558,6 +584,19 @@ fn timedelta_repr(minutes: i64) -> String {
 impl Timestamp {
     /// Python's `datetime.date`/`datetime.datetime` constructor range checks.
     fn validate(&self) -> Result<()> {
+        // PyYAML builds `timezone(delta)` before `datetime(...)`: the offset is checked first.
+        if let Some(TimeFields {
+            tz: Some(TzInfo::Offset(minutes)),
+            ..
+        }) = &self.time
+            && minutes.abs() >= 24 * 60
+        {
+            return Err(err(format!(
+                "offset must be a timedelta strictly between -timedelta(hours=24) and \
+                 timedelta(hours=24), not {}.",
+                timedelta_repr(*minutes)
+            )));
+        }
         if !(1..=9999).contains(&self.year) {
             return Err(err(format!("year {} is out of range", self.year)));
         }
@@ -576,15 +615,6 @@ impl Timestamp {
             }
             if time.second > 59 {
                 return Err(err("second must be in 0..59"));
-            }
-            if let Some(TzInfo::Offset(minutes)) = time.tz
-                && minutes.abs() >= 24 * 60
-            {
-                return Err(err(format!(
-                    "offset must be a timedelta strictly between -timedelta(hours=24) and \
-                     timedelta(hours=24), not {}.",
-                    timedelta_repr(minutes)
-                )));
             }
         }
         Ok(())
@@ -915,19 +945,50 @@ fn no_constructor(tag: &str) -> ConsoleError {
     ))
 }
 
-/// Python `int(text, base)` for the digits PyYAML hands it (underscores already removed).
-fn py_int_digits(text: &str, base: u32) -> Option<i128> {
-    if text.is_empty() {
-        return None;
+/// CPython `int()`/`float()` whitespace: `str.isspace()` minus U+001C..=U+001F.
+fn py_num_strip(text: &str) -> &str {
+    text.trim_matches(|c: char| is_py_space(c) && !('\u{1c}'..='\u{1f}').contains(&c))
+}
+
+enum IntError {
+    Invalid,
+    Overflow,
+}
+
+/// Python `int(text, base)` for the text PyYAML hands it (underscores already removed):
+/// surrounding whitespace stripped, an optional sign, for base 2/8/16 an optional
+/// `0b`/`0o`/`0x` prefix (either case), then ASCII digits of the base. Overflow of i128 is
+/// reported separately (the literal itself is valid).
+fn py_int_base(text: &str, base: u32) -> std::result::Result<i128, IntError> {
+    let mut rest = py_num_strip(text);
+    let negative = rest.starts_with('-');
+    if rest.starts_with(['-', '+']) {
+        rest = &rest[1..];
+    }
+    let prefix = match base {
+        2 => Some(['b', 'B']),
+        8 => Some(['o', 'O']),
+        16 => Some(['x', 'X']),
+        _ => None,
+    };
+    if let Some(letters) = prefix
+        && let Some(tail) = rest.strip_prefix('0')
+        && let Some(tail) = tail.strip_prefix(letters)
+    {
+        rest = tail;
+    }
+    if rest.is_empty() || !rest.chars().all(|c| c.is_digit(base)) {
+        return Err(IntError::Invalid);
     }
     let mut value: i128 = 0;
-    for c in text.chars() {
-        let d = c.to_digit(base)?;
+    for c in rest.chars() {
+        let d = c.to_digit(base).ok_or(IntError::Invalid)?;
         value = value
-            .checked_mul(i128::from(base))?
-            .checked_add(i128::from(d))?;
+            .checked_mul(i128::from(base))
+            .and_then(|v| v.checked_add(i128::from(d)))
+            .ok_or(IntError::Overflow)?;
     }
-    Some(value)
+    Ok(if negative { -value } else { value })
 }
 
 /// PyYAML `construct_yaml_int`; `original` is the scalar text (for the range message).
@@ -940,44 +1001,32 @@ fn construct_int(original: &str) -> Result<Value> {
     if value.starts_with(['-', '+']) {
         value.remove(0);
     }
-    let invalid = |base: u32, digits: &str| {
-        err(format!(
-            "invalid literal for int() with base {base}: {}",
-            py_repr(digits)
-        ))
-    };
     let out_of_range = || err(format!("integer out of range: {original}"));
+    let int = |digits: &str, base: u32| {
+        py_int_base(digits, base).map_err(|e| match e {
+            IntError::Overflow => out_of_range(),
+            IntError::Invalid => err(format!(
+                "invalid literal for int() with base {base}: {}",
+                py_repr(digits)
+            )),
+        })
+    };
     let magnitude: i128 = if value == "0" {
         0
     } else if let Some(digits) = value.strip_prefix("0b") {
-        py_int_digits(digits, 2).ok_or_else(|| {
-            if digits.chars().all(|c| c.is_digit(2)) && !digits.is_empty() {
-                out_of_range()
-            } else {
-                invalid(2, digits)
-            }
-        })?
+        int(digits, 2)?
     } else if let Some(digits) = value.strip_prefix("0x") {
-        py_int_digits(digits, 16).ok_or_else(|| {
-            if digits.chars().all(|c| c.is_ascii_hexdigit()) && !digits.is_empty() {
-                out_of_range()
-            } else {
-                invalid(16, digits)
-            }
-        })?
+        int(digits, 16)?
     } else if value.starts_with('0') {
-        py_int_digits(&value, 8).ok_or_else(|| {
-            if value.chars().all(|c| c.is_digit(8)) {
-                out_of_range()
-            } else {
-                invalid(8, &value)
-            }
-        })?
+        int(&value, 8)?
     } else if value.contains(':') {
+        let parts = value
+            .split(':')
+            .map(|part| int(part, 10))
+            .collect::<Result<Vec<_>>>()?;
         let mut total: i128 = 0;
         let mut base: i128 = 1;
-        for part in value.split(':').rev() {
-            let digit = py_int_digits(part, 10).ok_or_else(|| invalid(10, part))?;
+        for digit in parts.into_iter().rev() {
             total = digit
                 .checked_mul(base)
                 .and_then(|d| total.checked_add(d))
@@ -986,13 +1035,7 @@ fn construct_int(original: &str) -> Result<Value> {
         }
         total
     } else {
-        py_int_digits(&value, 10).ok_or_else(|| {
-            if value.chars().all(|c| c.is_ascii_digit()) && !value.is_empty() {
-                out_of_range()
-            } else {
-                invalid(10, &value)
-            }
-        })?
+        int(&value, 10)?
     };
     let signed = magnitude.checked_mul(sign).ok_or_else(out_of_range)?;
     if let Ok(v) = i64::try_from(signed) {
@@ -1006,7 +1049,7 @@ fn construct_int(original: &str) -> Result<Value> {
 
 /// Python `float(text)` (ASCII decimal forms only).
 fn py_float(text: &str) -> Option<f64> {
-    let t = text.trim();
+    let t = py_num_strip(text);
     let lower = t.to_ascii_lowercase();
     let body = lower.trim_start_matches(['+', '-']);
     if matches!(body, "inf" | "infinity" | "nan") {
@@ -1067,52 +1110,74 @@ fn tagged(tag: &str, text: &str) -> Value {
     }))
 }
 
-/// Python dict key equality for the scalar keys PyYAML can produce (`1 == 1.0 == True`).
-fn py_key_eq(a: &Value, b: &Value) -> bool {
-    fn numeric(v: &Value) -> Option<f64> {
-        match v {
-            Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
-            Value::Number(n) => n.as_f64(),
-            _ => None,
-        }
-    }
-    fn integral(v: &Value) -> Option<i128> {
-        match v {
-            Value::Bool(b) => Some(i128::from(*b)),
-            Value::Number(n) => as_int(&Value::Number(n.clone())),
-            _ => None,
-        }
-    }
-    match (a, b) {
-        (Value::Bool(_) | Value::Number(_), Value::Bool(_) | Value::Number(_)) => {
-            match (integral(a), integral(b)) {
-                (Some(x), Some(y)) => x == y,
-                _ => match (numeric(a), numeric(b)) {
-                    (Some(x), Some(y)) => x == y,
-                    _ => false,
-                },
+/// Python dict hash/equality class of a bool/int/float key (`1 == 1.0 == True`, exactly as
+/// Python compares an int with a float; PyYAML's single `nan` object collides with itself).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum NumKey {
+    Int(i128),
+    Float(u64),
+    Nan,
+}
+
+fn num_key(value: &Value) -> Option<NumKey> {
+    match value {
+        Value::Bool(b) => Some(NumKey::Int(i128::from(*b))),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Some(NumKey::Int(i128::from(i)))
+            } else if let Some(u) = n.as_u64() {
+                Some(NumKey::Int(i128::from(u)))
+            } else {
+                let f = n.as_f64()?;
+                if f.is_nan() {
+                    Some(NumKey::Nan)
+                } else if f.fract() == 0.0 && f.abs() < 1.0e38 {
+                    // An integral float within i128 is exactly that integer.
+                    #[allow(clippy::cast_possible_truncation)]
+                    Some(NumKey::Int(f as i128))
+                } else {
+                    Some(NumKey::Float(f.to_bits()))
+                }
             }
         }
-        _ => a == b,
+        _ => None,
     }
 }
 
-/// Python `dict[key] = value`: an existing (Python-equal) key keeps its first position and
-/// its first key object and takes the new value.
-fn dict_insert(map: &mut Mapping, key: Value, value: Value) {
-    if matches!(key, Value::Bool(_) | Value::Number(_)) {
-        let existing = map.keys().find(|k| py_key_eq(k, &key)).cloned();
-        if let Some(existing) = existing {
-            map.insert(existing, value);
+/// A Python dict under construction: `dict[key] = value` — an existing (Python-equal) key
+/// keeps its first position and its first key object and takes the new value. Numeric keys
+/// are found through a side index (O(1), not a scan).
+#[derive(Default)]
+struct PyDict {
+    map: Mapping,
+    numeric: HashMap<NumKey, Value>,
+}
+
+impl PyDict {
+    fn insert(&mut self, key: Value, value: Value) {
+        if let Some(class) = num_key(&key) {
+            match self.numeric.get(&class) {
+                Some(existing) => {
+                    self.map.insert(existing.clone(), value);
+                }
+                None => {
+                    self.numeric.insert(class, key.clone());
+                    self.map.insert(key, value);
+                }
+            }
             return;
         }
+        self.map.insert(key, value);
     }
-    map.insert(key, value);
 }
 
 impl Constructor {
     fn count(&mut self) -> Result<()> {
-        self.nodes += 1;
+        self.charge(1)
+    }
+
+    fn charge(&mut self, n: usize) -> Result<()> {
+        self.nodes = self.nodes.saturating_add(n);
         if self.nodes > MAX_NODES {
             return Err(err(format!(
                 "document too large: more than {MAX_NODES} nodes after alias expansion"
@@ -1206,7 +1271,7 @@ impl Constructor {
 
     /// PyYAML `flatten_mapping`: merged pairs first (later sources before earlier ones, so
     /// that the earlier source wins), then the node's own pairs.
-    fn flatten<'n>(&self, node: &'n Node, depth: usize) -> Result<Vec<(&'n Node, &'n Node)>> {
+    fn flatten<'n>(&mut self, node: &'n Node, depth: usize) -> Result<Vec<(&'n Node, &'n Node)>> {
         if depth > MAX_DEPTH {
             return Err(err(format!(
                 "maximum nesting depth of {MAX_DEPTH} exceeded"
@@ -1248,16 +1313,28 @@ impl Constructor {
             }
         }
         merge.extend(own);
+        // Merged pair lists count against the value budget too: nested `<<` lists of
+        // aliases otherwise grow exponentially before anything is constructed.
+        self.charge(merge.len())?;
         Ok(merge)
     }
 
     fn construct_mapping(&mut self, node: &Node, depth: usize) -> Result<Value> {
         let pairs = self.flatten(node, depth)?;
-        let mut map = Mapping::new();
+        let mut dict = PyDict::default();
         for (key_node, value_node) in pairs {
             let key = if is_value_key(key_node) {
+                // PyYAML `flatten_mapping` retags a `!!value` key as `!!str`.
                 self.count()?;
-                Value::String("=".to_owned())
+                match &key_node.kind {
+                    NodeKind::Scalar { text, .. } => Value::String(text.clone()),
+                    _ => {
+                        return Err(err(format!(
+                            "expected a scalar node, but found {}",
+                            key_node.id()
+                        )));
+                    }
+                }
             } else {
                 self.construct(key_node, depth + 1)?
             };
@@ -1265,9 +1342,9 @@ impl Constructor {
                 return Err(err("found unhashable key"));
             }
             let value = self.construct(value_node, depth + 1)?;
-            dict_insert(&mut map, key, value);
+            dict.insert(key, value);
         }
-        Ok(Value::Mapping(map))
+        Ok(Value::Mapping(dict.map))
     }
 }
 
@@ -1278,10 +1355,14 @@ fn is_scalar_tag(tag: &str) -> bool {
     )
 }
 
+/// The node's tag as PyYAML's composer resolves it equals `resolved`: an untagged plain
+/// scalar, or any scalar with the non-specific `!` tag, goes through the implicit resolvers;
+/// an explicit tag is compared as is (for every node kind, like `flatten_mapping`).
 fn scalar_resolves_to(node: &Node, resolved: Resolved) -> bool {
     match (&node.kind, node.tag.as_deref()) {
-        (NodeKind::Scalar { text, plain: true }, None) => resolve_plain(text) == resolved,
-        (NodeKind::Scalar { .. }, Some(tag)) => tag == resolved.tag(),
+        (NodeKind::Scalar { text, plain: true }, None)
+        | (NodeKind::Scalar { text, .. }, Some("!")) => resolve_plain(text) == resolved,
+        (_, Some(tag)) => tag == resolved.tag(),
         _ => false,
     }
 }
@@ -2258,6 +2339,47 @@ mod tests {
             parse("!!float x").unwrap_err().message,
             "could not convert string to float: 'x'"
         );
+    }
+
+    /// Nested `<<` lists of aliases are charged against the value budget while they are
+    /// flattened (they grow tenfold per level before anything is constructed).
+    #[test]
+    fn nested_merges_hit_the_value_budget() {
+        fn level(i: usize) -> String {
+            if i == 0 {
+                return "&l0 {a: 1}".to_owned();
+            }
+            format!(
+                "&l{i} {{<<: [{}{}]}}",
+                level(i - 1),
+                format!(", *l{}", i - 1).repeat(9)
+            )
+        }
+        let doc = format!("x: {}", level(8));
+        assert!(
+            parse(&doc)
+                .unwrap_err()
+                .message
+                .starts_with("document too large")
+        );
+        // a small nested merge still loads
+        let ok = parse(&format!("x: {}", level(2))).unwrap();
+        assert_eq!(py_value_repr(&ok), "{'x': {'a': 1}}");
+    }
+
+    /// Numeric keys are deduplicated through an index, not a scan (40,000 keys load fast;
+    /// the scan took seconds) and with Python's exact int/float equality.
+    #[test]
+    fn many_numeric_keys_load_in_linear_time() {
+        let doc: String = (0..40_000).map(|i| format!("{i}: {i}\n")).collect();
+        let start = std::time::Instant::now();
+        let Value::Mapping(map) = parse(&doc).unwrap() else {
+            panic!("not a mapping");
+        };
+        assert_eq!(map.len(), 40_000);
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+        let dup = parse("{1: a, 1.0: b, true: c, 2: d}").unwrap();
+        assert_eq!(py_value_repr(&dup), "{1: 'c', 2: 'd'}");
     }
 
     /// §11 D17: the inputs PyYAML accepts and r2 rejects.

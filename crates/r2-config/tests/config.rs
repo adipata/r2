@@ -531,6 +531,52 @@ mod discovery {
         );
     }
 
+    /// A truncated multi-byte sequence is a byte range in CPython's text (maximal subpart).
+    #[test]
+    fn invalid_utf8_multibyte_ranges() {
+        let iso = Isolated::new();
+        let cases: &[(&[u8], &str)] = &[
+            (
+                b"a: \xe2\x82\x41",
+                "'utf-8' codec can't decode bytes in position 3-4: invalid continuation byte",
+            ),
+            (
+                b"a: \xf0\x9f\x98A",
+                "'utf-8' codec can't decode bytes in position 3-5: invalid continuation byte",
+            ),
+            (
+                b"ab\xf0\x90\x80\x41",
+                "'utf-8' codec can't decode bytes in position 2-4: invalid continuation byte",
+            ),
+            (
+                b"\xe2\x82\x28",
+                "'utf-8' codec can't decode bytes in position 0-1: invalid continuation byte",
+            ),
+            (
+                b"\xed\xa0\x80",
+                "'utf-8' codec can't decode byte 0xed in position 0: invalid continuation byte",
+            ),
+            (
+                b"\xe0\x80\x80",
+                "'utf-8' codec can't decode byte 0xe0 in position 0: invalid continuation byte",
+            ),
+            (
+                b"a: \xf0\x90",
+                "'utf-8' codec can't decode bytes in position 3-4: unexpected end of data",
+            ),
+        ];
+        for (bytes, text) in cases {
+            let bad = iso.path().join("bin.yaml");
+            std::fs::write(&bad, bytes).unwrap();
+            let err = config_err(load_config(Some(&bad)));
+            assert_eq!(
+                err.message,
+                format!("cannot read config file {}: {text}", bad.display()),
+                "{bytes:?}"
+            );
+        }
+    }
+
     #[test]
     fn crlf_files_load() {
         let iso = Isolated::new();
@@ -569,12 +615,71 @@ mod discovery {
             expand_user("~/a//b/./c/"),
             PathBuf::from("/home/tester/a/b/c")
         );
-        assert_eq!(expand_user("~user/x"), PathBuf::from("~user/x"));
+        assert_eq!(
+            expand_user("~no-such-user-r2/x"),
+            PathBuf::from("~no-such-user-r2/x")
+        );
         assert_eq!(expand_user("./x/../y"), PathBuf::from("x/../y"));
         assert_eq!(expand_user("a/~/b"), PathBuf::from("a/~/b"));
         assert_eq!(expand_user(""), PathBuf::from("."));
         iso.env("HOME", Some("/"));
         assert_eq!(expand_user("~/x"), PathBuf::from("/x"));
+        if cfg!(unix) {
+            // posixpath.expanduser: a set-but-empty $HOME is used as is ('' → '/')
+            iso.env("HOME", Some(""));
+            assert_eq!(expand_user("~/x"), PathBuf::from("/x"));
+            assert_eq!(expand_user("~"), PathBuf::from("/"));
+            if !cfg!(target_os = "macos") {
+                iso.env("XDG_CONFIG_HOME", None);
+                assert_eq!(user_config_dir(), Some(PathBuf::from("/.config/r2")));
+            }
+            iso.env("HOME", Some("//srv//"));
+            assert_eq!(expand_user("~/x"), PathBuf::from("//srv/x"));
+            iso.env("HOME", Some("rel/home"));
+            assert_eq!(expand_user("~/x"), PathBuf::from("rel/home/x"));
+        }
+    }
+
+    /// `~name/…` is that user's home from /etc/passwd (`pwd.getpwnam`), as in c2.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn expand_user_resolves_other_users() {
+        let _iso = Isolated::new();
+        let passwd = std::fs::read_to_string("/etc/passwd").unwrap();
+        let root_home = passwd
+            .lines()
+            .find_map(|line| line.strip_prefix("root:"))
+            .map(|rest| rest.split(':').nth(4).unwrap().to_owned())
+            .unwrap();
+        assert_eq!(
+            expand_user("~root/a//b/"),
+            PathBuf::from(&root_home).join("a/b")
+        );
+        assert_eq!(expand_user("~root"), PathBuf::from(&root_home));
+    }
+
+    /// A non-UTF-8 `--config` / `$R2_CONFIG` path is used byte for byte (Python keeps the
+    /// bytes through surrogateescape).
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_paths_are_kept() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let mut iso = Isolated::new();
+        let file = iso.path().join(OsStr::from_bytes(b"cfg\xff.yaml"));
+        std::fs::write(&file, "ui: {hex_width: 7}\n").unwrap();
+        let loaded = load_config(Some(&file)).unwrap();
+        assert_eq!(loaded.config.ui.hex_width, 7);
+        assert_eq!(loaded.source_path.as_deref(), Some(file.as_path()));
+        let dotted = iso.path().join(OsStr::from_bytes(b".//cfg\xff.yaml"));
+        assert_eq!(discover(Some(&dotted)).unwrap(), Some(file.clone()));
+        // `$R2_CONFIG` goes through the same expansion (r2_testkit::set_env takes UTF-8 only).
+        iso.env(ENV_VAR, Some("~/missing.yaml"));
+        iso.env("HOME", Some("/home/tester"));
+        assert_eq!(
+            discover(None).unwrap_err().message,
+            "config file not found: /home/tester/missing.yaml"
+        );
     }
 }
 
