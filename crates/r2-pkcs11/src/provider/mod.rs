@@ -200,10 +200,6 @@ impl Pkcs11Provider {
     }
 
     /// The CKM codes the logged-in token listed (unfiltered).
-    #[allow(
-        dead_code,
-        reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
-    )]
     pub(crate) fn mech_codes(&self) -> Vec<u64> {
         self.state.borrow().mech_codes.clone()
     }
@@ -360,10 +356,6 @@ impl Pkcs11Provider {
     }
 
     /// Canonical name advertised? Else UnsupportedOperation (c2 `_check_advertised`).
-    #[allow(
-        dead_code,
-        reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
-    )]
     pub(crate) fn check_advertised(&self, mechanism: &str) -> Result<()> {
         if r2_provider::Provider::mechanisms(self).contains(mechanism) {
             return Ok(());
@@ -375,19 +367,11 @@ impl Pkcs11Provider {
     }
 
     /// Does the token list the CKM named `name` (PyKCS11 name table)?
-    #[allow(
-        dead_code,
-        reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
-    )]
     pub(crate) fn has_ckm(&self, name: &str) -> bool {
         crate::catalog::symbol_value(name).is_some_and(|code| self.mech_codes().contains(&code))
     }
 
     /// The code of CKM `name`, or UnsupportedOperation "token lacks {name} for {context}".
-    #[allow(
-        dead_code,
-        reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
-    )]
     pub(crate) fn require_ckm(&self, name: &str, context: &str) -> Result<u64> {
         match crate::catalog::symbol_value(name) {
             Some(code) if self.mech_codes().contains(&code) => Ok(code),

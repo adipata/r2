@@ -7,10 +7,6 @@
 //! calls with a runtime-length raw mechanism parameter, and `C_WrapKey` with output
 //! truncation. dlopen is refcounted, so the second open maps the module cryptoki already
 //! loaded and initialized.
-#![allow(
-    dead_code,
-    reason = "the crypto/wrap/derive shims are consumed by R5b's verbs"
-)]
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::c_void;

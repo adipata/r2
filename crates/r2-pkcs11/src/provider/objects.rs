@@ -27,10 +27,6 @@ use crate::attributes::{
 use crate::backend::{MechSpec, RawAttr};
 
 /// CKA codes of cryptoki-sys widened to u64 (`as u64` widens CK_ULONG on every target).
-#[allow(
-    dead_code,
-    reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
-)]
 pub(crate) mod cka {
     use cryptoki_sys as sys;
     macro_rules! codes {
@@ -1330,10 +1326,6 @@ impl Pkcs11Provider {
 
     /// (handle, created): a CKO_PUBLIC_KEY with the certificate's CKA_ID, else a session
     /// public-key object built from the certificate SPKI (c2 `_public_for_certificate`).
-    #[allow(
-        dead_code,
-        reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
-    )]
     pub(crate) fn public_for_certificate(&self, cert_key: &KeyInfo) -> OResult<(u64, bool)> {
         if let Some(id) = &cert_key.key_ref.key_id {
             let template = vec![
@@ -1384,10 +1376,6 @@ impl Pkcs11Provider {
 
     /// Run `f` with the operative handle: certificates resolve to their public key, an
     /// on-the-fly session object is destroyed after use (c2 `_with_public_use_handle`).
-    #[allow(
-        dead_code,
-        reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
-    )]
     pub(crate) fn with_public_use_handle<T>(
         &self,
         key: &KeyInfo,
@@ -1411,10 +1399,6 @@ fn refused(display: &str) -> ConsoleError {
 }
 
 /// Certificates stand in for PUBLIC keys only (c2 `_reject_certificate`).
-#[allow(
-    dead_code,
-    reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
-)]
 pub(crate) fn reject_certificate(key: &KeyInfo, verb: &str) -> Result<()> {
     if key.key_class == KeyClass::Certificate {
         return Err(ConsoleError::unsupported(format!(
@@ -1442,10 +1426,6 @@ pub(crate) fn reject_other_type(key: &KeyInfo, verb: &str) -> Result<()> {
 }
 
 /// DATA and OTHER objects take part in no crypto verb (c2 `_reject_non_key`).
-#[allow(
-    dead_code,
-    reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
-)]
 pub(crate) fn reject_non_key(key: &KeyInfo, verb: &str) -> Result<()> {
     if key.key_class == KeyClass::Data {
         return Err(ConsoleError::unsupported(format!(

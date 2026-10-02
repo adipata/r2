@@ -192,10 +192,6 @@ fn native_plain(ckm: u64) -> Option<Mechanism<'static>> {
 
 /// `Some((ckm, param))` when the spec must go through RawFns (a runtime-length raw
 /// parameter that is not a 16-byte AES-CBC IV, S0 G3).
-#[allow(
-    dead_code,
-    reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
-)]
 fn raw_bytes(spec: &MechSpec) -> Option<(u64, &[u8])> {
     match spec {
         MechSpec::Bytes { ckm, param } => {
@@ -369,10 +365,6 @@ pub(crate) struct CryptokiBackend {
     session: RefCell<Option<Session>>,
 }
 
-#[allow(
-    dead_code,
-    reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
-)]
 impl CryptokiBackend {
     pub(crate) fn new(config: &Pkcs11InstanceConfig) -> Self {
         Self {
@@ -449,10 +441,6 @@ impl CryptokiBackend {
     }
 }
 
-#[allow(
-    dead_code,
-    reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
-)]
 fn is_signature_failure(err: &BackendError) -> bool {
     matches!(err, BackendError::Ckr(Ckr { code, .. })
         if *code == rv::CKR_SIGNATURE_INVALID || *code == rv::CKR_SIGNATURE_LEN_RANGE)

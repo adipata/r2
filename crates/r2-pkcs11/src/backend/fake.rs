@@ -119,6 +119,14 @@ struct State {
     refused_reads: BTreeMap<(u64, u64), u64>,
     calls: Vec<&'static str>,
     last_mechanism: Option<MechSpec>,
+    // ---- R5b knobs ----
+    /// Invalidate the session right after the next successful `set_attrs` (the write
+    /// landed, then the token dropped the session).
+    invalidate_after_set: bool,
+    /// `unwrap_key` fails with this CKR whenever its template carries this attribute.
+    reject_unwrap_attr: Option<(u64, u64)>,
+    /// The attribute types of every `unwrap_key` template, in call order.
+    unwrap_templates: Vec<Vec<u64>>,
 }
 
 /// SoftHSM-like CKM set (c2 fake_pykcs11 DEFAULT_MECHANISMS, as codes; numeric order).
@@ -235,11 +243,9 @@ impl FakeBackend {
             .refused_reads
             .insert((object, attribute), rv);
     }
-    #[allow(dead_code, reason = "failure/state knobs for R5b's verb tests")]
     pub(crate) fn fail_always(&self, method: &'static str, rv: u64) {
         self.state.borrow_mut().fail_always.push((method, rv));
     }
-    #[allow(dead_code, reason = "failure/state knobs for R5b's verb tests")]
     pub(crate) fn clear_failures(&self) {
         let mut state = self.state.borrow_mut();
         state.fail_next.clear();
@@ -255,7 +261,6 @@ impl FakeBackend {
     }
     /// Attribute types that C_SetAttributeValue refuses with CKR_ATTRIBUTE_READ_ONLY
     /// (CKA_SENSITIVE true→false / CKA_EXTRACTABLE false→true one-direction rules are built in).
-    #[allow(dead_code, reason = "failure/state knobs for R5b's verb tests")]
     pub(crate) fn set_read_only(&self, attrs: &[u64]) {
         self.state.borrow_mut().read_only = attrs.iter().copied().collect();
     }
@@ -335,7 +340,6 @@ impl FakeBackend {
             .map(|t| t.label.clone())
     }
     /// C_DeriveKey refuses extractable secret templates (§5.10 [U]).
-    #[allow(dead_code, reason = "failure/state knobs for R5b's verb tests")]
     pub(crate) fn set_forbid_extractable_secrets(&self, forbid: bool) {
         self.state.borrow_mut().forbid_extractable_secrets = forbid;
     }
@@ -369,6 +373,23 @@ impl FakeBackend {
         state.next_handle += 1;
         state.objects.insert(new_handle, object);
         new_handle
+    }
+
+    // ---- R5b knobs (crate-private test hooks) ----
+
+    /// The next successful `set_attrs` lands, then the session is invalidated (c2's
+    /// `set_then_drop` patch).
+    pub(crate) fn invalidate_after_next_set(&self) {
+        self.state.borrow_mut().invalidate_after_set = true;
+    }
+    /// `unwrap_key` answers `rv` whenever its template carries attribute `attr` (c2's
+    /// "picky" unwrapKey patch).
+    pub(crate) fn reject_unwrap_with(&self, attr: u64, rv: u64) {
+        self.state.borrow_mut().reject_unwrap_attr = Some((attr, rv));
+    }
+    /// The attribute types of every `unwrap_key` template, in call order.
+    pub(crate) fn unwrap_templates(&self) -> Vec<Vec<u64>> {
+        self.state.borrow().unwrap_templates.clone()
     }
 
     // ---- internals ----
@@ -827,6 +848,11 @@ impl Backend for FakeBackend {
         for (code, value) in template {
             obj.attrs.insert(*code, value.to_vec());
         }
+        if std::mem::take(&mut state.invalidate_after_set)
+            && let Some(session) = state.session.as_mut()
+        {
+            session.invalidated = true;
+        }
         Ok(())
     }
 
@@ -1009,6 +1035,17 @@ impl Backend for FakeBackend {
     ) -> BResult<u64> {
         let slot = self.check("unwrap_key", true)?;
         let code = self.require_mechanism(slot, mech, "unwrap_key")?;
+        {
+            let mut state = self.state.borrow_mut();
+            state
+                .unwrap_templates
+                .push(template.iter().map(|(t, _)| *t).collect());
+            if let Some((attr, rv)) = state.reject_unwrap_attr
+                && template.iter().any(|(t, _)| *t == attr)
+            {
+                return Err(fail(rv, "unwrap_key"));
+            }
+        }
         let stream = keystream(
             &self.secret_of(unwrapping_key, "unwrap_key")?,
             format!("wrap|{code}").as_bytes(),

@@ -71,10 +71,6 @@ pub(crate) enum UserKind {
 /// CKM_SHA224_RSA_PKCS_PSS (PkcsPssParams) and the custom none/gcm/oaep packers; RawFns
 /// crypto calls for `Bytes` (runtime-length parameters).
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
-)]
 pub(crate) enum MechSpec {
     /// NULL pParameter.
     Plain { ckm: u64 },
@@ -117,10 +113,6 @@ pub(crate) enum MechSpec {
 }
 
 /// One instance per Pkcs11Provider (it owns that provider's session). All `&self`.
-#[allow(
-    dead_code,
-    reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
-)]
 pub(crate) trait Backend {
     /// Acquire the shared module for the library path (+ C_Initialize once). Idempotent.
     fn initialize(&self) -> BResult<()>;
