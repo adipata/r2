@@ -1002,6 +1002,7 @@ dependencies = [
  "reedline",
  "rpassword",
  "secrecy",
+ "tempfile",
  "tracing",
  "unicode-width",
  "zeroize",

@@ -38,3 +38,4 @@ tracing = { workspace = true }
 [dev-dependencies]
 r2-testkit = { workspace = true }
 r2-memory = { workspace = true }
+tempfile = { workspace = true }

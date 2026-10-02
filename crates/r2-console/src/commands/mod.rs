@@ -1,10 +1,12 @@
-#![allow(dead_code)]
-// R0 skeleton — owner R7 (generated from spec §4)
-// ---- spec §4.9.6 block 0
+// Command trait + module registration (spec §4.9.6; owner R7) — c2 `console/commands/
+// __init__.py`. Every file `src/commands/<stem>.rs` exports `pub fn commands()`; build.rs
+// generates the module list. There is NO central registration table.
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use crate::context::AppContext;
 use crate::parser::BoundArgs;
 use crate::repl::{CommandTable, Flow};
-use std::rc::Rc;
 
 /// One console command. Object-safe.
 pub trait Command {
@@ -33,9 +35,38 @@ include!(concat!(env!("OUT_DIR"), "/command_modules.rs"));
 /// Fresh scan of every command module. Duplicate name → Config "duplicate command name
 /// '{name}' (module '{module}')".
 pub fn discover_commands() -> r2_core::Result<CommandTable> {
-    Err(r2_core::ConsoleError::not_implemented("R7"))
+    collect_commands(module_commands())
 }
+
+/// The discovery merge over (module stem, commands) pairs, in module order.
+pub(crate) fn collect_commands(
+    modules: Vec<(&'static str, Vec<Box<dyn Command>>)>,
+) -> r2_core::Result<CommandTable> {
+    let mut table = CommandTable::new();
+    for (module, commands) in modules {
+        for command in commands {
+            let name = command.name();
+            if table.contains_key(name) {
+                return Err(r2_core::ConsoleError::config(format!(
+                    "duplicate command name '{name}' (module '{module}')"
+                )));
+            }
+            table.insert(name, Rc::from(command));
+        }
+    }
+    Ok(table)
+}
+
+thread_local! {
+    static CACHE: RefCell<Option<Rc<CommandTable>>> = const { RefCell::new(None) };
+}
+
 /// Cached `discover_commands()` (thread-local; the module set is fixed per build).
 pub fn all_commands() -> r2_core::Result<Rc<CommandTable>> {
-    Err(r2_core::ConsoleError::not_implemented("R7"))
+    if let Some(table) = CACHE.with(|cache| cache.borrow().clone()) {
+        return Ok(table);
+    }
+    let table = Rc::new(discover_commands()?);
+    CACHE.with(|cache| *cache.borrow_mut() = Some(Rc::clone(&table)));
+    Ok(table)
 }
