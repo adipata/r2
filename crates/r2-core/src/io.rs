@@ -117,7 +117,7 @@ impl TemplateEditor for IdentityTemplateEditor {
     }
 }
 // ---- Renderable model (spec §4.9.2) ----
-/// Text style. Error = bold red, Danger = red.
+/// Text style. Error = bold red, Danger = red, Success = bold green.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Tone {
     #[default]
@@ -127,6 +127,8 @@ pub enum Tone {
     Italic,
     Error,
     Danger,
+    /// Bold green (rich "bold green": `verify`'s `signature VALID`, §5.1).
+    Success,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
