@@ -7676,10 +7676,12 @@ ships until the user decides).**
   RFC 4514 subject and CN-length texts (§5.6/§5.7) keep pyca's exact text. `ErrorStack`'s
   `Display` (build-specific file paths and line numbers) is never shown. The reason is
   always the failing operation's own: the PKCS#11 provider drains the thread's OpenSSL
-  error queue after `C_Initialize` and after every session operation, because a module
-  sharing the process's libcrypto (SoftHSM: its failed `rdrand` engine load) would else
-  leave stale entries that became the reported reason of a later memory or key-parsing
-  failure (R13; r2-services `transfer_softhsm memory_reasons_are_not_polluted_by_softhsm_errors`).
+  error queue after every `C_Initialize` (successful or failed, e.g. a bad
+  `$SOFTHSM2_CONF`) and after every session operation, because a module sharing the
+  process's libcrypto (SoftHSM: its failed engine loads) would else leave stale entries
+  that became the reported reason of a later memory or key-parsing failure (R13; r2-services
+  `transfer_softhsm memory_reasons_are_not_polluted_by_softhsm_errors`,
+  `softhsm_failed_init failed_softhsm_initialize_does_not_pollute_memory_reasons`).
 - *Reason*: different crypto/FFI libraries (S0 OpenSSL spike §9); c2's tests assert only
   the c2-owned prefixes.
 - *Verified by*: ported c2 tests (prefix assertions); §5.8 pre-validation tests assert the

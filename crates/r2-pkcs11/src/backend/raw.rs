@@ -509,13 +509,14 @@ pub(crate) fn acquire(library: &Path) -> BResult<(PathBuf, Rc<SharedModule>)> {
     }
     let ctx =
         Pkcs11::new(library).map_err(|e| BackendError::LibraryUnavailable(load_detail(&e)))?;
-    match ctx.initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK)) {
-        Ok(()) | Err(Error::Pkcs11(RvError::CryptokiAlreadyInitialized, _)) => {
-            // SoftHSM's C_Initialize leaves its failed `rdrand` engine load on the shared
-            // libcrypto's error queue; drop it so it never becomes the reported reason of a
-            // later memory/keyparse failure (R5b hand-off, closed by R13).
-            crate::mechanisms::clear_openssl_errors();
-        }
+    let init = ctx.initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK));
+    // SoftHSM's C_Initialize leaves its failed engine loads (`rdrand`, "could not load the
+    // shared library", …) on the shared libcrypto's error queue — whether it succeeds or
+    // fails (e.g. a bad $SOFTHSM2_CONF); drop them so they never become the reported reason
+    // of a later memory/keyparse failure (R5b hand-off, closed by R13).
+    crate::mechanisms::clear_openssl_errors();
+    match init {
+        Ok(()) | Err(Error::Pkcs11(RvError::CryptokiAlreadyInitialized, _)) => {}
         Err(Error::Pkcs11(rv_error, _)) => {
             let code = super::cryptoki::rv_code(&rv_error);
             return Err(BackendError::LibraryUnavailable(
