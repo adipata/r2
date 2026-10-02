@@ -1220,6 +1220,47 @@ fn transport_destroy_failures_are_quiet_but_user_abort_propagates() {
     assert!(transport_labels(&dst).is_empty());
 }
 
+/// unwrap_key panics, and so would delete_key of a transport object: the transport guard
+/// must not call the provider while unwinding (spec §4 unwind-safety), else the second
+/// panic aborts the process instead of reporting the first.
+struct PanickingUnwrapAndDelete;
+impl FakeHooks for PanickingUnwrapAndDelete {
+    fn unwrap_key(
+        &self,
+        _next: &dyn Provider,
+        _wrapping_key: &KeyInfo,
+        _mech: &MechanismInvocation,
+        _wrapped: &[u8],
+        _request: &UnwrapRequest,
+    ) -> Option<Result<KeyInfo>> {
+        panic!("simulated unwrap panic");
+    }
+    fn delete_key(&self, _next: &dyn Provider, key: &KeyInfo) -> Option<Result<()>> {
+        if key.key_ref.label.starts_with(TRANSPORT_PREFIX) {
+            panic!("delete_key called while unwinding");
+        }
+        None
+    }
+}
+
+#[test]
+fn transport_guard_makes_no_provider_call_while_unwinding() {
+    let src = make_hsm("srchsm");
+    let dst = make_hsm("dsthsm").with_hooks(Rc::new(PanickingUnwrapAndDelete));
+    let key = import_aes(&src, "aeskey", true, true);
+    let outcome =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| do_copy(&src, &key, &dst)));
+    let Err(payload) = outcome else {
+        panic!("the unwrap panic propagates");
+    };
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"simulated unwrap panic")
+    );
+    assert!(deleted_transports(&src).is_empty());
+    assert!(deleted_transports(&dst).is_empty());
+}
+
 #[test]
 fn the_copy_lands_where_the_editor_says() {
     // the edited template (not the seed) reaches import_key on the plain route

@@ -90,11 +90,13 @@ fn test_abort_synonym_raises_user_abort_after_edits() {
 }
 
 #[test]
-fn ctrl_c_and_ctrl_d_at_the_editor_prompt_cancel_the_edit() {
+fn ctrl_c_and_ctrl_d_at_the_editor_prompt_propagate_the_io_abort() {
+    // c2's ConsoleIO.prompt raises its own UserAbort for Ctrl-C/Ctrl-D, which the editor
+    // passes through unchanged ("template edit cancelled" is only for typed cancel/abort)
     for sentinel in [ScriptedIo::CTRL_C, ScriptedIo::CTRL_D] {
         let err = edit(&["3", sentinel]).unwrap_err();
         assert_eq!(err.kind, ErrorKind::UserAbort);
-        assert_eq!(err.message, "template edit cancelled");
+        assert_eq!(err.message, "aborted while entering 'template'");
     }
 }
 
@@ -209,6 +211,62 @@ fn ulong_values_follow_python_int_and_the_ck_ulong_range() {
             "error: CKA_VALUE_LEN: invalid integer '1__0' (hint: decimal digits or 0x… hex)",
             "error: CKA_VALUE_LEN: invalid integer '' (hint: decimal digits or 0x… hex)",
         ]
+    );
+}
+
+#[test]
+fn ulong_over_4300_decimal_digits_is_invalid_integer() {
+    // CPython 3.12 `int(str, 10)` refuses more than 4300 digits (ValueError → c2's
+    // "invalid integer"); leading zeros and `_`-separated digits count; hex is unlimited
+    let nines = "9".repeat(4301);
+    let zeros = format!("{}1", "0".repeat(4300));
+    let grouped = format!("{}1", "1_".repeat(4300));
+    let at_limit = "9".repeat(4300);
+    let hex = format!("0x{}", "f".repeat(5000));
+    let lines = [
+        format!("5={nines}"),
+        format!("5=-{nines}"),
+        format!("5={zeros}"),
+        format!("5={grouped}"),
+        format!("5={at_limit}"),
+        format!("5=-{at_limit}"),
+        format!("5={hex}"),
+        "ok".to_owned(),
+    ];
+    let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let (editor, io) = make_editor(&lines);
+    let result = editor.edit(make_template(), "t").unwrap();
+    assert_eq!(value(&result, "CKA_VALUE_LEN"), AttrValue::Ulong(32));
+    let invalid = |text: &str| {
+        format!("error: CKA_VALUE_LEN: invalid integer '{text}' (hint: decimal digits or 0x… hex)")
+    };
+    assert_eq!(
+        errors(&io),
+        [
+            invalid(&nines),
+            invalid(&format!("-{nines}")),
+            invalid(&zeros),
+            invalid(&grouped),
+            format!(
+                "error: CKA_VALUE_LEN: '{at_limit}' does not fit a 64-bit CK_ULONG (hint: the largest value is 18446744073709551615)"
+            ),
+            "error: CKA_VALUE_LEN must not be negative".to_owned(),
+            format!(
+                "error: CKA_VALUE_LEN: '{hex}' does not fit a 64-bit CK_ULONG (hint: the largest value is 18446744073709551615)"
+            ),
+        ]
+    );
+}
+
+#[test]
+fn row_token_over_4300_digits_is_out_of_range() {
+    // §11 D18: c2's `int()` raised ValueError here (unexpected-error path)
+    let ones = "1".repeat(4301);
+    let (editor, io) = make_editor(&[&ones, "ok"]);
+    editor.edit(make_template(), "t").unwrap();
+    assert_eq!(
+        errors(&io),
+        [format!("error: row {ones} is out of range (1..7)")]
     );
 }
 

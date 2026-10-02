@@ -27,7 +27,9 @@
 //
 // Ephemeral transport objects are destroyed on success AND failure (an explicit cleanup
 // step whose UserAbort wins, as an interrupt in c2's `finally` did, plus a `Drop` guard
-// as the backstop for unwinding), and the software transport key lives in a `Zeroizing`
+// as the backstop for early returns; while a panic unwinds the guard makes no provider
+// call (spec §4 unwind-safety) and session objects die with the session), and the
+// software transport key lives in a `Zeroizing`
 // buffer (§11 D3). Ctrl-C is honored at the step boundaries (§11 D13). Services never
 // print; confirmations go through `ConsoleIo`; key bytes are never logged.
 use r2_core::crypto::random_bytes;
@@ -662,6 +664,11 @@ impl<'a> EphemeralObjects<'a> {
 
 impl Drop for EphemeralObjects<'_> {
     fn drop(&mut self) {
+        // spec §4 unwind-safety: no provider calls while unwinding (a provider RefCell may
+        // still be borrowed by a panicking frame); session objects die with the session.
+        if std::thread::panicking() {
+            return;
+        }
         let _ = self.destroy_all();
     }
 }

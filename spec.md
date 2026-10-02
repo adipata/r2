@@ -7992,8 +7992,11 @@ merges).**
     18446744073709551615 is refused in the editor with Param `<name>: <value!r> does not fit
     a 64-bit CK_ULONG` (hint `the largest value is 18446744073709551615`; editing continues)
     where c2 stored the Python int (`AttrValue::Ulong` is a `u64`, §4.7) — any well-formed
-    integer text counts, also beyond i128; a negative one keeps c2's `<name> must not be
-    negative`;
+    integer text counts, also beyond i128 (decimal text of more than 4300 digits keeps c2's
+    `<name>: invalid integer …`, CPython's `int(str)` digit limit; hex is unlimited); a
+    negative one keeps c2's `<name> must not be negative`; a template-editor row token of
+    more than 4300 digits is Param `row <n> is out of range …` where c2's `int()` raised
+    (unexpected-error path);
   - `text::py_os_error_str` always renders the POSIX `[Errno n] …` form (CPython on Windows
     prints `[WinError n] …` for some calls);
   - PKCS#11 ULONG attribute values ≥ 2^63 read back from a token (notably

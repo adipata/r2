@@ -76,14 +76,10 @@ impl TemplateEditor for ChecklistTemplateEditor {
         let spec = ParamSpec::str("template", "template> ");
         self.render(&working, title);
         loop {
-            let line = match self.io.prompt(&spec) {
-                Ok(line) => line,
-                // c2: KeyboardInterrupt / EOFError at the prompt → UserAbort.
-                Err(err) if err.kind.is_user_abort() => {
-                    return Err(ConsoleError::user_abort("template edit cancelled"));
-                }
-                Err(err) => return Err(err),
-            };
+            // c2's ConsoleIO.prompt already turns Ctrl-C/Ctrl-D into its own UserAbort
+            // ("aborted while entering 'template'"), which the editor passes through;
+            // "template edit cancelled" is only for a typed `cancel`/`abort`.
+            let line = self.io.prompt(&spec)?;
             let line = py_strip(&line);
             if line.is_empty() {
                 self.render(&working, title);
@@ -288,6 +284,9 @@ fn has_hex_prefix(text: &str) -> bool {
     chars.next() == Some('0') && matches!(chars.next(), Some('x' | 'X'))
 }
 
+/// CPython's default `sys.int_info.default_max_str_digits` (decimal `int(str)` limit).
+const PY_INT_MAX_STR_DIGITS: usize = 4300;
+
 /// Python `int(token, radix)` syntax without a value bound (the token is already
 /// stripped): Some(negative) when CPython would parse it. Used only after `py_int` failed,
 /// to tell an out-of-range integer from malformed text.
@@ -347,21 +346,24 @@ fn parse_value(name: &str, kind: AttrKind, text: &str) -> Result<AttrValue> {
         }
         _ => {
             let radix = if has_hex_prefix(token) { 16 } else { 10 };
+            let invalid = || {
+                ConsoleError::param(format!("{name}: invalid integer {}", py_repr(text)), name)
+                    .with_hint("decimal digits or 0x… hex")
+            };
+            // CPython 3.12 `int(str, 10)` refuses more than 4300 digits (leading zeros and
+            // `_`-separated digits count; sign and `_` do not) with ValueError, so c2 said
+            // "invalid integer" whatever the value; hex is not limited.
+            if radix == 10
+                && token.bytes().filter(u8::is_ascii_digit).count() > PY_INT_MAX_STR_DIGITS
+            {
+                return Err(invalid());
+            }
             let negative = match py_int(token, radix) {
                 Some(value) => match u64::try_from(value) {
                     Ok(value) => return Ok(AttrValue::Ulong(value)),
                     Err(_) => value < 0,
                 },
-                None => match int_syntax(token, radix) {
-                    Some(negative) => negative,
-                    None => {
-                        return Err(ConsoleError::param(
-                            format!("{name}: invalid integer {}", py_repr(text)),
-                            name,
-                        )
-                        .with_hint("decimal digits or 0x… hex"));
-                    }
-                },
+                None => int_syntax(token, radix).ok_or_else(invalid)?,
             };
             if negative {
                 return Err(ConsoleError::param(
