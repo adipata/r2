@@ -7353,7 +7353,10 @@ custom_mechanisms: []      # entry schema: spec §4.8 / example §5.14
     <n>` numbers and the order of consecutive `<provider>:` table rows (SoftHSM's handle and
     find order depend on its token file names).
 - **Coverage**: `cargo llvm-cov` with an 80% line floor on the workspace, enforced from R13
-  (as c2's floor was wired in L13).
+  (as c2's floor was wired in L13). As built (R13): the `coverage` CI job runs `cargo llvm-cov nextest --workspace
+  --features softhsm --fail-under-lines 80` on the SoftHSM 2.6.1 fixture token (`just
+  coverage` locally); at R13 sign-off: 91.38% lines (28,358 lines, 2,445 missed), 89.40%
+  regions, 89.10% functions over 2,015 tests.
 - **CI** (GitHub Actions, `ci.yml` from R0): `lint` (`cargo fmt --check` plus `rustfmt
   --edition 2024 --check crates/r2-console/src/commands/*.rs
   crates/r2-console/src/tests/*.rs` — those modules are `include!`-only and invisible to

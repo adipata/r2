@@ -68,11 +68,19 @@ virtualenv (fixed keys, so signatures and exports are deterministic).
 
 ## Results at R13 sign-off (2026-10-02, SoftHSM 2.6.1)
 
-All suites green: `transcript_memory_core` (350 normalized lines, 16 files
-byte-identical), `transcript_memory_errors` (159), `transcript_memory_interactive` (313),
-`transcript_user_config` (167), `interop_memory` (328 lines × 4), `token_objects`
-(560 lines × 4). Differences the harness found and R13 fixed: table titles one or two
-cells wider than r2's body wrapped where rich kept them on one line (r2 now wraps at
-rich's table width); a private key DER with trailing bytes (SoftHSM 2.6.1's zero-padded
-KW-PAD unwrap of a PKCS#8, `copy hsm:<priv> mem`) reported pyca's `extra data` instead of
-`unexpected tag (got Tag { value: 2, … })`.
+All suites green, with the debug build (system OpenSSL 3) and with the release dry-run
+binary (vendored OpenSSL 3.6.3, glibc 2.28 zigbuild): `transcript_help` (125 normalized
+lines), `transcript_memory_core` (350 lines, 16 files byte-identical),
+`transcript_memory_errors` (159), `transcript_memory_interactive` (313),
+`transcript_user_config` (167), `interop_memory` (328 lines × 4) and `token_objects`
+(560 lines × 4); `pty_paste_check.py` passes on both binaries.
+
+Differences found and fixed in r2 during R13:
+
+- a table title one or two cells wider than r2's table body wrapped where rich (whose
+  `SIMPLE_HEAD` table counts two edge columns) kept it on one line — e.g. `unwrapped into
+  mem (RSA-PKCS1)`; r2 now wraps titles at rich's table width (§11 D1);
+- a private key DER with trailing bytes — what SoftHSM 2.6.1's KW-PAD unwrap leaves on a
+  PKCS#8 in `copy hsm:<extractable private key> mem` (pinned by `token_objects`) — reported
+  pyca's `extra data` instead of `unexpected tag (got Tag { value: 2, … })`: r2-core now
+  parses a value's content before reporting data after it, as rust-asn1 does.

@@ -1,0 +1,49 @@
+## Every command's help text and usage errors (verbatim parity of usage lines).
+help clear
+help config
+help copy
+help csr
+help decrypt
+help delete
+help derive
+help encrypt
+help exit
+help export
+help generate
+help help
+help key
+help keys
+help load
+help login
+help logout
+help ops
+help providers
+help quit
+help sign
+help slots
+help verify
+help help
+help HELP
+help exi
+copy
+csr
+decrypt
+delete
+derive
+generate
+generate mem
+key
+login
+logout
+slots
+sign
+verify
+ops nosuch
+keys mem nothing-matches
+load mem data 0x00010203 --label d1
+load mem data 0x00 --label d1
+key info mem:d1
+keys mem d
+export mem:d1 {WORK}/d1.bin
+delete mem:d1
+quit
