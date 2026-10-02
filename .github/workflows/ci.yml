@@ -193,3 +193,5 @@ jobs:
         run: cargo build -p r2-cli --locked
       - name: Differential parity harness (transcript, interop, shared SoftHSM token)
         run: python3 parity/harness/run_parity.py --c2-dir c2 --r2-bin target/debug/r2 --softhsm
+      - name: Terminal check on a pty (bracketed PEM paste, hidden input, Ctrl-C)
+        run: python3 parity/harness/pty_paste_check.py --r2-bin target/debug/r2

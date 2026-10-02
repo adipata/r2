@@ -49,7 +49,12 @@ The user config file case (`transcript_user_config`) appends `fixtures/user_conf
   depend on its token file names, which differ between runs of either tool.
 - The work and fixture directories become `{WORK}`, `{SRC}`, `{FIX}`.
 
-Nothing else is normalized. A difference is fixed in r2, or — if it must stay — recorded
+Nothing else is normalized.
+
+`pty_paste_check.py` (same requirements, POSIX only) is the automated part of the R13
+terminal checklist (`parity/terminal-checklist.md`): r2 on a pseudo-terminal as a real
+terminal session, a bracketed paste of a traditional encrypted PEM at the `| ` prompt,
+hidden passwords and Ctrl-C at a password prompt. The `parity` CI job runs it too. A difference is fixed in r2, or — if it must stay — recorded
 in spec §11 through the §4.11 procedure and only then normalized here.
 
 ## Session files

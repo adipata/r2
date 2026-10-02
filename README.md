@@ -1,0 +1,166 @@
+# r2
+
+r2 is the Rust rewrite of [c2](https://github.com/adipata/c2) (CryptoConsole — Cx2), an
+interactive cryptographic operator console: a REPL for working with keys and crypto
+operations across pluggable providers — an in-memory software provider (always on, backed
+by OpenSSL) and any PKCS#11 module (HSMs, smartcards; SoftHSM2 is auto-detected). It ships
+as a single binary, `r2`, with full behavioral parity with c2@408d6f2: the same commands,
+messages, configuration schema, PKCS#11 object layouts and file formats. The deliberate
+differences are listed in [`spec.md`](spec.md) §11.
+
+This is a quick start; the full behavior, command set and configuration schema live in
+[`spec.md`](spec.md).
+
+## Install & run
+
+Download a release archive (`r2-<version>-<target>.tar.gz`, `.zip` on Windows) for
+Linux (x86_64/aarch64, glibc ≥ 2.28), macOS (x86_64/arm64/universal) or Windows (x86_64),
+check it against `SHA256SUMS`, and put `r2` on your `PATH`. OpenSSL is linked in; nothing
+else is needed. Or build from source (below).
+
+```console
+$ r2 --version
+r2 0.2.0
+$ r2
+r2 0.2.0 — type 'help' for commands
+r2>
+```
+
+Flags: `--version`, `--config PATH` (explicit config file), `--debug` (debug logging,
+warnings mirrored to stderr, full backtraces for unexpected errors).
+
+On a terminal r2 uses a line editor (history, Tab completion, highlighting); with piped
+stdin it reads plain lines, so scripted sessions work on every OS:
+
+```console
+$ printf 'providers\nexit\n' | r2
+```
+
+## First session
+
+The memory provider (`mem`) works immediately, no configuration:
+
+```text
+r2> generate mem aes size=256 --label demo
+r2> encrypt mem:demo gcm iv=0x000102030405060708090a0b deadbeef
+r2> generate mem generic size=256 --label mac     # CKK_GENERIC_SECRET (HMAC key)
+r2> sign mem:mac hmac hash=sha256 deadbeef
+r2> load mem data 48656c6c6f --label note        # CKO_DATA: opaque bytes
+r2> load mem --file server.pem --format cert --label srv   # X.509 certificate
+r2> keys mem                                      # every object: keys, certs, data
+r2> ops mem
+r2> help
+r2> exit
+```
+
+Missing mechanism parameters are prompted for (`encrypt mem:demo gcm deadbeef` asks for
+the IV); omitted data opens a paste prompt that ends with an empty line.
+
+Objects are keys (AES, generic secret, RSA, EC incl. Ed25519/Ed448/X25519/X448),
+certificates and data objects; `keys` lists every object a provider holds — on PKCS#11
+tokens, key types r2 cannot operate on are still listed (algorithm `other`) and can be
+deleted.
+
+With SoftHSM2 installed (`brew install softhsm` / `apt install softhsm2`), a `softhsm`
+provider appears automatically. The first `login softhsm` starts a one-time wizard that
+creates the token directory, initializes a token (you pick the PINs), and offers to save
+the provider entry to your config:
+
+```text
+r2> providers
+r2> login softhsm          # first run: wizard, then PIN prompt
+r2> generate softhsm aes size=256 --label mykey   # template editor opens; 'ok' accepts
+r2> copy mem:demo softhsm
+r2> key template softhsm:mykey mykey.yaml         # dump the object's attribute template
+r2> logout softhsm
+```
+
+Keys on PKCS#11 tokens go through a checklist template editor before creation — defaults
+are conservative (sensitive, non-extractable); flip rows deliberately.
+
+c2 and r2 install side by side and share tokens and data files (exports, CSRs, PKCS#12,
+wrapped blobs, `key template` YAML), but not config, history or log files.
+
+## Configuration
+
+Everything runs on built-in defaults without a config file. To customize, create an
+`r2.yaml`; it is discovered in this order:
+
+1. `--config PATH`
+2. `$R2_CONFIG`
+3. `./r2.yaml`
+4. the platform user config dir: `~/.config/r2/r2.yaml` on Linux (`$XDG_CONFIG_HOME`
+   honoured), `~/Library/Application Support/r2/r2.yaml` on macOS,
+   `%LOCALAPPDATA%\r2\r2\r2.yaml` on Windows
+
+Your file is deep-merged over the defaults — set only what you change (lists replace). A
+c2 `c2.yaml` works as an `r2.yaml` unchanged; paths it sets explicitly (history, log,
+SoftHSM dirs) are then shared with c2, so edit those when migrating. The most common
+addition is a real PKCS#11 module:
+
+```yaml
+providers:
+  pkcs11:
+    - name: prodhsm
+      library: /usr/lib/libvendor_pkcs11.so
+      token_label: PROD-TOKEN     # optional; slot: <id> also works
+```
+
+`config path` and `config show --origin` inside the REPL show which file each setting
+came from; `config show --defaults` prints the embedded defaults. The full schema
+(templates, custom attributes, custom mechanisms) is in spec §4.8 and §7; the embedded
+defaults are in [`crates/r2-config/src/defaults.yaml`](crates/r2-config/src/defaults.yaml).
+
+## Development
+
+The workspace pins its toolchain in `rust-toolchain.toml` (rustup installs it). Tests run
+under [cargo-nextest](https://nexte.st); the [`justfile`](justfile) wraps the commands.
+
+```console
+$ cargo build --workspace
+$ cargo nextest run --workspace                     # unit + integration tests
+$ eval "$(scripts/softhsm-init.sh)"                 # a fresh SoftHSM2 test token…
+$ cargo nextest run --workspace --features softhsm  # …for the SoftHSM suites
+$ cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings
+$ cargo deny check                                  # supply chain
+$ cargo llvm-cov nextest --workspace --fail-under-lines 80   # coverage floor
+$ python3 parity/harness/run_parity.py --softhsm    # differential parity vs c2 (../c2)
+```
+
+See [`CLAUDE.md`](CLAUDE.md) for conventions, [`loops.md`](loops.md) for how the
+implementation was decomposed, [`parity/README.md`](parity/README.md) for the c2 test
+ledger and [`parity/harness/README.md`](parity/harness/README.md) for the differential
+harness.
+
+## Building the binary
+
+A development build is `cargo build -p r2-cli` (binary `target/debug/r2`), linking the
+system OpenSSL 3. Release builds link a vendored, static OpenSSL 3 (legacy provider
+compiled in, so old PKCS#12 files load anywhere):
+
+```console
+$ cargo build -p r2-cli --release --locked --features vendored-openssl
+$ target/release/r2 --version
+```
+
+That needs Perl and make (Windows: Strawberry Perl and NASM). The release pipeline
+(`.github/workflows/release.yml`) does the same per target through
+[`scripts/release/`](scripts/release): `build.sh <target-triple>` (Linux via
+`cargo zigbuild` against glibc 2.28, so the binary runs on RHEL/Rocky 8-class HSM hosts),
+`check-binary.sh` (static OpenSSL ≥ 3.2 with the default and legacy providers, glibc
+baseline), `smoke.sh` (`--version`, a piped `help`/`providers`/`exit` session and the
+legacy PKCS#12 fixtures), `package.sh` and `sha256sums.sh`. A pushed tag `v<version>`
+publishes a GitHub release; a manual dispatch is a dry run.
+
+What's in (and not in) the binary:
+
+- The embedded `defaults.yaml` is compiled in, so the binary works with no config file.
+- Vendor PKCS#11 libraries — including SoftHSM2 — are **not** bundled; they are loaded at
+  runtime from the library path in your config (or the SoftHSM probe list).
+- Code signing and notarization are out of scope.
+
+Packaging decisions are documented in spec §9.
+
+## License
+
+GPL-3.0 (see [`LICENSE`](LICENSE)), as c2.

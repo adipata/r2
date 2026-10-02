@@ -7341,6 +7341,17 @@ custom_mechanisms: []      # entry schema: spec §4.8 / example §5.14
   - *Shared token*: both implementations run against **one** SoftHSM token dir; objects
     created by each (every kind, keypairs, PKCS#12 imports, data objects) are listed, used
     and copied by the other — the strongest check that attribute layouts match.
+  - *As built (R13)*: `parity/harness/run_parity.py` (Python 3.10+, stdlib only; usage and
+    the complete normalization list in `parity/harness/README.md`; `just parity`; the
+    optional `parity` CI job checks out c2@408d6f2, runs `uv sync` and the harness with
+    `--softhsm`). Session files under `parity/harness/sessions/`, fixed key fixtures under
+    `parity/harness/fixtures/` (generated once with pyca). The interop and token suites run
+    each producer/creator against each consumer/user and require the four transcripts to
+    be equal. Normalized beyond the bullets above: input echo of both tools (c2's
+    prompt_toolkit renders it with carriage returns; r2's PlainIo prints prompt + line),
+    `18446744073709551615` ≙ `-1` (§11 D18), and — for the shared token only — `handle
+    <n>` numbers and the order of consecutive `<provider>:` table rows (SoftHSM's handle and
+    find order depend on its token file names).
 - **Coverage**: `cargo llvm-cov` with an 80% line floor on the workspace, enforced from R13
   (as c2's floor was wired in L13).
 - **CI** (GitHub Actions, `ci.yml` from R0): `lint` (`cargo fmt --check` plus `rustfmt
@@ -7468,7 +7479,9 @@ names the test or harness check that pins the deviation.
 - *Description*: tables are drawn by comfy-table with a header rule only (c2: rich
   `box.SIMPLE_HEAD`): same columns, same cell content (control codes stripped as rich did),
   but no outer edge spaces or blank edge rows, the header rule spans the computed width, a
-  table title is an r2-rendered, centered italic line, and comfy-table measures cells with
+  table title is an r2-rendered italic line, wrapped like rich's at RICH's table width
+  (r2's body plus the two `SIMPLE_HEAD` edge columns, so the line breaks equal c2's) and
+  centered over r2's body, and comfy-table measures cells with
   unicode-width (column widths may differ where that differs from rich's cell table). A
   word longer than its column is folded onto further lines of the cell, its content kept
   whole; c2's rich columns (default `overflow="ellipsis"`) cropped it to the column width
@@ -7490,8 +7503,10 @@ names the test or harness check that pins the deviation.
   (b) on a legacy Windows console without VT support, rich used its Win32 renderer while
   anstream falls back to wincon colours.
 - *Reason*: different renderer (decision PLAN §3/§13).
-- *Verified by*: `insta` snapshots; the parity harness compares content after normalizing
-  table glyphs (and folded over-long words against rich's `…` crop); the R1 renderer tests assert rich-identical text for error, hex and generic
+- *Verified by*: `insta` snapshots; the parity harness (`parity/harness/`) compares
+  content after normalizing table glyphs, at console widths where no word is cropped by
+  rich or folded by r2; r2-core render `table_layout_is_simple_head` (title wrap vectors
+  from rich 15); the R1 renderer tests assert rich-identical text for error, hex and generic
   panels, printed text (content ESC/NUL/DEL/OSC bytes included), caret layouts and
   `cell_len` (vectors generated with rich 15,
   `crates/r2-core/tests/support/gen_rich_panels.py`); `resolve_color` unit tests over the
@@ -7589,8 +7604,8 @@ names the test or harness check that pins the deviation.
   backend (S0 terminal spike).
 - *Verified by*: R2 discovery tests, R7 history tests, `config show --defaults` snapshot.
 
-**D8 — History filter for inline key material — OPEN (decision required before R7
-merges).**
+**D8 — History filter for inline key material — OPEN (user decision pending; option A
+ships until the user decides).**
 - *Issue*: c2@408d6f2 persists inline key material to its history file — e.g. the raw AES
   key of `load mem aes 00112233…` and every physical line of a quoted PEM paste; only
   `--pin`/`--password` lines are dropped (verified, S0 terminal spike).
@@ -7603,6 +7618,10 @@ merges).**
 - *Implementation rule*: the predicate lives in one function (`is_secret_line`), so
   switching is a one-function change. If B is chosen, this entry becomes an adopted
   deviation.
+- *Status at R13 sign-off (2026-10-02)*: still OPEN — the decision belongs to the user and
+  was not taken by any loop. r2 SHIPS OPTION A (c2 parity: only `--pin`/`--password` lines
+  are kept out of the history) until the user decides; nothing else depends on the
+  outcome.
 
 **D9 — Line-editor UX (reedline instead of prompt_toolkit).**
 - *Description*: the command line is highlighted (§5.1 colors; c2 had no highlighting).
@@ -7639,7 +7658,12 @@ merges).**
   `Encryption failed`, `point is not on curve` where pyca said `Invalid EC key.`, and so on.
   The c2-owned prefixes and all hints are unchanged. The pre-validated cases of §5.8 and the
   RFC 4514 subject and CN-length texts (§5.6/§5.7) keep pyca's exact text. `ErrorStack`'s
-  `Display` (build-specific file paths and line numbers) is never shown.
+  `Display` (build-specific file paths and line numbers) is never shown. The reason is
+  always the failing operation's own: the PKCS#11 provider drains the thread's OpenSSL
+  error queue after `C_Initialize` and after every session operation, because a module
+  sharing the process's libcrypto (SoftHSM: its failed `rdrand` engine load) would else
+  leave stale entries that became the reported reason of a later memory or key-parsing
+  failure (R13; r2-services `transfer_softhsm memory_reasons_are_not_polluted_by_softhsm_errors`).
 - *Reason*: different crypto/FFI libraries (S0 OpenSSL spike §9); c2's tests assert only
   the c2-owned prefixes.
 - *Verified by*: ported c2 tests (prefix assertions); §5.8 pre-validation tests assert the
