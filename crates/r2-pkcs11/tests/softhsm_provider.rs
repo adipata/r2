@@ -2,7 +2,9 @@
 //! TestLogin / TestGenerate / TestLoadObjects / TestInitToken, plus the §4.5.5 shared-module
 //! symlink test). Feature `softhsm`; fails (never skips) without the fixture from
 //! `scripts/softhsm-init.sh`. Objects are session objects (CKA_TOKEN=false) under unique
-//! labels; nextest runs these one at a time (softhsm test group).
+//! labels; nextest runs these one at a time (softhsm test group), and each holds
+//! `global_state_lock` so the `cargo test` fallback (one process, parallel threads, one
+//! thread-local module registry per thread) never finalizes a module under another test.
 #![cfg(feature = "softhsm")]
 #![allow(
     clippy::unwrap_used,
@@ -81,6 +83,7 @@ fn logged_in() -> Pkcs11Provider {
 
 #[test]
 fn softhsm_login_status_logout() {
+    let _lock = r2_testkit::global_state_lock(); // one module user at a time under cargo test
     let token = softhsm_token();
     let provider = make_provider(token, "softhsm");
     assert_eq!(provider.status().auth, AuthState::LoggedOut);
@@ -109,6 +112,7 @@ fn softhsm_login_status_logout() {
 
 #[test]
 fn softhsm_wrong_pin() {
+    let _lock = r2_testkit::global_state_lock(); // one module user at a time under cargo test
     let token = softhsm_token();
     let provider = make_provider(token, "softhsm");
     let info = provider
@@ -132,6 +136,7 @@ fn softhsm_wrong_pin() {
 
 #[test]
 fn softhsm_generate_aes_applies_template() {
+    let _lock = r2_testkit::global_state_lock(); // one module user at a time under cargo test
     let provider = logged_in();
     let label = unique_label();
     let mut request = GenerateRequest::new(KeyAlgorithm::Aes, label.as_str());
@@ -175,6 +180,7 @@ fn softhsm_generate_aes_applies_template() {
 
 #[test]
 fn softhsm_generate_rsa_keypair_shared_label_and_id() {
+    let _lock = r2_testkit::global_state_lock(); // one module user at a time under cargo test
     let provider = logged_in();
     let label = unique_label();
     let mut request = GenerateRequest::new(KeyAlgorithm::Rsa, label.as_str());
@@ -215,6 +221,7 @@ fn softhsm_generate_rsa_keypair_shared_label_and_id() {
 
 #[test]
 fn softhsm_generate_ec_and_montgomery_translation() {
+    let _lock = r2_testkit::global_state_lock(); // one module user at a time under cargo test
     let provider = logged_in();
     let label = unique_label();
     let mut request = GenerateRequest::new(KeyAlgorithm::Ec, label.as_str());
@@ -242,6 +249,7 @@ fn softhsm_generate_ec_and_montgomery_translation() {
 
 #[test]
 fn softhsm_load_every_object_kind() {
+    let _lock = r2_testkit::global_state_lock(); // one module user at a time under cargo test
     let provider = logged_in();
     let (pkcs8, cert_der) = r2_testkit::fixtures::rsa_pkcs8_and_cert();
     let shared_id = vec![0x77, 0x01];
@@ -433,6 +441,7 @@ fn softhsm_load_every_object_kind() {
 
 #[test]
 fn softhsm_init_token_label_round_trips_exactly() {
+    let _lock = r2_testkit::global_state_lock(); // one module user at a time under cargo test
     // C_InitToken wants a 32-byte space-padded label; an unpadded one comes back NUL-filled
     let token = softhsm_token();
     let provider = make_provider(token, "softhsm-init");
