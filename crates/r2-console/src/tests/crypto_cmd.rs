@@ -31,7 +31,7 @@ use crate::completer::complete_paths;
 use crate::context::AppContext;
 use crate::io::line::{Sink, SinkTarget, WidthRule};
 use crate::io::{LineIo, LineReader, ReadOutcome, SecretRead, SinkStyle};
-use crate::testing::{CtxBuilder, make_config, run_line};
+use crate::testing::{CtxBuilder, make_config};
 
 const AES_KEY: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 const IV_12: &str = "000102030405060708090a0b";
@@ -160,6 +160,15 @@ fn find(provider: &dyn Provider, label: &str) -> KeyInfo {
 
 fn mech(name: &str) -> MechanismInvocation {
     MechanismInvocation::new(name, Params::new())
+}
+
+/// `crate::testing::run_line` under the process-global state lock: the verbs honor the
+/// process-global Ctrl-C flag (§11 D13), which concurrent tests may set under the
+/// `cargo test` harness.
+fn run_line(ctx: &AppContext, line: &str) -> Result<crate::repl::Flow> {
+    let _lock = r2_testkit::global_state_lock();
+    r2_core::runtime::reset_interrupt();
+    crate::testing::run_line(ctx, line)
 }
 
 fn run_err(ctx: &AppContext, line: &str) -> ConsoleError {
@@ -672,6 +681,23 @@ fn test_hex_panel_honors_ui_config() {
     let first = first.lines().next().unwrap();
     assert!(text.contains(first), "{text}");
     assert!(!text.contains(&format_hex(&expected, 2, 32)));
+    // The session IO built by `open_console_io` (which needs real stdio, so it is not
+    // driven here) must hand the same `config.ui` values to every LineIo it builds.
+    let source: String = include_str!("../io/mod.rs")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let start = source.find("pub fn open_console_io(").unwrap();
+    let body = &source[start..];
+    let body = &body[..body.find("pub mod ").unwrap()];
+    let builds = body.matches("LineIo::new(").count();
+    assert!(builds >= 1, "{body}");
+    assert_eq!(
+        body.matches("config.ui.hex_group, config.ui.hex_width,")
+            .count(),
+        builds,
+        "every LineIo in open_console_io takes config.ui's hex layout"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1661,7 +1687,8 @@ fn interrupt_flag_stops_before_the_output_is_written() {
     let out = dir.path().join("ct.bin");
     let io = scripted(&[]);
     let ctx = ctx_with(dyn_io(&io), registry(&[Rc::new(mem)]));
-    let result = run_line(
+    r2_core::runtime::reset_interrupt();
+    let result = crate::testing::run_line(
         &ctx,
         &format!("encrypt mem:aeskey ecb 0xdeadbeef --out {}", out.display()),
     );
@@ -1683,7 +1710,157 @@ fn verify_lines_render_as_plain_text() {
         render_plain(&styled, &RenderConfig::CAPTURE),
         "signature VALID"
     );
-    let full = r2_core::render::render(&styled, &RenderConfig::CAPTURE);
-    assert!(full.contains("signature VALID"));
-    assert!(full.contains("32"), "green SGR: {full:?}");
+    // Bold green (rich `style="bold green"`), in the renderer's SGR form — the same form as
+    // Error's bold red (one sequence per attribute; rich writes the visually identical
+    // "\x1b[1;32m"). Under no_color the style keeps its bold attribute only.
+    assert_eq!(
+        r2_core::render::render(&styled, &RenderConfig::CAPTURE),
+        "\x1b[1m\x1b[32msignature VALID\x1b[0m"
+    );
+    assert_eq!(
+        r2_core::render::render_no_color(&styled, &RenderConfig::CAPTURE),
+        "\x1b[1msignature VALID\x1b[0m"
+    );
+    let invalid = Renderable::Styled(vec![vec![Span {
+        text: "signature INVALID".to_owned(),
+        tone: Tone::Error,
+    }]]);
+    assert_eq!(
+        r2_core::render::render(&invalid, &RenderConfig::CAPTURE),
+        "\x1b[1m\x1b[31msignature INVALID\x1b[0m"
+    );
+}
+
+/// §11 D13: a Ctrl-C during `verify` → UserAbort, no VALID/INVALID line.
+#[test]
+fn interrupt_flag_stops_the_verify_verdict() {
+    let _lock = r2_testkit::global_state_lock();
+    struct Interrupting;
+    impl FakeHooks for Interrupting {
+        fn verify(
+            &self,
+            next: &dyn Provider,
+            key: &KeyInfo,
+            mech: &MechanismInvocation,
+            data: &[u8],
+            signature: &[u8],
+        ) -> Option<Result<bool>> {
+            r2_core::runtime::request_interrupt();
+            Some(next.verify(key, mech, data, signature))
+        }
+    }
+    let mem = FakeProvider::new("mem").with_hooks(Rc::new(Interrupting));
+    mem.import_key(
+        &material(KeyAlgorithm::Aes, KeyClass::Secret, &AES_KEY),
+        "aeskey",
+        None,
+        None,
+    )
+    .unwrap();
+    let mac = cmac(&mem, b"\xde\xad\xbe\xef");
+    let io = scripted(&[]);
+    let ctx = ctx_with(dyn_io(&io), registry(&[Rc::new(mem)]));
+    r2_core::runtime::reset_interrupt();
+    let result = crate::testing::run_line(
+        &ctx,
+        &format!("verify mem:aeskey cmac 0xdeadbeef --sig 0x{}", hex_of(&mac)),
+    );
+    r2_core::runtime::reset_interrupt();
+    let err = result.unwrap_err();
+    assert_eq!(err.kind, ErrorKind::UserAbort);
+    assert!(io.output().is_empty(), "{:?}", io.output());
+}
+
+/// §11 D13: a Ctrl-C during a key-only `derive` → UserAbort, no resident-key line.
+#[test]
+fn interrupt_flag_stops_the_resident_derive_line() {
+    let _lock = r2_testkit::global_state_lock();
+    struct InterruptingKeyOnly;
+    impl FakeHooks for InterruptingKeyOnly {
+        fn derive(
+            &self,
+            _next: &dyn Provider,
+            key: &KeyInfo,
+            _mech: &MechanismInvocation,
+        ) -> Option<Result<DeriveResult>> {
+            r2_core::runtime::request_interrupt();
+            Some(Ok(DeriveResult {
+                key: Some(key.clone()),
+                raw: None,
+            }))
+        }
+    }
+    let hsm = FakeProvider::new("hsm")
+        .with_type_name("pkcs11")
+        .with_hooks(Rc::new(InterruptingKeyOnly));
+    hsm.import_key(&ec_material(&[0x22; 32]), "eckey", None, None)
+        .unwrap();
+    let io = scripted(&[]);
+    let ctx = ctx_with(dyn_io(&io), registry(&[Rc::new(hsm)]));
+    r2_core::runtime::reset_interrupt();
+    let result = crate::testing::run_line(&ctx, "derive hsm:eckey ecdh peer=0x04");
+    r2_core::runtime::reset_interrupt();
+    let err = result.unwrap_err();
+    assert_eq!(err.kind, ErrorKind::UserAbort);
+    assert!(io.output().is_empty(), "{:?}", io.output());
+}
+
+/// §6: the idempotent `Provider::initialize()` runs before the busy section.
+#[test]
+fn provider_is_initialized_before_the_busy_section() {
+    struct CountingInit(Rc<RefCell<Vec<&'static str>>>);
+    impl FakeHooks for CountingInit {
+        fn initialize(&self, _next: &dyn Provider) -> Option<Result<()>> {
+            self.0.borrow_mut().push("initialize");
+            None
+        }
+        fn encrypt(
+            &self,
+            next: &dyn Provider,
+            key: &KeyInfo,
+            mech: &MechanismInvocation,
+            data: &[u8],
+        ) -> Option<Result<Vec<u8>>> {
+            self.0.borrow_mut().push("encrypt");
+            Some(next.encrypt(key, mech, data))
+        }
+    }
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let mem = FakeProvider::new("mem").with_hooks(Rc::new(CountingInit(Rc::clone(&calls))));
+    mem.import_key(
+        &material(KeyAlgorithm::Aes, KeyClass::Secret, &AES_KEY),
+        "aeskey",
+        None,
+        None,
+    )
+    .unwrap();
+    let io = scripted(&[]);
+    let ctx = ctx_with(dyn_io(&io), registry(&[Rc::new(mem)]));
+    calls.borrow_mut().clear();
+    run_line(
+        &ctx,
+        "encrypt mem:aeskey ecb 0x00000000000000000000000000000000",
+    )
+    .unwrap();
+    let calls = calls.borrow();
+    let encrypt_at = calls.iter().position(|call| *call == "encrypt").unwrap();
+    assert!(calls[..encrypt_at].contains(&"initialize"), "{calls:?}");
+}
+
+/// c2: a ConsoleError from the verify public-half fallback leaves `complete()` and the
+/// completer yields no candidates at all.
+#[test]
+fn verify_completion_is_empty_when_the_public_half_lookup_fails() {
+    struct FailingList;
+    impl FakeHooks for FailingList {
+        fn list_keys(&self, _next: &dyn Provider) -> Option<Result<Vec<KeyInfo>>> {
+            Some(Err(ConsoleError::generic("boom")))
+        }
+    }
+    let mem = FakeProvider::new("mem").with_hooks(Rc::new(FailingList));
+    mem.import_key(&ec_material(&[0x11; 32]), "eckey", None, None)
+        .unwrap();
+    let ctx = ctx_with(dyn_io(&scripted(&[])), registry(&[Rc::new(mem)]));
+    assert!(complete(&ctx, "verify", &["verify", "mem:eckey"], "").is_empty());
+    assert!(complete(&ctx, "verify", &["verify", "mem:eckey", "ecdsa"], "").is_empty());
 }

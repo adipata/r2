@@ -78,6 +78,9 @@ fn memory_provider() -> Rc<MemoryProvider> {
 
 /// Feed command lines (and interleaved prompt answers) through the REPL (c2 `run_session`).
 fn run_session(answers: &[&str]) -> (Rc<ScriptedIo>, Rc<MemoryProvider>) {
+    // The verbs honor the process-global Ctrl-C flag (§11 D13): hold the global lock so a
+    // concurrent test setting it cannot abort this session under `cargo test`.
+    let _lock = r2_testkit::global_state_lock();
     let mut script: Vec<String> = answers.iter().map(|a| (*a).to_owned()).collect();
     script.push("exit".to_owned());
     let io = Rc::new(ScriptedIo::new(script));

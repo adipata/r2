@@ -961,7 +961,7 @@ tests/unit/test_crypto_cmd.py::test_file_in_out_round_trip,1,R9,ported,r2-consol
 tests/unit/test_crypto_cmd.py::test_out_raw_is_default_and_b64_encodes,1,R9,ported,r2-console tests::crypto_cmd::test_out_raw_is_default_and_b64_encodes,
 tests/unit/test_crypto_cmd.py::test_outformat_requires_out,1,R9,ported,r2-console tests::crypto_cmd::test_outformat_requires_out,
 tests/unit/test_crypto_cmd.py::test_invalid_outformat_rejected,1,R9,ported,r2-console tests::crypto_cmd::test_invalid_outformat_rejected,
-tests/unit/test_crypto_cmd.py::test_hex_panel_honors_ui_config,1,R9,ported,r2-console tests::crypto_cmd::test_hex_panel_honors_ui_config,
+tests/unit/test_crypto_cmd.py::test_hex_panel_honors_ui_config,1,R9,ported,r2-console tests::crypto_cmd::test_hex_panel_honors_ui_config, | r2 applies ui.hex_* in the session IO: the test drives a LineIo built from config.ui and source-checks open_console_io's config.ui wiring
 tests/unit/test_crypto_cmd.py::test_verify_sig_inline_valid_and_tampered,1,R9,ported,r2-console tests::crypto_cmd::test_verify_sig_inline_valid_and_tampered,
 tests/unit/test_crypto_cmd.py::test_verify_sig_file,1,R9,ported,r2-console tests::crypto_cmd::test_verify_sig_file,
 tests/unit/test_crypto_cmd.py::test_verify_signature_prompted_when_no_source_given,1,R9,ported,r2-console tests::crypto_cmd::test_verify_signature_prompted_when_no_source_given,

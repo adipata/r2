@@ -103,8 +103,9 @@ struct Operation<'a> {
     key: KeyInfo,
     /// None = the mechanism was omitted (callers fall back to `select()`).
     spec: Option<&'a OperationSpec>,
-    /// The positionals after the key ref (and the mechanism, when one bound).
-    rest: Vec<String>,
+    /// The positionals after the key ref (and the mechanism, when one bound). Zeroized on
+    /// drop: the inline data token may be plaintext to encrypt or sign.
+    rest: Zeroizing<Vec<String>>,
 }
 
 /// Resolve positional 1 (key ref) and the §5.1 mech-vs-data positional 2 (c2 `_operation`).
@@ -123,7 +124,7 @@ fn operation<'a>(
     if verb == Verb::Verify {
         key = public_half_for_verify(provider.as_ref(), key)?;
     }
-    let mut rest: Vec<String> = args.positionals[1..].to_vec();
+    let mut rest = Zeroizing::new(args.positionals[1..].to_vec());
     let mut spec = None;
     if !rest.is_empty() && !args.positional_quoted.get(1).copied().unwrap_or(false) {
         match ctx.operations.resolve_cli(verb, &key, &rest[0]) {
@@ -267,16 +268,22 @@ fn completion_key(ctx: &AppContext, reference: &str) -> Option<(Rc<dyn Provider>
     Some((provider, key))
 }
 
-/// The provider verb inside the IO's busy section (§6 spinner; the provider was already
-/// initialized by the ref's `find_key`, so no lazy initialization runs inside it).
+/// The provider verb inside the IO's busy section. §6: the idempotent
+/// `Provider::initialize()` runs first, so no lazy initialization runs inside `busy()`.
+/// §11 D13: the Ctrl-C flag is honored as soon as the provider verb returns, before any
+/// result is rendered or written (c2's KeyboardInterrupt surfaced right after the C call).
 fn busy<T>(
     ctx: &AppContext,
+    provider: &dyn Provider,
     verb: Verb,
     mech: &MechanismInvocation,
     f: impl FnOnce() -> r2_core::Result<T>,
 ) -> r2_core::Result<T> {
+    provider.initialize()?;
     let message = format!("{} — {}", verb.as_str(), mech.mechanism);
-    busy_with(ctx.io.as_ref(), &message, f)
+    let value = busy_with(ctx.io.as_ref(), &message, f)?;
+    check_interrupt()?;
+    Ok(value)
 }
 
 // ---------------------------------------------------------------------------
@@ -288,7 +295,7 @@ struct Resolved<'a> {
     provider: Rc<dyn Provider>,
     key: KeyInfo,
     spec: &'a OperationSpec,
-    rest: Vec<String>,
+    rest: Zeroizing<Vec<String>>,
     params: Params,
 }
 
@@ -369,7 +376,8 @@ impl VerbShape {
             // §5.1 fallback, as in run()
             match public_half_for_verify(provider.as_ref(), key) {
                 Ok(key) => key,
-                Err(_) => return option_names,
+                // c2: the ConsoleError leaves complete() and the completer yields nothing
+                Err(_) => return Vec::new(),
             }
         } else {
             key
@@ -477,10 +485,12 @@ impl Command for DataResultCommand {
         } = shape.resolve(ctx, args)?;
         let data = payload(ctx, args, &rest, DATA_PROMPT)?;
         let mech = spec.invocation(params);
-        let result: Zeroizing<Vec<u8>> = busy(ctx, shape.verb, &mech, || match self.kind {
-            DataVerb::Encrypt => provider.encrypt(&key, &mech, &data).map(Zeroizing::new),
-            DataVerb::Decrypt => provider.decrypt(&key, &mech, &data),
-            DataVerb::Sign => provider.sign(&key, &mech, &data).map(Zeroizing::new),
+        let result: Zeroizing<Vec<u8>> = busy(ctx, provider.as_ref(), shape.verb, &mech, || {
+            match self.kind {
+                DataVerb::Encrypt => provider.encrypt(&key, &mech, &data).map(Zeroizing::new),
+                DataVerb::Decrypt => provider.decrypt(&key, &mech, &data),
+                DataVerb::Sign => provider.sign(&key, &mech, &data).map(Zeroizing::new),
+            }
         })?;
         let title = format!("{} — {}", self.result_title(), spec.mechanism);
         emit(ctx, &result, output.as_ref(), &title)?;
@@ -537,7 +547,7 @@ impl Command for VerifyCommand {
         let data = payload(ctx, args, &rest, DATA_PROMPT)?;
         let signature = Self::signature(ctx, args)?;
         let mech = spec.invocation(params);
-        let ok = busy(ctx, Verb::Verify, &mech, || {
+        let ok = busy(ctx, provider.as_ref(), Verb::Verify, &mech, || {
             provider.verify(&key, &mech, &data, &signature)
         })?;
         let (text, tone) = if ok {
@@ -588,7 +598,9 @@ impl Command for DeriveCommand {
             ..
         } = Self::SHAPE.resolve(ctx, args)?;
         let mech = spec.invocation(params);
-        let result = busy(ctx, Verb::Derive, &mech, || provider.derive(&key, &mech))?;
+        let result = busy(ctx, provider.as_ref(), Verb::Derive, &mech, || {
+            provider.derive(&key, &mech)
+        })?;
         if let Some(raw) = &result.raw {
             let title = format!("derived secret — {}", spec.mechanism);
             emit(ctx, raw, output.as_ref(), &title)?;
