@@ -81,7 +81,7 @@ impl Setup {
         input.push('\n');
         let output = Command::new(env!("CARGO_BIN_EXE_r2"))
             .env_clear()
-            .envs(r2_testkit::coverage_env())
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|v| ("LLVM_PROFILE_FILE", v)))
             .env("HOME", self.dir.path())
             .env("SOFTHSM2_CONF", &self.pre_conf)
             .current_dir(self.dir.path())

@@ -52,7 +52,7 @@ fn test_generate_honors_template_editor_cka_id_e2e_softhsm() {
         + "\n";
     let output = Command::new(env!("CARGO_BIN_EXE_r2"))
         .env_clear()
-        .envs(r2_testkit::coverage_env())
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|v| ("LLVM_PROFILE_FILE", v)))
         .env("HOME", dir.path())
         .env("SOFTHSM2_CONF", &token.conf_path)
         .current_dir(dir.path())

@@ -35,7 +35,7 @@ use r2_testkit::ScriptedIo;
 fn r2(dir: &Path, softhsm_conf: Option<&Path>) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_r2"));
     cmd.env_clear()
-        .envs(r2_testkit::coverage_env())
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|v| ("LLVM_PROFILE_FILE", v)))
         .env("HOME", dir)
         .current_dir(dir);
     if let Some(conf) = softhsm_conf {

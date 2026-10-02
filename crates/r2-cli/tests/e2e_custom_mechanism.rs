@@ -77,7 +77,7 @@ fn test_custom_ckm_passthrough_on_softhsm() {
     input.push('\n');
     let output = Command::new(env!("CARGO_BIN_EXE_r2"))
         .env_clear()
-        .envs(r2_testkit::coverage_env())
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|v| ("LLVM_PROFILE_FILE", v)))
         .env("HOME", dir.path())
         .env("SOFTHSM2_CONF", &token.conf_path)
         // c2's RenderingIO width: the ops table row keeps `vendor.cbc.passthrough` on one

@@ -22,7 +22,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 fn r2(dir: &Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_r2"));
     cmd.env_clear()
-        .envs(r2_testkit::coverage_env())
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|v| ("LLVM_PROFILE_FILE", v)))
         .env("HOME", dir)
         .current_dir(dir);
     cmd
@@ -162,7 +162,7 @@ fn file_redirected_stdin_runs_the_session_like_a_pipe() {
     std::fs::write(&input, "help\nexit\n").unwrap();
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_r2"))
         .env_clear()
-        .envs(r2_testkit::coverage_env())
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|v| ("LLVM_PROFILE_FILE", v)))
         .env("HOME", dir.path())
         .current_dir(dir.path())
         .arg("--config")
@@ -480,7 +480,7 @@ fn sigint_with_piped_stdin_aborts_the_read_and_keeps_the_line() {
     let config = write_config(dir.path(), "");
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_r2"))
         .env_clear()
-        .envs(r2_testkit::coverage_env())
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|v| ("LLVM_PROFILE_FILE", v)))
         .env("HOME", dir.path())
         .current_dir(dir.path())
         .arg("--config")
