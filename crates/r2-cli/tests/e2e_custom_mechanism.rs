@@ -77,6 +77,7 @@ fn test_custom_ckm_passthrough_on_softhsm() {
     input.push('\n');
     let output = Command::new(env!("CARGO_BIN_EXE_r2"))
         .env_clear()
+        .envs(r2_testkit::coverage_env())
         .env("HOME", dir.path())
         .env("SOFTHSM2_CONF", &token.conf_path)
         // c2's RenderingIO width: the ops table row keeps `vendor.cbc.passthrough` on one
@@ -92,8 +93,12 @@ fn test_custom_ckm_passthrough_on_softhsm() {
     assert_eq!(output.status.code(), Some(0), "{text}");
     assert!(!text.contains("─ error ─"), "{text}");
 
+    // the ops table row itself: c2 asserted on RenderingIO text, which never holds the typed
+    // command, while r2's piped stdout echoes `r2> encrypt hsm:… vcbc …` (§11 D2)
     assert!(
-        text.contains("vcbc") && text.contains("vendor.cbc.passthrough"),
+        text.lines().any(|line| !line.starts_with("r2> ")
+            && line.contains("vcbc")
+            && line.contains("vendor.cbc.passthrough")),
         "{text}"
     ); // ops table row
     assert!(text.contains("IV (16 bytes)"), "{text}"); // config-declared param prompted

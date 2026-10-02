@@ -21,7 +21,10 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// and `dir` as HOME and working directory.
 fn r2(dir: &Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_r2"));
-    cmd.env_clear().env("HOME", dir).current_dir(dir);
+    cmd.env_clear()
+        .envs(r2_testkit::coverage_env())
+        .env("HOME", dir)
+        .current_dir(dir);
     cmd
 }
 
@@ -147,6 +150,32 @@ fn help_then_exit_transcript() {
     assert!(out.contains("List commands, or show usage for one command"));
     assert!(out.ends_with("help <command> shows its usage\nr2> exit\n"));
     assert!(!out.contains('\u{1b}')); // no ANSI escapes when piped (§6)
+}
+
+#[test]
+fn file_redirected_stdin_runs_the_session_like_a_pipe() {
+    // §11 D2: `c2 < session.txt` (stdin a regular file) printed the warning and the banner,
+    // ran nothing and exited 0; r2 reads the file exactly like piped stdin.
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), "");
+    let input = dir.path().join("session.txt");
+    std::fs::write(&input, "help\nexit\n").unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_r2"))
+        .env_clear()
+        .envs(r2_testkit::coverage_env())
+        .env("HOME", dir.path())
+        .current_dir(dir.path())
+        .arg("--config")
+        .arg(&config)
+        .stdin(std::fs::File::open(&input).unwrap())
+        .output()
+        .unwrap();
+    let (piped, _, _) = session(dir.path(), &config, b"help\nexit\n");
+    assert_eq!(output.status.code(), Some(0));
+    let out = String::from_utf8(output.stdout).unwrap();
+    assert!(out.starts_with(&format!("{}r2> help\n", banner())), "{out}");
+    assert!(out.ends_with("r2> exit\n"), "{out}");
+    assert_eq!(out, piped);
 }
 
 #[test]
@@ -451,6 +480,7 @@ fn sigint_with_piped_stdin_aborts_the_read_and_keeps_the_line() {
     let config = write_config(dir.path(), "");
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_r2"))
         .env_clear()
+        .envs(r2_testkit::coverage_env())
         .env("HOME", dir.path())
         .current_dir(dir.path())
         .arg("--config")
