@@ -6632,7 +6632,7 @@ DC → IA5String; everything else UTF8String).
 | AES-GCM | `symm::Crypter` over `Cipher::aes_*_gcm()` (the `symm::encrypt_aead` computation, with AAD and data fed in ≤ 2³⁰-byte updates, §11 D12(m)), output **ct‖tag** truncated to `tag_bits/8`; decrypt sets the tag before `finalize` (a bad tag is an error) | a `CK_GCM_PARAMS` (owned mutable IV copy, AAD, `ulTagBits`) through `VendorDefinedMechanism` [V, S0] returns ct‖tag natively; `ulIvBits` is sent as 0 — PyKCS11's `AES_GCM_Mechanism` never set it (c2 parity; cryptoki's `GcmParams::new` would send 8·len(iv)) | AAD: always pass a non-NULL (possibly empty) buffer — SoftHSM builds reject NULL [V] (cryptoki passes a non-NULL pointer with length 0 for empty AAD, S0 capture). **[U]** FIPS HSMs may ignore the supplied IV and append their own — detect via output length, surface "HSM-generated IV" to the operator. Tamper on SoftHSM: `CKR_GENERAL_ERROR` (2.6.1) / `CKR_ENCRYPTED_DATA_INVALID` (2.7.0) |
 | AES-CTR | `Cipher::aes_*_ctr()` with the full 16-B counter block as IV (OpenSSL increments the whole block big-endian, = pyca) | `Mechanism::VendorDefined(VendorDefinedMechanism::new(MechanismType::AES_CTR, Some(&CK_AES_CTR_PARAMS { ulCounterBits: counter_bits, cb: counter_block })))` [V, S0] (cryptoki has no CTR variant; no `unsafe`) | default `counter_bits=128` reproduces pyca's semantics; cross-provider KAT required. Memory accepts only `counter_bits=128` and a full 16-byte `counter_block` (`Param`, c2 texts). SoftHSM refuses a counter that would wrap within `counter_bits` (`CKR_DATA_LEN_RANGE`) |
 | RSA-OAEP | `encrypt::Encrypter`/`Decrypter` with `Padding::PKCS1_OAEP`, `set_rsa_oaep_md(hash)`, `set_rsa_mgf1_md(mgf_hash)`, `set_rsa_oaep_label(label)` only when the label is non-empty | `Mechanism::RsaPkcsOaep(PkcsOaepParams::new(hash, mgf, PkcsOaepSource::empty() \| data_specified(&label)))` [V, S0]; tokens that reject non-SHA1 OAEP params (SoftHSM: SHA-1/MGF1-SHA1 with an empty label only) fall back to on-token raw RSA (`Mechanism::RsaX509`) + provider-side OAEP en/decoding (c2 L5/L13 fold-back), triggered by `CKR_ARGUMENTS_BAD` / `CKR_MECHANISM_PARAM_INVALID` | hash/MGF pair (CKM_SHAx, CKG_MGF1_SHAx); mgf_hash defaults to hash; an empty label is sent as NULL source data (c2 parity, S0 capture). Decrypt failures are detail-free (`RSA-OAEP decryption failed`) |
-| RSA-PKCS1 | `Encrypter`/`Decrypter` with `Padding::PKCS1` | `Mechanism::RsaPkcs` (`CKM_RSA_PKCS`) | decrypt failures detail-free (`RSA-PKCS1 decryption failed`). A malformed ciphertext or wrong key follows the linked OpenSSL (§11 D26): an error on OpenSSL < 3.2 (the system 3.0 of source builds), implicit rejection (pseudo-random plaintext, no error) on 3.2+ (the vendored release build, as pyca/c2) |
+| RSA-PKCS1 | `Encrypter`/`Decrypter` with `Padding::PKCS1` | `Mechanism::RsaPkcs` (`CKM_RSA_PKCS`) | decrypt failures detail-free (`RSA-PKCS1 decryption failed`). A ciphertext whose length is not the modulus size fails before OpenSSL is called (pre-validation table below). A full-length malformed ciphertext or a wrong key follows the linked OpenSSL (§11 D26): implicit rejection (pseudo-random plaintext, no error, byte-identical to c2) on OpenSSL ≥ 3.2 and on distro builds that backported it (the vendored release build; Ubuntu's 3.0.13), an error on an OpenSSL without it |
 | RSA-RAW | **hand-rolled** modexp: `BigNum::from_slice` + `mod_exp` + `to_vec_padded(k)` with `m ≥ n` refused (`r2-provider::rsa_raw_modexp`, shared) [S] — never OpenSSL `Padding::NONE`, which requires input length == k | `Mechanism::RsaX509` (`CKM_RSA_X_509`); decrypt with a PUBLIC ref (`…:pub`, §4.3) = software public-exponent modexp from CKA_MODULUS/CKA_PUBLIC_EXPONENT (signature recovery — tokens don't C_Decrypt with public handles: SoftHSM answers `CKR_KEY_FUNCTION_NOT_PERMITTED`, S0) | diagnostic feature; NOT constant-time in the memory provider (documented); input left-padded to modulus length (byte-identical to c2 for d and e, S0) |
 
 Ciphertext convention: GCM output/input is `ct‖tag` — **providers** emit and consume that
@@ -6657,6 +6657,7 @@ text inside c2's rendering:
 | KW unwrap integrity failure | `Crypto`: `AES key unwrap failed: ` (pyca's `InvalidUnwrap()` has an empty message) |
 | KWP unwrap failures | the five outcomes of the §5.5 dual-dialect list, verbatim (blob > 16 bytes and not a multiple of 8 → `The length of the provided data is not a multiple of the block length.`; bad padding after RFC 3394; else `… blob matches neither …`), all with the dual-dialect hint |
 | KEK not 16/24/32 bytes | `The wrapping key must be a valid AES key length` (inside c2's wrap/unwrap prefix) |
+| RSA-PKCS1 / RSA-OAEP decrypt or unwrap (memory), ciphertext length ≠ modulus size in bytes (OpenSSL left-pads a short PKCS#1 v1.5 ciphertext and answers with implicit-rejection plaintext; pyca checks `Ciphertext length must be equal to key size.` first) | `Crypto`, c2's detail-free text: `RSA-PKCS1 decryption failed` / `RSA-PKCS1 unwrap failed` (resp. `RSA-OAEP …`) |
 | RSA keygen below 1024 bits (OpenSSL generates 512/1000) | `Param` (`size_bits`): `invalid RSA key size <n>: key_size must be at least 1024-bits.` |
 | ECDH (memory) raw EC peer whose first byte is not `02`/`03`/`04` (OpenSSL accepts hybrid `06`/`07`) | `Param` (`peer`): `peer is not SPKI DER or an uncompressed EC point (0x04‖X‖Y): Unsupported elliptic curve point type` (§5.10) |
 | self-signed CN length, `--subject` syntax | §5.6 / §5.7 |
@@ -7354,9 +7355,11 @@ custom_mechanisms: []      # entry schema: spec §4.8 / example §5.14
     prompt_toolkit copy rejoined from its carriage-return rendering; r2's PlainIo prompt +
     line; hidden answers, named by the session's `## secret:` header, as c2's `*` run), so
     prompt TEXTS are compared and only the REPL prompt's command echo is dropped,
-    `18446744073709551615` ≙ `-1` (§11 D18), and — for the shared token only — `handle
-    <n>` numbers and the order of consecutive `<provider>:` table rows (SoftHSM's handle and
-    find order depend on its token file names).
+    `18446744073709551615` ≙ `-1` (§11 D18), and — for the shared token suite only (opt-in,
+    `normalize(…, token_provider="hsm")`) — `handle <n>` numbers and the order of
+    consecutive `hsm:` table rows (SoftHSM's handle and find order depend on its token file
+    names). The transcript and interop suites reorder nothing: memory listing order is
+    compared (R13 fix round 2).
 - **Coverage**: `cargo llvm-cov` with an 80% line floor on the workspace, enforced from R13
   (as c2's floor was wired in L13). As built (R13): the `coverage` CI job runs `cargo llvm-cov nextest --workspace
   --features softhsm --fail-under-lines 80` on the SoftHSM 2.6.1 fixture token (`just
@@ -8169,16 +8172,25 @@ one OpenSSL's `X509` decoder accepts). Verified by R6 x509build tests
 
 **D26 — RSA PKCS#1 v1.5 decrypt failures follow the linked OpenSSL.**
 - *Description*: c2's pyca bundles OpenSSL ≥ 3.2, whose PKCS#1 v1.5 decryption uses
-  implicit rejection: a malformed ciphertext or a wrong key yields pseudo-random plaintext
-  and no exception (memory `decrypt … pkcs1`; the RSA-PKCS1 unwrap then goes on with the
-  pseudo-random payload and fails, if at all, in the material checks). r2's MemoryProvider uses the linked OpenSSL: the
-  vendored release build (3.6.3, §9) behaves as c2; a source build against OpenSSL < 3.2
-  (e.g. the system 3.0.13) raises Crypto `RSA-PKCS1 decryption failed` resp. `RSA-PKCS1
-  unwrap failed` instead. Valid ciphertexts decrypt identically everywhere.
+  implicit rejection: a full-length (modulus-size) malformed ciphertext or a wrong key
+  yields pseudo-random plaintext and no exception (memory `decrypt … pkcs1`; the RSA-PKCS1
+  unwrap then goes on with the pseudo-random payload and fails, if at all, in the material
+  checks). r2's MemoryProvider uses the linked OpenSSL. Builds with implicit rejection —
+  the vendored release build (3.6.3, §9) and distro OpenSSL 3.0.x builds that backported it
+  (this project's dev host: Ubuntu's 3.0.13) — behave as c2, byte for byte (the rejection
+  plaintext is derived deterministically from the key and the ciphertext). A source build
+  against an OpenSSL without implicit rejection (upstream < 3.2 without the backport)
+  raises Crypto `RSA-PKCS1 decryption failed` resp. `RSA-PKCS1 unwrap failed` instead.
+  A ciphertext whose length is not the modulus size is NOT covered by this deviation: pyca
+  rejects it before OpenSSL runs and r2 pre-validates it identically on every build (§5.8).
+  Valid ciphertexts decrypt identically everywhere.
 - *Reason*: the failure semantics are OpenSSL's, not r2's; implementing implicit rejection
   in r2 code would duplicate a constant-time OpenSSL routine.
 - *Verified by*: R4 `memory_wrap_kek::test_pkcs1_unwrap_of_a_bogus_blob_leaks_no_padding_detail`
-  (accepts both outcomes, as c2's test does).
+  (accepts both outcomes, as c2's test does); R13
+  `memory_parity::rsa_ciphertext_not_the_modulus_size_fails_like_pycas_length_check` and the
+  harness `transcript_memory_errors` session (short blobs; a full-length blob decrypts to
+  the same 4 bytes in both tools on the dev host).
 
 **D27 — Memory: NONE (outside DATA) and OTHER material is a `Param` error.**
 - *Description*: c2's MemoryProvider raised KeyParseError for material whose algorithm is
