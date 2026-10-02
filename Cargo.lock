@@ -1051,6 +1051,7 @@ dependencies = [
  "r2-provider",
  "r2-testkit",
  "secrecy",
+ "tempfile",
  "tracing",
  "zeroize",
 ]
