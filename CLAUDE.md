@@ -43,6 +43,10 @@ binary, `r2`. It is a Cargo workspace on edition 2024, with the toolchain pinned
 - Lint:               `cargo clippy --workspace --all-targets -- -D warnings`
 - Supply chain:       `cargo deny check`
 - Ledger gate:        `python3 parity/generate_ledger.py --stats --gate <ID>`
+- Coverage (≥ 80%):   `cargo llvm-cov nextest --workspace --fail-under-lines 80` (CI adds
+                      `--features softhsm`)
+- Parity vs c2:       `python3 parity/harness/run_parity.py [--softhsm]` (c2 at `../c2` with
+                      `uv sync`; see `parity/harness/README.md`)
 
 The `justfile` wraps these. Keep builds lean (4 CPUs): reuse the target dir, and don't
 run parallel cargo invocations.
