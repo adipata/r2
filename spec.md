@@ -1571,22 +1571,35 @@ Normative behavior (c2 §4.4 + S0 spike 2):
   PKCS#1, SEC1, X.509, CSR, PKCS#12), raw AES (16/24/32 bytes))" (hint "supported inputs:
   PEM/DER keys, certificates, CSRs, PKCS#12, raw AES keys of 16/24/32 bytes"). Empty data
   → "empty key material".
-- DER try-chain (this order): `PKey::private_key_from_der` (PKCS#8/PKCS#1/SEC1) →
-  `PKey::private_key_from_pkcs8_callback` probe (fires only for EncryptedPrivateKeyInfo)
-  → `PKey::public_key_from_der` (SPKI) → `Rsa::public_key_from_der_pkcs1` (pyca accepts
-  PKCS#1 RSAPublicKey, so c2 does) → X.509 → CSR → PKCS#12 sniff (`SEQUENCE { INTEGER 3,
-  … }`) + `Pkcs12::from_der`. pyca parses keys as strict DER (rust-asn1) while OpenSSL's
-  d2i accepts trailing bytes and BER lengths, so every OpenSSL key decode (this chain, the
-  PEM key labels, the decrypted traditional body, `formats`, `x509build`, `spki_facts`,
-  certificate SPKIs) runs only on input that passes a strict DER check: exactly one TLV,
-  definite minimal lengths, nothing after it, constructed values walked recursively (only
-  SEQUENCE/SET among the universal constructed tags), minimal INTEGERs, DER BOOLEAN / NULL /
-  BIT STRING / OID forms, and the same for the DER inside a PKCS#8 privateKey OCTET STRING
-  and an RSA SPKI's BIT STRING; a failing key step falls through (DER) or is "malformed …"
-  (PEM) without a prompt. Certificates and CSRs are read by `x509info`'s strict pyca-style
-  parser ALONE (§4.4.5) — OpenSSL's `X509`/`X509Req` decoders are not consulted (they
-  refuse Name value encodings pyca loads, e.g. a VisibleString or OCTET STRING CN, or a
-  BMPString with a non-BMP character).
+- DER try-chain (this order): pyca's `load_der_private_key` (PKCS#8 → SEC1 → PKCS#1
+  RSAPrivateKey → DSA; an EncryptedPrivateKeyInfo is its TypeError, which prompts) → pyca's
+  `load_der_public_key` (SPKI, else a PKCS#1 RSAPublicKey — pyca accepts it, so c2 does) →
+  X.509 → CSR → PKCS#12 sniff (`SEQUENCE { INTEGER 3, … }`) + `Pkcs12::from_der`. Key
+  material is read by a port of pyca 49's own parsers (`cryptography-key-parsing` over a
+  port of rust-asn1 0.24: strict DER — one TLV, minimal definite lengths of at most 4
+  bytes, nothing after it —, unsigned minimal INTEGERs for versions and key components,
+  `AlgorithmIdentifier` parameters per pyca's DEFINED BY table: NULL or absent for RSA and
+  the hashes, absent for Ed/X25519/448 and ECDSA signatures, an `EcParameters` CHOICE for
+  EC, the PBES1/PBES2/PBKDF2/scrypt/cipher structures, one optional TLV for other OIDs, an
+  encoded DEFAULT refused), and keys are BUILT from their components with OpenSSL
+  (`Rsa::from_private_components`, `EcKey::from_private_components`,
+  `PKey::private_key_from_raw_bytes`, …); OpenSSL's key DER decoders are not used. pyca's
+  checks therefore apply: PrivateKeyInfo { version 0 only, AlgorithmIdentifier, OCTET
+  STRING, [0] IMPLICIT Attributes OPTIONAL } (no OneAsymmetricKey [1] publicKey); SEC1
+  ECPrivateKey version 1, the PKCS#8 and inner curve parameters equal when both present,
+  the private value exactly the order's byte length ("EC private key is not encoded
+  properly: private key value is too short. …"), the [1] public point the private key's
+  (`EC_KEY_check_key`); RSAPrivateKey version 0 without otherPrimeInfos (multi-prime RSA
+  is refused); RSA/RSAPublicKey integers non-negative; a parse error tries the next
+  format, any other refusal ends the private step ("Invalid key" and the other pyca
+  texts). A failing key step falls through (DER) or is "malformed …" (PEM) without a
+  prompt. Certificates and CSRs are read by `x509info`'s strict pyca-style parser ALONE
+  (§4.4.5) — OpenSSL's `X509`/`X509Req` decoders are not consulted (they refuse Name value
+  encodings pyca loads, e.g. a VisibleString or OCTET STRING CN, or a BMPString with a
+  non-BMP character). A certificate (CSR) whose only fault is pyca's InvalidVersion (not a
+  ValueError: c2 crashed) → KeyParse "certificate is not valid DER X.509: {n} is not a
+  valid X509 version" ("certificate request is not valid DER X.509: {n} is not a valid CSR
+  version") instead of the next step (§11 D12(b)).
 - PEM blocks (each `_PEM_BLOCK_RE` match c2 hands to pyca) are decoded by keyparse with a
   port of the `pem` 3.0 crate pyca 49 uses: BEGIN tag up to the next `-----`, `[ \t\r\n]*`
   skipped, payload up to the first `-----END ` (the crate's naive marker search, so
@@ -1602,9 +1615,8 @@ Normative behavior (c2 §4.4 + S0 spike 2):
   "… no BEGIN PUBLIC KEY/END PUBLIC KEY delimiters. Are you sure this is a public key?" /
   "… no BEGIN CERTIFICATE/END CERTIFICATE delimiters. Are you sure this is a certificate?"
   / "… no BEGIN CERTIFICATE REQUEST/END CERTIFICATE REQUEST delimiters. Are you sure this
-  is a CSR?". The decoded body is loaded through the DER entry point of its label
-  (`PKey::private_key_from_pkcs8` / `Rsa::` / `EcKey::private_key_from_der`, SPKI only for
-  `PUBLIC KEY`).
+  is a CSR?". The decoded body is loaded by pyca's parser for its tag (PKCS#8 /
+  PKCS#1 RSAPrivateKey / SEC1 / EncryptedPrivateKeyInfo; SPKI only for `PUBLIC KEY`).
 - Encrypted private keys: OpenSSL never prompts. RFC 1421 encryption headers are pyca's
   `decrypt_pem` for EVERY private label (header names and values trimmed; the last
   occurrence wins): no `Proc-Type` → unencrypted (or encrypted PKCS#8 for `ENCRYPTED
@@ -1614,12 +1626,15 @@ Normative behavior (c2 §4.4 + S0 spike 2):
   have a DEK-Info header."; `DEK-Info` without `,` → "malformed {label} PEM block:
   Encrypted PEM's DEK-Info header is not valid." — all before any prompt. Otherwise the
   password is asked and keyparse decrypts (cipher name and IV hex split at the first `,`,
-  NOT trimmed; EVP_BytesToKey MD5, salt = IV[..8], one round + CBC — pyca's scheme), then
+  NOT trimmed; EVP_BytesToKey MD5, salt = IV[..8], one round + CBC with the first
+  IV-length bytes of the IV — pyca's scheme: a LONGER IV decrypts, a shorter one fails), then
   loads the plaintext by label (`ENCRYPTED PRIVATE KEY`: an EncryptedPrivateKeyInfo
   decrypted again with the same password); any failure → the wrong-password text below.
-  Encrypted PKCS#8 (DER probe or the `ENCRYPTED PRIVATE KEY` label) is detected with the
-  `private_key_from_pkcs8_callback` "asked" flag and decrypted through the same callback
-  API. Password needed and no callback
+  Encrypted PKCS#8 (the DER chain or the `ENCRYPTED PRIVATE KEY` label) is recognized by
+  parsing pyca's EncryptedPrivateKeyInfo structure and decrypted by keyparse as pyca's
+  `parse_encrypted_private_key` does, with the WHOLE password (PBKDF2/scrypt through
+  `openssl::pkcs5`, PBES1 with pyca's PBKDF1 / RFC 7292 KDF; no OpenSSL password callback,
+  whose 1024-byte buffer truncated longer passwords). Password needed and no callback
   → "encrypted key material requires a password" (hint "provide --password or run
   interactively so the password can be prompted") — even when an empty-password probe
   would have decrypted (pyca TypeError parity); the same error when the callback answers
@@ -1640,15 +1655,20 @@ Normative behavior (c2 §4.4 + S0 spike 2):
   callback → "PKCS#12 requires a password (or the PKCS#12 data is corrupt)" (same hint as
   above); wrong password → "incorrect password for PKCS#12 (or corrupt PKCS#12 data)";
   nothing inside → "PKCS#12 contains no key or certificates". An attempt (pyca
-  `load_pkcs12`) succeeds only when every certificate also passes pyca's strict load (else
-  it fails like a wrong password, as pyca's ValueError did in c2's loop). A PFX WITHOUT a
+  `load_pkcs12`) succeeds only when its private key (re-encoded as PKCS#8) loads through
+  pyca's DER key loader and every certificate passes pyca's strict load; a ValueError
+  there (e.g. "Invalid private key", "Invalid key", a malformed certificate) fails the
+  attempt like a wrong password, as in c2's loop. A PFX WITHOUT a
   MAC (`openssl pkcs12 -nomac`) whose `parse2(pw)` fails is retried with a MacData computed
   for `pw` (HMAC-SHA1, RFC 7292 key derivation): OpenSSL 3.0's PKCS12_parse refuses a
   non-empty password without a MAC, the OpenSSL pyca bundles does not. Result =
   `[private, certificate, *chain-certs]` (chain from `ca`, in order), all sharing
   `label_hint` = the main certificate's `alias()` (friendly name, UTF-8 lossy) else its
-  subject CN. A private key pyca refuses (curve, type) → KeyParse "PKCS#12 contains an
-  unsupported private key: {detail}" (c2 crashed, §11 D12(g)). Passwords containing NUL →
+  subject CN. A private key pyca refuses with UnsupportedAlgorithm (an unsupported curve or
+  explicit parameters, an unknown key type) → KeyParse "PKCS#12 contains an unsupported
+  private key: {detail}" (c2 crashed, §11 D12(g)), in the no-password attempts as after
+  the prompt; a certificate with pyca's InvalidVersion → KeyParse "certificate is not valid
+  DER X.509: {n} is not a valid X509 version" (§11 D12(b)). Passwords containing NUL →
   KeyParse "incorrect password for PKCS#12 (or corrupt PKCS#12 data)" without calling
   OpenSSL (r2 guard; `parse2` panics on NUL).
 - Results: X.509 → one CERTIFICATE material (`data` = the DER as loaded, algorithm/curve/
@@ -1695,8 +1715,10 @@ Normative behavior (c2 §4.4 + S0 spike 2):
   - size_bits None for every EC-family key (never `PKey::bits()`). Anything else →
     "unsupported key algorithm: {pyca class name}" (e.g. "DSAPrivateKey"; hint "supported:
     AES, RSA, EC, Ed25519/Ed448, X25519/X448").
-  RSA private keys must pass `Rsa::check_key` (pyca validates them; "Invalid private key"),
-  EC keys `EcKey::check_key` ("Invalid EC key.").
+  RSA private keys must pass `Rsa::check_key` with odd p and q (pyca's
+  `private_key_from_pkey`; "Invalid private key"), SEC1 private keys `EcKey::check_key`
+  ("Invalid key"); an EC public point at infinity → "Cannot load an EC public key where the
+  point is at infinity". These are ValueErrors (§4.4.3 PKCS#12: a failed attempt).
   R6 fixtures: keys on prime192v1, secp224r1, secp256k1, brainpoolP256r1 (accepted),
   prime239v1, secp112r1, sect163k1 (rejected), an explicit-parameter P-256 key, an RSA-PSS
   key and a DSA key, each with c2's output recorded.
@@ -1801,14 +1823,21 @@ Normative:
 - `build_pkcs12`: empty password → Param "PKCS#12 password must not be empty"
   (param_name "password", hint "PKCS#12 output is always encrypted (§5.6)"); NUL in the
   password or friendly name → Param "PKCS#12 password must not contain NUL characters" /
-  "PKCS#12 friendly name must not contain NUL characters" (r2 guard against the
-  `CString::new(..).unwrap()` panic; §11 D16). Builder profile:
-  `key_algorithm(Nid::AES_256_CBC)`, `cert_algorithm(Nid::AES_256_CBC)`, `key_iter(20000)`,
-  `mac_iter(2048)`, `mac_md(sha256)`, `name(friendly_name)`, `ca(stack)` only when
-  `extra_certs` is non-empty. Bad cert (pyca's strict load, then `X509::from_der`, which
-  refuses some Name encodings pyca accepts — §11 D24) → KeyParse "certificate is not valid
-  DER X.509: {detail}"; bad extra → KeyParse "extra certificate #{index} is not valid DER
-  X.509: {detail}"; assembly failure → Crypto "PKCS#12 assembly failed: {detail}".
+  "PKCS#12 friendly name must not contain NUL characters" (r2 guard, kept from the OpenSSL
+  builder whose `CString::new(..).unwrap()` panicked; §11 D16). The PFX is written by a
+  port of pyca 49's `serialize_key_and_certificates` with `BestAvailableEncryption` (pyca
+  writes PKCS#12 natively): authSafe = [encryptedData { the cert bags }, data { the
+  shroudedKeyBag }], each encrypted with PBES2 / PBKDF2-HMAC-SHA256 (20000 iterations,
+  16-byte salt) / AES-256-CBC; the main cert bag and the key bag carry friendlyName (a
+  BMPString in UTF-16, surrogate pairs included — OpenSSL's `PKCS12_add_friendlyname_utf8`
+  refused non-BMP characters) and localKeyId (SHA-1 of the certificate DER), chain certs
+  none; attribute SETs in DER order; MacData = HMAC-SHA256 under the RFC 7292 key (ID 3,
+  2048 iterations, 8-byte salt), SHA-256 AlgorithmIdentifier with NULL. Bad cert (pyca's
+  strict load only) → KeyParse "certificate is not valid DER X.509: {detail}"; bad extra →
+  KeyParse "extra certificate #{index} is not valid DER X.509: {detail}"; a certificate
+  whose key is not the private key's → Crypto "PKCS#12 assembly failed: Certificate public
+  key and provided private key do not match" (pyca's ValueError, as c2 wrapped it); other
+  assembly failures → Crypto "PKCS#12 assembly failed: {detail}".
 
 #### 4.4.5 `r2_core::x509info` (certificate facts shared by memory, pkcs11, services; each caller picks c2's classifier and attribute set)
 
@@ -1875,9 +1904,15 @@ pub fn rfc4514_string(name_der: &[u8]) -> Result<String> { .. }
 /// `key info` rows for a certificate: ("subject", rfc4514), ("issuer", rfc4514),
 /// ("serial", lower-case hex without leading zeros, "0" for zero), ("not valid before",
 /// "YYYY-MM-DDTHH:MM:SS+00:00"), ("not valid after", same). Certificates are read by a
-/// strict DER walker with pyca's load-time checks (minimal INTEGERs, DER UTCTime /
-/// GeneralizedTime, Name value alphabets), not x509-cert (whose const-oid rejects OIDs pyca
-/// reads); an undecodable Name value → KeyParse "certificate is not valid DER X.509: {pyca
+/// strict DER parser of pyca's whole `Certificate` structure with its load-time checks
+/// (EXPLICIT [0] version DEFAULT v1 — an encoded v1 is EncodedDefault —, minimal INTEGERs,
+/// both AlgorithmIdentifiers and the SPKI algorithm with pyca's DEFINED BY parameters, DER
+/// UTCTime / GeneralizedTime, Name value alphabets, [1]/[2] unique IDs, [3] SEQUENCE OF
+/// Extension { OID, BOOLEAN DEFAULT FALSE, OCTET STRING }, nothing after; then a version
+/// other than v1/v3 is pyca's InvalidVersion "{n} is not a valid X509 version" — c2
+/// crashed, §11 D12(b) — and CSRs likewise: version 0, [0] SET OF Attribute { OID, SET OF
+/// ANY } in DER order), not x509-cert (whose const-oid rejects OIDs pyca reads); an
+/// undecodable Name value → KeyParse "certificate is not valid DER X.509: {pyca
 /// text}" and a GeneralizedTime in year 0 (which pyca loads) → "… X.509: year 0 is out of
 /// range" (Python's datetime text; c2 crashed lazily in both cases, §11 D12(b)).
 pub fn certificate_details(cert_der: &[u8]) -> Result<Vec<(String, String)>> { .. }
@@ -1909,7 +1944,8 @@ impl Encoding { pub fn as_str(self) -> &'static str { .. } }
 /// normative). Errors: invalid input → KeyParse "exported private key is not valid
 /// unencrypted PKCS#8 DER: {detail}"; empty password → Param "password must not be empty"
 /// (param_name "password"); NUL in password → Param "password must not contain NUL
-/// characters".
+/// characters"; a password over 1023 UTF-8 bytes → Param "Passwords longer than 1023 bytes
+/// are not supported by this backend" (pyca's limit; c2 crashed, §11 D12(h)).
 pub fn private_key_bytes(pkcs8_der: &[u8], encoding: Encoding, password: Option<&SecretString>) -> Result<Zeroizing<Vec<u8>>> { .. }
 /// SPKI DER → PEM ("PUBLIC KEY") or DER. DER is returned verbatim WITHOUT validation (c2
 /// `_serialize_spki`); only the PEM path parses: invalid → KeyParse "exported public key is
@@ -1933,7 +1969,7 @@ loads); PEM via `private_key_to_pem_pkcs8` / `public_key_to_pem` / the certifica
 base64 at 64 columns with LF (pyca's `pem` encoding) — applied to the normalized key of
 §4.4.3 (RSA-PSS keys rebuilt as rsaEncryption RSA, explicit-parameter EC keys rebuilt on
 their named group), which is what makes them byte-identical for those inputs too. Key
-inputs pass §4.4.3's strict DER check first (pyca re-parses them as strict DER).
+inputs are loaded by §4.4.3's port of pyca's key parsers (pyca re-parses them so).
 
 #### 4.4.7 `r2_core::der` (pure `der`; no OpenSSL)
 
@@ -6031,9 +6067,9 @@ Parsing backend (r2, normative; the OpenSSL counterpart of c2's pyca loaders):
 
 - **No terminal prompting by OpenSSL.** OpenSSL never parses PEM: `r2-core::keyparse`
   decodes every PEM block itself (a port of pyca's `pem` 3.0 framing and of its
-  `decrypt_pem` RFC 1421 handling, §4.4.3) and loads the body through DER entry points;
-  encrypted PKCS#8 is detected and decrypted with `PKey::private_key_from_pkcs8_callback`
-  and an "asked" flag. The plain `*_from_pem` loaders are banned (§3.1): with a NULL
+  `decrypt_pem` RFC 1421 handling, §4.4.3) and loads the body with the port of pyca's key
+  parsers; encrypted PKCS#8 is recognized structurally and decrypted by keyparse with the
+  whole password (no OpenSSL password callback). The plain `*_from_pem` loaders are banned (§3.1): with a NULL
   callback OpenSSL prompts `Enter PEM pass phrase:` on the controlling terminal. If the
   key is encrypted and no password was supplied, the result is c2's "password needed" path
   even if the empty password happened to decrypt (pyca `TypeError` parity): prompt
@@ -6043,14 +6079,14 @@ Parsing backend (r2, normative; the OpenSSL counterpart of c2's pyca loaders):
   `provide --password or run interactively so the password can be prompted` (also when
   the callback answers an empty password — §11 D12(f)). A wrong password → `KeyParse`
   `incorrect password for encrypted private key (or corrupt encrypted data)`.
-- **DER try-chain order** (c2 §4.4): `PKey::private_key_from_der` (PKCS#8 / PKCS#1
-  RSAPrivateKey / SEC1) → `EncryptedPrivateKeyInfo` probe via
-  `private_key_from_pkcs8_callback` (the callback fires only for encrypted PKCS#8) →
-  `PKey::public_key_from_der` (SPKI) → `Rsa::public_key_from_der_pkcs1` (a PKCS#1
-  RSAPublicKey; pyca accepts it, so c2 does) → X.509 → CSR (both by `x509info`'s strict
-  pyca-style parser, never `X509::from_der` / `X509Req::from_der`) → PKCS#12 sniff +
-  `Pkcs12::from_der`. Key steps run only on input passing §4.4.3's strict DER check
-  (pyca rejects trailing bytes and BER lengths that OpenSSL's d2i accepts).
+- **DER try-chain order** (c2 §4.4): pyca's `load_der_private_key` (PKCS#8 / SEC1 /
+  PKCS#1 RSAPrivateKey / DSA; an `EncryptedPrivateKeyInfo` is its TypeError) → pyca's
+  `load_der_public_key` (SPKI, else a PKCS#1 RSAPublicKey; pyca accepts it, so c2 does) →
+  X.509 → CSR (both by `x509info`'s strict pyca-style parser, never `X509::from_der` /
+  `X509Req::from_der`) → PKCS#12 sniff + `Pkcs12::from_der`. Keys are read by r2's port of
+  pyca 49's key parsers and built from their components (§4.4.3), never by OpenSSL's d2i
+  (which accepts trailing bytes, BER lengths, negative moduli, wrong versions and
+  multi-prime RSA that pyca refuses).
 - **Traditional encrypted PEM** (`Proc-Type: 4,ENCRYPTED` / `DEK-Info:`) with AES-128-CBC,
   AES-256-CBC or DES-EDE3-CBC loads exactly as in c2. Every other `DEK-Info` cipher
   (`DES-CBC`, `AES-192-CBC`, CAMELLIA, …) is **rejected** after the password prompt with
@@ -6356,13 +6392,11 @@ self-signed path signs with the already-exported key. Password: `--password` or
 `prompt_secret` with confirmation; an empty password → `Param`
 `PKCS#12 password must not be empty`.
 
-- `build_pkcs12` reproduces pyca's `BestAvailableEncryption` profile exactly:
-  `Pkcs12::builder().name(friendly_name).pkey(..).cert(..)`, `.ca(stack)` only when extra
-  certs exist, `.key_algorithm(Nid::AES_256_CBC)`, `.cert_algorithm(Nid::AES_256_CBC)`,
-  `.key_iter(20000)`, `.mac_iter(2048)`, `.mac_md(MessageDigest::sha256())`, `.build2(pw)`
-  (PBES2/PBKDF2-HMAC-SHA256/AES-256-CBC for key and cert bags at 20000 iterations; SHA-256
-  MAC at 2048; friendlyName + localKeyID on key and cert bags, none on chain certs). The
-  MAC salt length follows the OpenSSL build (not normative).
+- `build_pkcs12` is a port of pyca's `serialize_key_and_certificates` with the
+  `BestAvailableEncryption` profile (§4.4.4): PBES2/PBKDF2-HMAC-SHA256/AES-256-CBC for key
+  and cert bags at 20000 iterations (16-byte salts); SHA-256 MAC at 2048 (8-byte salt);
+  friendlyName (UTF-16 BMPString, any Unicode label) + localKeyID on key and cert bags,
+  none on chain certs; the same structure and lengths as pyca's output.
 - `build_self_signed_cert` = `X509Builder`, version 3; serial =
   `BigNum::rand(159, MsbOption::MAYBE_ZERO, false)` (pyca `random_serial_number()`
   semantics); subject = issuer = one CN entry (UTF8String); notBefore = now, notAfter =
@@ -7452,7 +7486,14 @@ merges).**
     `certificate is not valid DER X.509: <pyca text>` (resp. `certificate request is not
     valid DER X.509: <pyca text>`). A GeneralizedTime in year 0 loads in pyca but Python's
     `datetime` refused it in `certificate_details` and the memory attributes; r2 raises
-    KeyParse `certificate is not valid DER X.509: year 0 is out of range`. On the PKCS#11
+    KeyParse `certificate is not valid DER X.509: year 0 is out of range`. A certificate
+    whose TBS version is v2 or above v3 (a CSR whose version is not 0) made pyca raise
+    `InvalidVersion` (an `Exception`, not a ValueError) out of `load_der_x509_certificate`
+    / `load_der_x509_csr`, past c2's `except ValueError` (DER chain, PEM blocks, PKCS#12
+    certificates, `key info`, export, the PKCS#11 listing); r2 raises KeyParse
+    `certificate is not valid DER X.509: <n> is not a valid X509 version` (resp.
+    `certificate request is not valid DER X.509: <n> is not a valid CSR version`; in a PEM
+    block `malformed CERTIFICATE PEM block: …`). On the PKCS#11
     read path these errors propagate (c2 crashed) while c2's ValueError cases skip the
     certificate (`x509info::pkcs11_skips_certificate`).
   - (c) an I/O error from the command-line reader (only PlainIo can produce one): c2 let
@@ -7474,16 +7515,30 @@ merges).**
     --password or run interactively so the password can be prompted`) — the answer c2 gave
     when no password could be asked — and never loads such a key, even one encrypted with
     the empty password. (An empty PKCS#12 password is c2's ordinary wrong-password path.)
-  - (g) a PKCS#12 whose private key pyca refuses (an unsupported curve or key type):
-    `load_pkcs12` raised `UnsupportedAlgorithm` past c2's `except ValueError` loop; r2
-    raises KeyParse `PKCS#12 contains an unsupported private key: <detail>`.
+  - (g) a PKCS#12 whose private key pyca refuses with `UnsupportedAlgorithm` (a curve pyca
+    does not support, explicit parameters of another curve, an unknown key type):
+    `load_pkcs12` raised it past c2's `except ValueError` loop; r2 raises KeyParse
+    `PKCS#12 contains an unsupported private key: <detail>` (without a callback as after
+    the prompt). A key pyca refuses with a ValueError (`Invalid private key`, `Invalid
+    key`) is NOT this case: it fails the attempt as in c2 ("PKCS#12 requires a password …"
+    / "incorrect password for PKCS#12 …").
+  - (h) `export … --password` with a password over 1023 UTF-8 bytes: pyca's
+    `BestAvailableEncryption` raised `ValueError` "Passwords longer than 1023 bytes are not
+    supported by this backend" out of c2's keyexport; r2's `formats::private_key_bytes`
+    raises Param (`password`) with that text before encrypting. (Import decrypts with the
+    whole password, as pyca does.)
 - *Reason*: every expected failure must be a `ConsoleError`; OpenSSL would reject the CN
   with a different text anyway.
-- *Verified by*: R8 certops test (a), R6 keyparse/x509info fixtures (b, f, g:
+- *Verified by*: R8 certops test (a), R6 keyparse/x509info/formats fixtures (b, f, g, h:
   `lazily_undecodable_subject_names_are_keyparse_errors`,
   `year_zero_validity_fails_only_where_c2_formatted_it`,
   `pkcs11_skip_classification_mirrors_pycas_exception_classes`,
-  `encrypted_with_empty_password_still_requires_a_password`), R7 repl test (c), R1 codec
+  `certificate_structure_is_pycas`, `csr_structure_is_pycas`,
+  `certificates_get_pycas_load_time_structure_checks`,
+  `encrypted_with_empty_password_still_requires_a_password`,
+  `pkcs12_with_a_key_pyca_does_not_support_is_d12g`,
+  `invalid_rsa_private_keys_are_pycas_value_errors`,
+  `passwords_over_1023_bytes_are_refused_as_pyca`), R7 repl test (c), R1 codec
   differential vectors (e).
 
 **D13 — Ctrl-C while a command runs is honored at step boundaries.**
@@ -7647,18 +7702,11 @@ merges).**
 - *Verified by*: R1 renderer tests (`Renderable::Text` keeps `:x:`; the generated
   plain-text vectors assert that no input depends on emoji replacement).
 
-**D24 — PKCS#12 export needs a certificate OpenSSL can decode.**
-- *Description*: `x509build::build_pkcs12` (`export … --format p12`) hands the
-  certificates to OpenSSL's `Pkcs12Builder`, so it needs `X509::from_der`; OpenSSL's Name
-  decoder refuses value encodings pyca loads (a VisibleString or OCTET STRING value, a
-  BMPString holding a non-BMP character). pyca writes PKCS#12 natively, so c2 exported such
-  a certificate; r2 raises KeyParse `certificate is not valid DER X.509: <OpenSSL reason>`
-  (resp. `extra certificate #<n> is not valid DER X.509: …`). Every other path (load,
-  `key info`, PEM/DER export, SPKI extraction) reads certificates with r2's own strict
-  parser and accepts them as c2 did.
-- *Reason*: a native PKCS#12 writer (bag encryption, MAC) for certificates no CA issues is
-  not worth its risk.
-- *Verified by*: R6 x509build test `pkcs12_of_a_certificate_openssl_cannot_decode_is_refused`.
+**D24 — (withdrawn).** r2 writes PKCS#12 with a port of pyca's own writer (§4.4.4), so
+`export … --format p12` takes every certificate pyca loads, as c2 did (it previously needed
+one OpenSSL's `X509` decoder accepts). Verified by R6 x509build tests
+`pkcs12_of_a_certificate_openssl_cannot_decode_is_built_as_pyca`,
+`pkcs12_friendly_names_outside_the_bmp_are_utf16`.
 
 **D25 — Library warnings are not printed.**
 - *Description*: pyca emitted Python warnings that c2 did not filter, so they reached the

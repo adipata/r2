@@ -7,12 +7,12 @@ use openssl::asn1::{Asn1Integer, Asn1Time};
 use openssl::bn::{BigNum, MsbOption};
 use openssl::hash::MessageDigest;
 use openssl::nid::Nid;
-use openssl::pkcs12::Pkcs12;
 use openssl::pkey::{Id, PKey, Private};
-use openssl::stack::Stack;
+use openssl::symm::Cipher;
 use openssl::x509::extension::BasicConstraints;
 use openssl::x509::{X509, X509NameBuilder};
 use secrecy::{ExposeSecret, SecretString};
+use zeroize::Zeroizing;
 
 use crate::error::{ConsoleError, Result};
 use crate::keyparse::{PrivateLoadError, load_private_der, load_public_der, ossl_detail};
@@ -236,18 +236,17 @@ pub fn build_pkcs12(
         ))
         .with_hint("PKCS#12 supports RSA, EC and Ed25519/Ed448 private keys"));
     }
-    let cert = load_x509(cert_der).map_err(|detail| {
+    x509info::load_certificate(cert_der).map_err(|detail| {
         ConsoleError::key_parse(format!("certificate is not valid DER X.509: {detail}"))
     })?;
-    let mut extras = Vec::with_capacity(extra_certs.len());
     for (index, extra) in extra_certs.iter().enumerate() {
-        extras.push(load_x509(extra).map_err(|detail| {
+        x509info::load_certificate(extra).map_err(|detail| {
             ConsoleError::key_parse(format!(
                 "extra certificate #{index} is not valid DER X.509: {detail}"
             ))
-        })?);
+        })?;
     }
-    // r2 guards: Pkcs12Builder::name / build2 would panic on an interior NUL (§11 D16).
+    // r2 guards (§11 D16): kept from the OpenSSL builder, whose CString conversion panicked.
     if password.contains('\0') {
         return Err(ConsoleError::param(
             "PKCS#12 password must not contain NUL characters",
@@ -260,29 +259,209 @@ pub fn build_pkcs12(
             "friendly_name",
         ));
     }
-    let assemble = || -> std::result::Result<Vec<u8>, openssl::error::ErrorStack> {
-        let mut builder = Pkcs12::builder();
-        builder
-            .name(friendly_name)
-            .pkey(&key)
-            .cert(&cert)
-            .key_algorithm(Nid::AES_256_CBC)
-            .cert_algorithm(Nid::AES_256_CBC)
-            .key_iter(20_000)
-            .mac_iter(2048)
-            .mac_md(MessageDigest::sha256());
-        if !extras.is_empty() {
-            let mut stack = Stack::new()?;
-            for extra in &extras {
-                stack.push(extra.clone())?;
-            }
-            builder.ca(stack);
-        }
-        builder.build2(password)?.to_der()
-    };
-    assemble().map_err(|err| {
-        ConsoleError::crypto(format!("PKCS#12 assembly failed: {}", ossl_detail(&err)))
-    })
+    // pyca `serialize_key_and_certificates`: the certificate's key must be the private key
+    // (its ValueErrors became c2's "PKCS#12 assembly failed: …").
+    let spki = x509info::load_certificate(cert_der)
+        .map_err(|detail| {
+            ConsoleError::key_parse(format!("certificate is not valid DER X.509: {detail}"))
+        })?
+        .spki;
+    let cert_key = load_public_der(spki)
+        .map_err(|detail| ConsoleError::crypto(format!("PKCS#12 assembly failed: {detail}")))?;
+    if !cert_key.public_eq(&key) {
+        return Err(ConsoleError::crypto(
+            "PKCS#12 assembly failed: Certificate public key and provided private key do not match",
+        ));
+    }
+    let pkcs8 = Zeroizing::new(key.private_key_to_pkcs8().map_err(assembly_failed)?);
+    pkcs12_der(&pkcs8, cert_der, friendly_name, password, extra_certs).map_err(assembly_failed)
+}
+
+fn assembly_failed(err: openssl::error::ErrorStack) -> ConsoleError {
+    ConsoleError::crypto(format!("PKCS#12 assembly failed: {}", ossl_detail(&err)))
+}
+
+// ---------------------------------------------------------------------------------------
+// PKCS#12 writer (pyca 49 `serialize_key_and_certificates` with BestAvailableEncryption)
+// ---------------------------------------------------------------------------------------
+
+/// PKCS#12 / PKCS#7 / PKCS#5 OIDs (DER content bytes).
+const OID_PKCS7_DATA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x01];
+const OID_PKCS7_ENCRYPTED_DATA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x06];
+const OID_SHROUDED_KEY_BAG: &[u8] = &[
+    0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x0c, 0x0a, 0x01, 0x02,
+];
+const OID_CERT_BAG: &[u8] = &[
+    0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x0c, 0x0a, 0x01, 0x03,
+];
+const OID_X509_CERTIFICATE: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x16, 0x01];
+const OID_FRIENDLY_NAME: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x14];
+const OID_LOCAL_KEY_ID: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x15];
+const OID_PBES2: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x05, 0x0d];
+const OID_PBKDF2: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x05, 0x0c];
+const OID_HMAC_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x02, 0x09];
+const OID_AES256_CBC: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x01, 0x2a];
+const OID_SHA256: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01];
+/// pyca's BestAvailableEncryption profile for PKCS#12.
+const P12_CIPHER_KDF_ITER: u32 = 20_000;
+const P12_MAC_KDF_ITER: u32 = 2048;
+
+fn der_cat(parts: &[&[u8]]) -> Vec<u8> {
+    parts.concat()
+}
+
+fn der_seq(parts: &[&[u8]]) -> Vec<u8> {
+    der_tlv(0x30, &der_cat(parts))
+}
+
+/// A DER SET OF: elements sorted by their encodings (rust-asn1 `SetOfWriter`).
+fn der_set_of(mut items: Vec<Vec<u8>>) -> Vec<u8> {
+    items.sort();
+    der_tlv(0x31, &items.concat())
+}
+
+fn der_uint(value: u32) -> Vec<u8> {
+    let bytes = value.to_be_bytes();
+    let skip = bytes.iter().take_while(|b| **b == 0).count().min(3);
+    let mut content = bytes[skip..].to_vec();
+    if content[0] & 0x80 != 0 {
+        content.insert(0, 0);
+    }
+    der_tlv(0x02, &content)
+}
+
+fn random(len: usize) -> std::result::Result<Vec<u8>, openssl::error::ErrorStack> {
+    let mut out = vec![0u8; len];
+    openssl::rand::rand_bytes(&mut out)?;
+    Ok(out)
+}
+
+/// PBES2 / PBKDF2-HMAC-SHA256 (20000 iterations, 16-byte salt) / AES-256-CBC encryption:
+/// (AlgorithmIdentifier DER, ciphertext).
+fn pbes2_encrypt(
+    password: &str,
+    data: &[u8],
+) -> std::result::Result<(Vec<u8>, Vec<u8>), openssl::error::ErrorStack> {
+    let (salt, iv) = (random(16)?, random(16)?);
+    let mut key = Zeroizing::new([0u8; 32]);
+    openssl::pkcs5::pbkdf2_hmac(
+        password.as_bytes(),
+        &salt,
+        P12_CIPHER_KDF_ITER as usize,
+        MessageDigest::sha256(),
+        &mut key[..],
+    )?;
+    let ciphertext = openssl::symm::encrypt(Cipher::aes_256_cbc(), &key[..], Some(&iv), data)?;
+    let prf = der_seq(&[&der_tlv(0x06, OID_HMAC_SHA256), &[0x05, 0x00]]);
+    let kdf_params = der_seq(&[&der_tlv(0x04, &salt), &der_uint(P12_CIPHER_KDF_ITER), &prf]);
+    let kdf = der_seq(&[&der_tlv(0x06, OID_PBKDF2), &kdf_params]);
+    let enc = der_seq(&[&der_tlv(0x06, OID_AES256_CBC), &der_tlv(0x04, &iv)]);
+    let alg = der_seq(&[&der_tlv(0x06, OID_PBES2), &der_seq(&[&kdf, &enc])]);
+    Ok((alg, ciphertext))
+}
+
+/// Bag attributes: friendlyName (a BMPString: UTF-16BE, surrogate pairs included, as pyca's
+/// `Utf8StoredBMPString` writes it) and localKeyId.
+fn bag_attributes(friendly_name: Option<&str>, local_key_id: Option<&[u8]>) -> Vec<u8> {
+    let mut attributes = Vec::new();
+    if let Some(name) = friendly_name {
+        let bmp: Vec<u8> = name.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        attributes.push(der_seq(&[
+            &der_tlv(0x06, OID_FRIENDLY_NAME),
+            &der_set_of(vec![der_tlv(0x1e, &bmp)]),
+        ]));
+    }
+    if let Some(key_id) = local_key_id {
+        attributes.push(der_seq(&[
+            &der_tlv(0x06, OID_LOCAL_KEY_ID),
+            &der_set_of(vec![der_tlv(0x04, key_id)]),
+        ]));
+    }
+    if attributes.is_empty() {
+        Vec::new()
+    } else {
+        der_set_of(attributes)
+    }
+}
+
+fn cert_bag(cert_der: &[u8], friendly_name: Option<&str>, local_key_id: Option<&[u8]>) -> Vec<u8> {
+    let value = der_seq(&[
+        &der_tlv(0x06, OID_X509_CERTIFICATE),
+        &der_tlv(0xa0, &der_tlv(0x04, cert_der)),
+    ]);
+    der_seq(&[
+        &der_tlv(0x06, OID_CERT_BAG),
+        &der_tlv(0xa0, &value),
+        &bag_attributes(friendly_name, local_key_id),
+    ])
+}
+
+/// The PFX: [encryptedData(cert bags), data(shrouded key bag)] as the authenticated safe,
+/// MacData = HMAC-SHA256 under the RFC 7292 key (ID 3, 2048 iterations, 8-byte salt).
+fn pkcs12_der(
+    pkcs8: &[u8],
+    cert_der: &[u8],
+    friendly_name: &str,
+    password: &str,
+    extra_certs: &[Vec<u8>],
+) -> std::result::Result<Vec<u8>, openssl::error::ErrorStack> {
+    let key_id = openssl::hash::hash(MessageDigest::sha1(), cert_der)?;
+    let mut cert_bags = vec![cert_bag(cert_der, Some(friendly_name), Some(&key_id))];
+    for extra in extra_certs {
+        cert_bags.push(cert_bag(extra, None, None));
+    }
+    let (key_alg, key_ciphertext) = pbes2_encrypt(password, pkcs8)?;
+    let key_bag = der_seq(&[
+        &der_tlv(0x06, OID_SHROUDED_KEY_BAG),
+        &der_tlv(0xa0, &der_seq(&[&key_alg, &der_tlv(0x04, &key_ciphertext)])),
+        &bag_attributes(Some(friendly_name), Some(&key_id)),
+    ]);
+    let plain = Zeroizing::new(der_tlv(0x30, &cert_bags.concat()));
+    let (cert_alg, cert_ciphertext) = pbes2_encrypt(password, &plain)?;
+    let encrypted_data = der_seq(&[
+        &der_uint(0),
+        &der_seq(&[
+            &der_tlv(0x06, OID_PKCS7_DATA),
+            &cert_alg,
+            &der_tlv(0x80, &cert_ciphertext),
+        ]),
+    ]);
+    let certs_info = der_seq(&[
+        &der_tlv(0x06, OID_PKCS7_ENCRYPTED_DATA),
+        &der_tlv(0xa0, &encrypted_data),
+    ]);
+    let keys_info = der_seq(&[
+        &der_tlv(0x06, OID_PKCS7_DATA),
+        &der_tlv(0xa0, &der_tlv(0x04, &der_tlv(0x30, &key_bag))),
+    ]);
+    let auth_safe = der_seq(&[&certs_info, &keys_info]);
+    let salt = random(8)?;
+    let mac_key = crate::keyparse::pkcs12_kdf(
+        password,
+        &salt,
+        3,
+        u64::from(P12_MAC_KDF_ITER),
+        32,
+        MessageDigest::sha256(),
+    )?;
+    let hmac_key = PKey::hmac(&mac_key)?;
+    let mut signer = openssl::sign::Signer::new(MessageDigest::sha256(), &hmac_key)?;
+    signer.update(&auth_safe)?;
+    let mac = signer.sign_to_vec()?;
+    let digest_info = der_seq(&[
+        &der_seq(&[&der_tlv(0x06, OID_SHA256), &[0x05, 0x00]]),
+        &der_tlv(0x04, &mac),
+    ]);
+    let mac_data = der_seq(&[
+        &digest_info,
+        &der_tlv(0x04, &salt),
+        &der_uint(P12_MAC_KDF_ITER),
+    ]);
+    let auth_safe_info = der_seq(&[
+        &der_tlv(0x06, OID_PKCS7_DATA),
+        &der_tlv(0xa0, &der_tlv(0x04, &auth_safe)),
+    ]);
+    Ok(der_seq(&[&der_uint(3), &auth_safe_info, &mac_data]))
 }
 
 // ---------------------------------------------------------------------------------------
@@ -298,9 +477,11 @@ fn load_private_pkcs8(data: &[u8], what: &str) -> Result<PKey<Private>> {
         .with_hint(
             "decrypt the key first — the §4.3 canonical private-key format is unencrypted PKCS#8 DER",
         ),
-        PrivateLoadError::Invalid(detail) => ConsoleError::key_parse(format!(
-            "{what} is not a valid DER PKCS#8 private key: {detail}"
-        )),
+        PrivateLoadError::Invalid(detail) | PrivateLoadError::Unsupported(detail) => {
+            ConsoleError::key_parse(format!(
+                "{what} is not a valid DER PKCS#8 private key: {detail}"
+            ))
+        }
     })
 }
 
@@ -317,13 +498,6 @@ fn pyca_private_class(key: &PKey<Private>) -> &'static str {
         Id::ED448 => "Ed448PrivateKey",
         _ => "UnknownPrivateKey",
     }
-}
-
-/// pyca `load_der_x509_certificate` (strict) as an OpenSSL certificate; OpenSSL may refuse
-/// Name encodings pyca loads (§11 D24).
-fn load_x509(der: &[u8]) -> std::result::Result<X509, String> {
-    x509info::load_certificate(der)?;
-    X509::from_der(der).map_err(|err| ossl_detail(&err))
 }
 
 // ---------------------------------------------------------------------------------------

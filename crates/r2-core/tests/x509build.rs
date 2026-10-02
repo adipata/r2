@@ -856,17 +856,52 @@ fn csr_spki_with_trailing_bytes_is_refused_before_signing() {
 }
 
 #[test]
-fn pkcs12_of_a_certificate_openssl_cannot_decode_is_refused() {
-    // §11 D24: pyca writes PKCS#12 natively; r2 needs an OpenSSL X509, whose decoder
-    // refuses e.g. a VisibleString CN that pyca loads.
+fn pkcs12_of_a_certificate_openssl_cannot_decode_is_built_as_pyca() {
+    // pyca writes PKCS#12 natively, so c2 exported certificates whose Name encoding
+    // OpenSSL's X509 decoder refuses (here a VisibleString CN); r2's writer is a port.
     let key = p256();
     let der = name_cert(&key, &raw_name(&[(CN_OID, 0x1a, b"a b")]));
-    let err = build_pkcs12(&pkcs8_der(&key), &der, "k", &secret("pw"), &[]).unwrap_err();
-    assert_eq!(err.kind, ErrorKind::KeyParse);
-    assert!(
-        err.message
-            .starts_with("certificate is not valid DER X.509: "),
-        "{}",
-        err.message
+    let p12 = build_pkcs12(&pkcs8_der(&key), &der, "k", &secret("pw"), &[]).unwrap();
+    assert!(Pkcs12::from_der(&p12).is_ok());
+}
+
+#[test]
+fn pkcs12_friendly_names_outside_the_bmp_are_utf16() {
+    // pyca writes the friendlyName BMPString as UTF-16 (surrogate pairs); OpenSSL's
+    // PKCS12_add_friendlyname_utf8 refused astral characters.
+    let key = p256();
+    let cert = build_self_signed_cert(&pkcs8_der(&key), "k", 3650).unwrap();
+    for name in ["key\u{1f600}", "\u{1f512}", "clé", "日本"] {
+        let p12 = build_pkcs12(&pkcs8_der(&key), &cert, name, &secret("pw"), &[]).unwrap();
+        let utf16: Vec<u8> = name.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        let mut attribute = vec![0x1e, utf16.len() as u8];
+        attribute.extend_from_slice(&utf16);
+        assert!(hex(&p12).contains(&hex(&attribute)), "{name}");
+        let mut cb = |_: &str| Ok(secret("pw"));
+        let materials = parse_key_material(&p12, KeyHint::Auto, Some(&mut cb)).unwrap();
+        assert_eq!(materials.len(), 2);
+        // OpenSSL's alias() (pyca's friendly_name on load, in c2 as in r2) cannot convert
+        // a surrogate pair: the label falls back to the subject CN
+        let label = if name.chars().all(|c| u32::from(c) < 0x10000) {
+            name
+        } else {
+            "k"
+        };
+        for material in materials {
+            assert_eq!(material.label_hint.as_deref(), Some(label));
+        }
+    }
+}
+
+#[test]
+fn pkcs12_certificate_must_hold_the_private_key() {
+    // pyca's ValueError, which c2 reported as an assembly failure
+    let (key, other) = (p256(), p256());
+    let cert = build_self_signed_cert(&pkcs8_der(&other), "k", 3650).unwrap();
+    let err = build_pkcs12(&pkcs8_der(&key), &cert, "k", &secret("pw"), &[]).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Crypto);
+    assert_eq!(
+        err.message,
+        "PKCS#12 assembly failed: Certificate public key and provided private key do not match"
     );
 }

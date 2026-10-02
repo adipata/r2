@@ -229,3 +229,32 @@ pub fn name_cert(key: &PKeyRef<Private>, subject: &[u8]) -> Vec<u8> {
 /// OID content hex of commonName / x500UniqueIdentifier.
 pub const CN_OID: &str = "550403";
 pub const UID_OID: &str = "55042d";
+
+/// The element TLVs of a DER SEQUENCE (or any constructed value), definite lengths.
+pub fn der_items(der: &[u8]) -> Vec<Vec<u8>> {
+    let header = |data: &[u8]| -> (usize, usize) {
+        if data[1] < 0x80 {
+            (2, usize::from(data[1]))
+        } else {
+            let n = usize::from(data[1] & 0x7f);
+            let len = data[2..2 + n]
+                .iter()
+                .fold(0usize, |acc, b| (acc << 8) | usize::from(*b));
+            (2 + n, len)
+        }
+    };
+    let (start, len) = header(der);
+    let mut content = &der[start..start + len];
+    let mut items = Vec::new();
+    while !content.is_empty() {
+        let (h, l) = header(content);
+        items.push(content[..h + l].to_vec());
+        content = &content[h + l..];
+    }
+    items
+}
+
+/// A DER SEQUENCE of the given element TLVs.
+pub fn der_seq(items: &[Vec<u8>]) -> Vec<u8> {
+    tlv(0x30, &items.concat())
+}

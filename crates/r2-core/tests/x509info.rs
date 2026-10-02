@@ -483,3 +483,37 @@ fn pkcs11_skip_classification_mirrors_pycas_exception_classes() {
     let not_keyparse = r2_core::error::ConsoleError::crypto("x");
     assert!(!pkcs11_skips_certificate(&not_keyparse));
 }
+
+#[test]
+fn certificates_get_pycas_load_time_structure_checks() {
+    use r2_core::x509info::pkcs11_skips_certificate;
+    // the TBS version: an encoded DEFAULT (v1) is pyca's EncodedDefault (a ValueError — the
+    // PKCS#11 read path skipped it); v2 or a version over v3 is InvalidVersion (c2 crashed,
+    // §11 D12(b) — propagated).
+    let der = cn_cert(&p256(), "v").to_der().unwrap();
+    let with_version = |version: u8| {
+        let mut cert = der_items(&der);
+        let mut tbs = der_items(&cert[0]);
+        tbs[0] = tlv(0xa0, &tlv(0x02, &[version]));
+        cert[0] = der_seq(&tbs);
+        der_seq(&cert)
+    };
+    let err = certificate_details(&with_version(0)).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::KeyParse);
+    assert_eq!(
+        err.message,
+        "certificate is not valid DER X.509: error parsing asn1 value: ParseError { kind: EncodedDefault }"
+    );
+    assert!(pkcs11_skips_certificate(
+        &cert_facts(&with_version(0), Classifier::Pkcs11).unwrap_err()
+    ));
+    for version in [1u8, 3] {
+        let err = cert_attributes(&with_version(version)).unwrap_err();
+        assert_eq!(
+            err.message,
+            format!("certificate is not valid DER X.509: {version} is not a valid X509 version")
+        );
+        assert!(!pkcs11_skips_certificate(&err));
+    }
+    assert!(certificate_details(&with_version(2)).is_ok());
+}

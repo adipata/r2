@@ -31,7 +31,8 @@ impl Encoding {
 /// normative). Errors: invalid input → KeyParse "exported private key is not valid
 /// unencrypted PKCS#8 DER: {detail}"; empty password → Param "password must not be empty"
 /// (param_name "password"); NUL in password → Param "password must not contain NUL
-/// characters".
+/// characters"; a password over 1023 UTF-8 bytes → Param "Passwords longer than 1023 bytes are
+/// not supported by this backend" (pyca's limit; c2 crashed, §11 D12(h)).
 pub fn private_key_bytes(
     pkcs8_der: &[u8],
     encoding: Encoding,
@@ -42,7 +43,7 @@ pub fn private_key_bytes(
             PrivateLoadError::Encrypted => {
                 "Password was not given but private key is encrypted".to_owned()
             }
-            PrivateLoadError::Invalid(detail) => detail,
+            PrivateLoadError::Invalid(detail) | PrivateLoadError::Unsupported(detail) => detail,
         };
         ConsoleError::key_parse(format!(
             "exported private key is not valid unencrypted PKCS#8 DER: {detail}"
@@ -60,6 +61,13 @@ pub fn private_key_bytes(
             if pw.contains('\0') {
                 return Err(ConsoleError::param(
                     "password must not contain NUL characters",
+                    "password",
+                ));
+            }
+            // pyca's limit (c2 crashed on its ValueError, §11 D12(h)).
+            if pw.len() > 1023 {
+                return Err(ConsoleError::param(
+                    "Passwords longer than 1023 bytes are not supported by this backend",
                     "password",
                 ));
             }
@@ -129,7 +137,7 @@ pub fn pkcs8_public_spki(pkcs8_der: &[u8]) -> Result<Vec<u8>> {
             PrivateLoadError::Encrypted => {
                 "Password was not given but private key is encrypted".to_owned()
             }
-            PrivateLoadError::Invalid(detail) => detail,
+            PrivateLoadError::Invalid(detail) | PrivateLoadError::Unsupported(detail) => detail,
         };
         ConsoleError::key_parse(format!(
             "exported private key is not valid unencrypted PKCS#8 DER: {detail}"

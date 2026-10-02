@@ -1,23 +1,25 @@
 //! Key material parsing (spec §4.4.3, §5.4; owner R6): bytes → `Vec<KeyMaterial>`.
 //!
-//! Port of c2 `core/keyparse.py` over OpenSSL. pyca's acceptance rules are reproduced on top
-//! of OpenSSL (the classification/normalization helpers below are shared with x509build,
-//! x509info and formats): RSA-PSS keys load as plain RSA, EC keys are re-encoded on their
-//! named curve (uncompressed point), only pyca 49's curves load, explicit EC parameters only
-//! when they are P-256/P-384/P-521, and encrypted inputs only with pyca's cipher set.
-//! Passwords come through the caller's callback; OpenSSL never prompts (PEM blocks are
-//! decoded here — a port of pyca's `pem` crate framing and `decrypt_pem` — and loaded
-//! through the DER entry points). Key DER must pass pyca's strict DER check before any
-//! OpenSSL decoder sees it; certificates and CSRs are read by x509info's strict parser only.
-use std::cell::Cell;
+//! Port of c2 `core/keyparse.py`. Key material is read the way pyca 49 reads it: its own
+//! parsers (`cryptography-key-parsing`: PKCS#8, SEC1, PKCS#1, DSA, SPKI, encrypted PKCS#8)
+//! are ported over x509info's rust-asn1 reader, and keys are built from their components
+//! with OpenSSL (OpenSSL's key decoders are never used), so pyca's structure and version
+//! checks, its curve set (explicit parameters only when they are P-256/P-384/P-521), its
+//! RSA/EC key checks and its encryption schemes apply. Passwords come through the caller's
+//! callback and are used whole; OpenSSL never prompts (PEM blocks are decoded here — a port
+//! of pyca's `pem` crate framing and `decrypt_pem`). Certificates and CSRs are read by
+//! x509info's strict parser only; PKCS#12 is parsed by OpenSSL and its key and certificates
+//! are then loaded as pyca loads them.
 use std::str::FromStr;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use openssl::bn::{BigNum, BigNumContext};
-use openssl::ec::{Asn1Flag, EcGroup, EcGroupRef, EcKey, EcPoint, PointConversionForm};
+use openssl::dh::Dh;
+use openssl::dsa::Dsa;
+use openssl::ec::{EcGroup, EcKey, EcPoint};
 use openssl::error::ErrorStack;
-use openssl::hash::MessageDigest;
+use openssl::hash::{Hasher, MessageDigest};
 use openssl::nid::Nid;
 use openssl::pkcs12::{ParsedPkcs12_2, Pkcs12};
 use openssl::pkey::{HasPublic, Id, PKey, PKeyRef, Private, Public};
@@ -31,7 +33,13 @@ use crate::crypto::ensure_legacy_provider;
 use crate::error::{ConsoleError, Result};
 use crate::keys::{Curve, KeyAlgorithm, KeyClass, KeyMaterial};
 use crate::text::py_repr;
-use crate::x509info::{self, Classifier};
+use crate::x509info::{
+    self, AlgParams, Asn1Error, Classifier, Der, EcParams, EcParamsKind, O_AES128_CBC,
+    O_AES192_CBC, O_AES256_CBC, O_DES_EDE3_CBC, O_ED448, O_ED25519, O_HMACS, O_PBE_MD5_DES,
+    O_PBE_SHA_3DES, O_PBE_SHA_RC2_40, O_PBE_SHA_RC4_128, O_RSA, O_RSA_PSS, O_X448, O_X25519,
+    alg_id, der_attributes, der_biguint, der_bits, der_nonempty_sequences, der_single, der_uint,
+    ec_params, spki_fields,
+};
 
 /// Type hint of `parse_key_material` (c2's frozen hint set). Token: "auto" | "aes" | "rsa" |
 /// "ec" | "cert".
@@ -140,6 +148,13 @@ const WRONG_KEY_PASSWORD: &str =
     "incorrect password for encrypted private key (or corrupt encrypted data)";
 const WRONG_P12_PASSWORD: &str = "incorrect password for PKCS#12 (or corrupt PKCS#12 data)";
 const UNSUPPORTED_HINT: &str = "supported: AES, RSA, EC, Ed25519/Ed448, X25519/X448";
+/// SpecifiedECDomain DER (`openssl ecparam -param_enc explicit`; = pyca's `ec_constants`).
+const P256_DOMAIN: &str = "3081f7020101302c06072a8648ce3d0101022100ffffffff00000001000000000000000000000000ffffffffffffffffffffffff305b0420ffffffff00000001000000000000000000000000fffffffffffffffffffffffc04205ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b031500c49d360886e704936a6678e1139d26b7819f7e900441046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5022100ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551020101";
+const P256_DOMAIN_NO_SEED: &str = "3081e0020101302c06072a8648ce3d0101022100ffffffff00000001000000000000000000000000ffffffffffffffffffffffff30440420ffffffff00000001000000000000000000000000fffffffffffffffffffffffc04205ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b0441046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5022100ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551020101";
+const P384_DOMAIN: &str = "30820157020101303c06072a8648ce3d0101023100fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeffffffff0000000000000000ffffffff307b0430fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeffffffff0000000000000000fffffffc0430b3312fa7e23ee7e4988e056be3f82d19181d9c6efe8141120314088f5013875ac656398d8a2ed19d2a85c8edd3ec2aef031500a335926aa319a27a1d00896a6773a4827acdac73046104aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b9859f741e082542a385502f25dbf55296c3a545e3872760ab73617de4a96262c6f5d9e98bf9292dc29f8f41dbd289a147ce9da3113b5f0b8c00a60b1ce1d7e819d7a431d7c90ea0e5f023100ffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52973020101";
+const P384_DOMAIN_NO_SEED: &str = "30820140020101303c06072a8648ce3d0101023100fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeffffffff0000000000000000ffffffff30640430fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeffffffff0000000000000000fffffffc0430b3312fa7e23ee7e4988e056be3f82d19181d9c6efe8141120314088f5013875ac656398d8a2ed19d2a85c8edd3ec2aef046104aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b9859f741e082542a385502f25dbf55296c3a545e3872760ab73617de4a96262c6f5d9e98bf9292dc29f8f41dbd289a147ce9da3113b5f0b8c00a60b1ce1d7e819d7a431d7c90ea0e5f023100ffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52973020101";
+const P521_DOMAIN: &str = "308201c3020101304d06072a8648ce3d0101024201ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff30819f044201fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc04420051953eb9618e1c9a1f929a21a0b68540eea2da725b99b315f3b8b489918ef109e156193951ec7e937b1652c0bd3bb1bf073573df883d2c34f1ef451fd46b503f00031500d09e8800291cb85396cc6717393284aaa0da64ba0481850400c6858e06b70404e9cd9e3ecb662395b4429c648139053fb521f828af606b4d3dbaa14b5e77efe75928fe1dc127a2ffa8de3348b3c1856a429bf97e7e31c2e5bd66011839296a789a3bc0045c8a5fb42c7d1bd998f54449579b446817afbd17273e662c97ee72995ef42640c550b9013fad0761353c7086a272c24088be94769fd16650024201fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffa51868783bf2f966b7fcc0148f709a5d03bb5c9b8899c47aebb6fb71e91386409020101";
+const P521_DOMAIN_NO_SEED: &str = "308201ac020101304d06072a8648ce3d0101024201ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff308188044201fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc04420051953eb9618e1c9a1f929a21a0b68540eea2da725b99b315f3b8b489918ef109e156193951ec7e937b1652c0bd3bb1bf073573df883d2c34f1ef451fd46b503f000481850400c6858e06b70404e9cd9e3ecb662395b4429c648139053fb521f828af606b4d3dbaa14b5e77efe75928fe1dc127a2ffa8de3348b3c1856a429bf97e7e31c2e5bd66011839296a789a3bc0045c8a5fb42c7d1bd998f54449579b446817afbd17273e662c97ee72995ef42640c550b9013fad0761353c7086a272c24088be94769fd16650024201fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffa51868783bf2f966b7fcc0148f709a5d03bb5c9b8899c47aebb6fb71e91386409020101";
 const EXPLICIT_CURVE_TEXT: &str = "ECDSA keys with explicit parameters are only supported when they map to secp256r1, secp384r1, or secp521r1. No custom curves are supported.";
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
@@ -183,17 +198,6 @@ fn ask_password(
 
 fn requires_password() -> ConsoleError {
     ConsoleError::key_parse("encrypted key material requires a password").with_hint(PASSWORD_HINT)
-}
-
-/// OpenSSL password callback that fills in `password` (one call; OpenSSL caches it).
-fn fill_password(
-    password: &[u8],
-) -> impl FnOnce(&mut [u8]) -> std::result::Result<usize, ErrorStack> + '_ {
-    move |buf: &mut [u8]| {
-        let n = password.len().min(buf.len());
-        buf[..n].copy_from_slice(&password[..n]);
-        Ok(n)
-    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -264,237 +268,634 @@ pub(crate) fn classify_key<T: HasPublic>(
     }
 }
 
-/// The dotted curve OID of an EC SPKI's named-curve parameter (pyca's "Curve {oid} is not
-/// supported" text).
-fn spki_curve_oid(spki: &[u8]) -> Option<String> {
-    let (seq, _) = x509info::read_tlv(spki).ok()?;
-    let (alg, _) = x509info::read_tlv(seq.content).ok()?;
-    let (alg_oid, rest) = x509info::read_tlv(alg.content).ok()?;
-    if alg_oid.content != OID_EC_PUBLIC_KEY {
-        return None;
-    }
-    let (param, _) = x509info::read_tlv(rest).ok()?;
-    (param.tag == 0x06)
-        .then(|| x509info::oid_dotted(param.content))
-        .flatten()
+// ---------------------------------------------------------------------------------------
+// pyca's key parsers: a port of cryptography 49's `cryptography-key-parsing` (PKCS#8,
+// SEC1, PKCS#1, DSA, SPKI, EncryptedPrivateKeyInfo) over x509info's rust-asn1 reader. Keys
+// are built from their components, as pyca builds them; OpenSSL's DER decoders are never
+// used for key material.
+// ---------------------------------------------------------------------------------------
+
+/// pyca's `KeyParsingError`, as the Python exception c2 saw.
+pub(crate) enum PycaError {
+    /// ValueError for an ASN.1 parse error (the parsers' "try the next format" case).
+    Parse(Asn1Error),
+    /// Any other ValueError (its text).
+    Value(String),
+    /// UnsupportedAlgorithm (its text).
+    Unsupported(String),
+    /// TypeError "Password was not given but private key is encrypted".
+    Encrypted,
+    /// InternalError (an OpenSSL failure; c2 crashed — r2 treats it as a refusal).
+    Internal(String),
 }
 
-/// id-ecPublicKey (1.2.840.10045.2.1).
-const OID_EC_PUBLIC_KEY: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
+pub(crate) type Pyca<T> = std::result::Result<T, PycaError>;
 
-/// pyca's refusal of a key type outside its set: EC keys on other curves (OpenSSL types
-/// some, e.g. SM2, by their curve) name the curve; anything else is an unsupported type.
-fn unsupported_type<T: HasPublic>(pkey: &PKeyRef<T>) -> String {
-    pkey.public_key_to_der()
-        .ok()
-        .and_then(|spki| spki_curve_oid(&spki))
-        .map_or_else(
-            || "Unsupported key type.".to_owned(),
-            |oid| format!("Curve {oid} is not supported"),
-        )
-}
-
-fn unsupported_curve<T: HasPublic>(pkey: &PKeyRef<T>) -> String {
-    let oid = pkey
-        .public_key_to_der()
-        .ok()
-        .and_then(|spki| spki_curve_oid(&spki))
-        .unwrap_or_else(|| "unknown".to_owned());
-    format!("Curve {oid} is not supported")
-}
-
-fn same_group(a: &EcGroupRef, b: &EcGroupRef) -> std::result::Result<bool, ErrorStack> {
-    let mut ctx = BigNumContext::new()?;
-    let (mut pa, mut aa, mut ba) = (BigNum::new()?, BigNum::new()?, BigNum::new()?);
-    let (mut pb, mut ab, mut bb) = (BigNum::new()?, BigNum::new()?, BigNum::new()?);
-    if a.components_gfp(&mut pa, &mut aa, &mut ba, &mut ctx)
-        .is_err()
-    {
-        return Ok(false);
-    }
-    b.components_gfp(&mut pb, &mut ab, &mut bb, &mut ctx)?;
-    if pa != pb || aa != ab || ba != bb {
-        return Ok(false);
-    }
-    let (mut oa, mut ob) = (BigNum::new()?, BigNum::new()?);
-    a.order(&mut oa, &mut ctx)?;
-    b.order(&mut ob, &mut ctx)?;
-    let (mut ca, mut cb) = (BigNum::new()?, BigNum::new()?);
-    a.cofactor(&mut ca, &mut ctx)?;
-    b.cofactor(&mut cb, &mut ctx)?;
-    if oa != ob || ca != cb {
-        return Ok(false);
-    }
-    let (Some(ga), Some(gb)) = (a.generator_opt(), b.generator_opt()) else {
-        return Ok(false);
-    };
-    let (mut xa, mut ya, mut xb, mut yb) = (
-        BigNum::new()?,
-        BigNum::new()?,
-        BigNum::new()?,
-        BigNum::new()?,
-    );
-    ga.affine_coordinates(a, &mut xa, &mut ya, &mut ctx)?;
-    gb.affine_coordinates(b, &mut xb, &mut yb, &mut ctx)?;
-    Ok(xa == xb && ya == yb)
-}
-
-/// The named group pyca accepts for an EC key, or pyca's refusal text.
-fn pyca_ec_nid<T: HasPublic>(
-    pkey: &PKeyRef<T>,
-    group: &EcGroupRef,
-) -> std::result::Result<Nid, String> {
-    if group.asn1_flag() == Asn1Flag::EXPLICIT_CURVE || group.curve_name().is_none() {
-        for nid in [Nid::X9_62_PRIME256V1, Nid::SECP384R1, Nid::SECP521R1] {
-            let named = EcGroup::from_curve_name(nid).map_err(|e| ossl_detail(&e))?;
-            if same_group(group, &named).map_err(|e| ossl_detail(&e))? {
-                return Ok(nid);
+impl PycaError {
+    /// The exception text (an OpenSSL failure: its first reason, §11 D11).
+    pub(crate) fn text(&self) -> String {
+        match self {
+            PycaError::Parse(err) => format!(
+                "Could not deserialize key data. The data may be in an incorrect format, it may be encrypted with an unsupported algorithm, or it may be an unsupported key type (e.g. EC curves with explicit parameters). Details: {}",
+                err.display()
+            ),
+            PycaError::Value(text) | PycaError::Unsupported(text) | PycaError::Internal(text) => {
+                text.clone()
             }
+            PycaError::Encrypted => ENCRYPTED_TEXT.to_owned(),
         }
-        return Err(EXPLICIT_CURVE_TEXT.to_owned());
-    }
-    match group.curve_name() {
-        Some(nid) if curve_for_nid(nid).is_some() => Ok(nid),
-        _ => Err(unsupported_curve(pkey)),
     }
 }
 
-/// The key's public point on the named group `nid` (uncompressed round trip).
-fn point_on(
-    nid: Nid,
-    ec_group: &EcGroupRef,
-    point: &openssl::ec::EcPointRef,
-) -> std::result::Result<(EcGroup, EcPoint), ErrorStack> {
-    let group = EcGroup::from_curve_name(nid)?;
-    let mut ctx = BigNumContext::new()?;
-    let bytes = point.to_bytes(ec_group, PointConversionForm::UNCOMPRESSED, &mut ctx)?;
-    let point = EcPoint::from_bytes(&group, &bytes, &mut ctx)?;
-    Ok((group, point))
+impl From<Asn1Error> for PycaError {
+    fn from(err: Asn1Error) -> Self {
+        PycaError::Parse(err)
+    }
 }
 
-/// pyca's private-key acceptance on top of an OpenSSL key (`Err` = pyca's error text):
-/// RSA-PSS → rsaEncryption RSA, RSA consistency check, EC on a supported (named) curve with
-/// an uncompressed point, Ed/X/DSA/DH unchanged, anything else unsupported.
-pub(crate) fn normalize_private(pkey: PKey<Private>) -> std::result::Result<PKey<Private>, String> {
-    let detail = |e: ErrorStack| ossl_detail(&e);
-    match pkey.id() {
-        Id::RSA | Id::RSA_PSS => {
-            let rsa = pkey.rsa().map_err(detail)?;
-            if !rsa.check_key().unwrap_or(false) {
-                return Err("Invalid private key".to_owned());
-            }
-            if pkey.id() == Id::RSA {
-                return Ok(pkey);
-            }
-            let rebuilt = match (rsa.p(), rsa.q(), rsa.dmp1(), rsa.dmq1(), rsa.iqmp()) {
-                (Some(p), Some(q), Some(dp), Some(dq), Some(qi)) => Rsa::from_private_components(
-                    rsa.n().to_owned().map_err(detail)?,
-                    rsa.e().to_owned().map_err(detail)?,
-                    rsa.d().to_owned().map_err(detail)?,
-                    p.to_owned().map_err(detail)?,
-                    q.to_owned().map_err(detail)?,
-                    dp.to_owned().map_err(detail)?,
-                    dq.to_owned().map_err(detail)?,
-                    qi.to_owned().map_err(detail)?,
-                )
-                .map_err(detail)?,
-                _ => return Err("Invalid private key".to_owned()),
+impl From<ErrorStack> for PycaError {
+    fn from(err: ErrorStack) -> Self {
+        PycaError::Internal(ossl_detail(&err))
+    }
+}
+
+const ENCRYPTED_TEXT: &str = "Password was not given but private key is encrypted";
+const INCORRECT_PASSWORD_TEXT: &str = "Incorrect password, could not decrypt key";
+const TRUNCATED_EC_TEXT: &str = "EC private key is not encoded properly: private key value is too short. Please file an issue at https://github.com/pyca/cryptography/issues explaining how your private key was created.";
+const EC_INFINITY_TEXT: &str = "Cannot load an EC public key where the point is at infinity";
+
+fn invalid_key() -> PycaError {
+    PycaError::Value("Invalid key".to_owned())
+}
+
+fn bn(bytes: &[u8]) -> Pyca<BigNum> {
+    Ok(BigNum::from_slice(bytes)?)
+}
+
+/// pyca's named curves: (OID content, OpenSSL NID).
+const CURVE_OIDS: [(&[u8], Nid); 9] = [
+    (
+        &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x01],
+        Nid::X9_62_PRIME192V1,
+    ),
+    (&[0x2b, 0x81, 0x04, 0x00, 0x21], Nid::SECP224R1),
+    (
+        &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07],
+        Nid::X9_62_PRIME256V1,
+    ),
+    (&[0x2b, 0x81, 0x04, 0x00, 0x22], Nid::SECP384R1),
+    (&[0x2b, 0x81, 0x04, 0x00, 0x23], Nid::SECP521R1),
+    (&[0x2b, 0x81, 0x04, 0x00, 0x0a], Nid::SECP256K1),
+    (
+        &[0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x07],
+        Nid::BRAINPOOL_P256R1,
+    ),
+    (
+        &[0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x0b],
+        Nid::BRAINPOOL_P384R1,
+    ),
+    (
+        &[0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x0d],
+        Nid::BRAINPOOL_P512R1,
+    ),
+];
+
+/// pyca's explicit-parameter domains it maps to a named curve (`ec_constants`: the
+/// SpecifiedECDomain DER of P-256/P-384/P-521 with and without the seed).
+const EXPLICIT_DOMAINS: [(&str, Nid); 6] = [
+    (P256_DOMAIN, Nid::X9_62_PRIME256V1),
+    (P256_DOMAIN_NO_SEED, Nid::X9_62_PRIME256V1),
+    (P384_DOMAIN, Nid::SECP384R1),
+    (P384_DOMAIN_NO_SEED, Nid::SECP384R1),
+    (P521_DOMAIN, Nid::SECP521R1),
+    (P521_DOMAIN_NO_SEED, Nid::SECP521R1),
+];
+
+/// pyca `ec_params_to_group`.
+fn ec_group(params: &EcParams<'_>) -> Pyca<EcGroup> {
+    let nid = match params.kind {
+        EcParamsKind::Named(oid) => {
+            let unsupported = || {
+                PycaError::Unsupported(format!(
+                    "Curve {} is not supported",
+                    x509info::oid_dotted(oid).unwrap_or_default()
+                ))
             };
-            PKey::from_rsa(rebuilt).map_err(detail)
+            let nid = CURVE_OIDS
+                .iter()
+                .find(|(known, _)| *known == oid)
+                .map(|(_, nid)| *nid)
+                .ok_or_else(unsupported)?;
+            return EcGroup::from_curve_name(nid).map_err(|_| unsupported());
         }
-        Id::EC => {
-            let ec = pkey.ec_key().map_err(detail)?;
-            let nid = pyca_ec_nid(&pkey, ec.group())?;
-            let (group, point) = point_on(nid, ec.group(), ec.public_key()).map_err(detail)?;
-            let key =
-                EcKey::from_private_components(&group, ec.private_key(), &point).map_err(detail)?;
-            if key.check_key().is_err() {
-                return Err("Invalid EC key.".to_owned());
+        EcParamsKind::Specified => EXPLICIT_DOMAINS
+            .iter()
+            .find(|(hex_der, _)| hex::decode(hex_der).is_ok_and(|der| der == params.raw))
+            .map(|(_, nid)| *nid)
+            .ok_or_else(|| PycaError::Unsupported(EXPLICIT_CURVE_TEXT.to_owned()))?,
+        EcParamsKind::Implicit => {
+            return Err(PycaError::Unsupported(EXPLICIT_CURVE_TEXT.to_owned()));
+        }
+    };
+    EcGroup::from_curve_name(nid)
+        .map_err(|_| PycaError::Unsupported(EXPLICIT_CURVE_TEXT.to_owned()))
+}
+
+/// pyca `pkcs8::parse_private_key` (PrivateKeyInfo { version u8, AlgorithmIdentifier,
+/// OCTET STRING, [0] IMPLICIT Attributes OPTIONAL }; version 0 only).
+fn pkcs8_private(data: &[u8]) -> Pyca<PKey<Private>> {
+    let top = der_single(data, 0x30)?;
+    let mut der = Der::new(top.content);
+    let version = der_uint(&der.any()?, 1)?;
+    let alg = alg_id(&der.any()?)?;
+    let private = der.tagged(0x04)?.content;
+    if let Some(attributes) = der.opt(0xa0)? {
+        der_attributes(attributes.content)?;
+    }
+    der.finish()?;
+    if version != 0 {
+        return Err(invalid_key());
+    }
+    let raw = |id: Id| -> Pyca<PKey<Private>> {
+        let key = der_single(private, 0x04)?;
+        Ok(PKey::private_key_from_raw_bytes(key.content, id)?)
+    };
+    match &alg.params {
+        _ if alg.oid == O_RSA || alg.oid == O_RSA_PSS => rsa_private(private),
+        AlgParams::Ec(params) => sec1_private(private, Some(*params)),
+        AlgParams::Dss { p, q, g } => {
+            let x = der_biguint(&der_single(private, 0x02)?)?;
+            let (p, q, g, x) = (bn(p)?, bn(q)?, bn(g)?, bn(x)?);
+            let mut ctx = BigNumContext::new()?;
+            let mut y = BigNum::new()?;
+            y.mod_exp(&g, &x, &p, &mut ctx)?;
+            let dsa = Dsa::from_private_components(p, q, g, x, y)?;
+            Ok(PKey::from_dsa(dsa)?)
+        }
+        AlgParams::Dh { p, g, q } => {
+            let x = der_biguint(&der_single(private, 0x02)?)?;
+            let p = bn(p)?;
+            if p.num_bits() < 512 {
+                return Err(invalid_key());
             }
-            PKey::from_ec_key(key).map_err(detail)
+            let q = match q {
+                Some(q) => Some(bn(q)?),
+                None => None,
+            };
+            let dh = Dh::from_pqg(p, q, bn(g)?)?.set_private_key(bn(x)?)?;
+            Ok(PKey::from_dh(dh)?)
         }
-        Id::ED25519 | Id::ED448 | Id::X25519 | Id::X448 | Id::DSA | Id::DH | Id::DHX => Ok(pkey),
-        _ => Err(unsupported_type(&pkey)),
+        _ if alg.oid == O_X25519 => raw(Id::X25519),
+        _ if alg.oid == O_X448 => raw(Id::X448),
+        _ if alg.oid == O_ED25519 => raw(Id::ED25519),
+        _ if alg.oid == O_ED448 => raw(Id::ED448),
+        _ => Err(PycaError::Unsupported(format!(
+            "Unknown key type: {}",
+            alg.dotted()
+        ))),
     }
 }
 
-/// pyca's public-key acceptance (see `normalize_private`).
-pub(crate) fn normalize_public(pkey: PKey<Public>) -> std::result::Result<PKey<Public>, String> {
-    let detail = |e: ErrorStack| ossl_detail(&e);
+/// pyca `ec::parse_pkcs1_private_key` (SEC1 ECPrivateKey { version 1, OCTET STRING,
+/// [0] EcParameters OPTIONAL, [1] BIT STRING OPTIONAL }), with the PKCS#8 parameters.
+fn sec1_private(data: &[u8], outer: Option<EcParams<'_>>) -> Pyca<PKey<Private>> {
+    let top = der_single(data, 0x30)?;
+    let mut der = Der::new(top.content);
+    let version = der_uint(&der.any()?, 1)?;
+    let private = der.tagged(0x04)?.content;
+    let inner = match der.opt(0xa0)? {
+        Some(explicit) => {
+            let mut params = Der::new(explicit.content);
+            let parsed = ec_params(&params.any()?)?;
+            params.finish()?;
+            Some(parsed)
+        }
+        None => None,
+    };
+    let public = match der.opt(0xa1)? {
+        Some(explicit) => Some(der_bits(&der_single(explicit.content, 0x03)?)?),
+        None => None,
+    };
+    der.finish()?;
+    if version != 1 {
+        return Err(invalid_key());
+    }
+    let group = match (outer, inner) {
+        (Some(outer), Some(inner)) => {
+            if outer.raw != inner.raw {
+                return Err(invalid_key());
+            }
+            ec_group(&outer)?
+        }
+        (Some(params), None) | (None, Some(params)) => ec_group(&params)?,
+        (None, None) => return Err(invalid_key()),
+    };
+    let order_bytes = usize::try_from(group.order_bits().div_ceil(8)).unwrap_or(usize::MAX);
+    if private.len() != order_bytes {
+        return Err(PycaError::Value(TRUNCATED_EC_TEXT.to_owned()));
+    }
+    let d = bn(private)?;
+    let mut ctx = BigNumContext::new()?;
+    let point = match public {
+        Some(bytes) => EcPoint::from_bytes(&group, bytes, &mut ctx).map_err(|_| invalid_key())?,
+        None => {
+            let mut point = EcPoint::new(&group)?;
+            point
+                .mul_generator2(&group, &d, &mut ctx)
+                .map_err(|_| invalid_key())?;
+            point
+        }
+    };
+    let key = EcKey::from_private_components(&group, &d, &point).map_err(|_| invalid_key())?;
+    key.check_key().map_err(|_| invalid_key())?;
+    Ok(PKey::from_ec_key(key)?)
+}
+
+fn sec1_private_alone(data: &[u8]) -> Pyca<PKey<Private>> {
+    sec1_private(data, None)
+}
+
+/// pyca `rsa::parse_pkcs1_private_key` (version 0, the eight BigUints, no
+/// otherPrimeInfos).
+fn rsa_private(data: &[u8]) -> Pyca<PKey<Private>> {
+    let top = der_single(data, 0x30)?;
+    let mut der = Der::new(top.content);
+    let version = der_uint(&der.any()?, 1)?;
+    let mut parts = Vec::with_capacity(8);
+    for _ in 0..8 {
+        parts.push(der_biguint(&der.any()?)?);
+    }
+    let other_primes = der.opt(0x30)?;
+    if let Some(other) = &other_primes {
+        der_nonempty_sequences(other.content)?;
+    }
+    der.finish()?;
+    if version != 0 || other_primes.is_some() {
+        return Err(invalid_key());
+    }
+    let rsa = Rsa::from_private_components(
+        bn(parts[0])?,
+        bn(parts[1])?,
+        bn(parts[2])?,
+        bn(parts[3])?,
+        bn(parts[4])?,
+        bn(parts[5])?,
+        bn(parts[6])?,
+        bn(parts[7])?,
+    )?;
+    Ok(PKey::from_rsa(rsa)?)
+}
+
+/// pyca `dsa::parse_pkcs1_private_key` (version 0, p, q, g, y, x).
+fn dsa_private(data: &[u8]) -> Pyca<PKey<Private>> {
+    let top = der_single(data, 0x30)?;
+    let mut der = Der::new(top.content);
+    let version = der_uint(&der.any()?, 1)?;
+    let mut parts = Vec::with_capacity(5);
+    for _ in 0..5 {
+        parts.push(der_biguint(&der.any()?)?);
+    }
+    der.finish()?;
+    if version != 0 {
+        return Err(invalid_key());
+    }
+    let dsa = Dsa::from_private_components(
+        bn(parts[0])?,
+        bn(parts[1])?,
+        bn(parts[2])?,
+        bn(parts[4])?,
+        bn(parts[3])?,
+    )?;
+    Ok(PKey::from_dsa(dsa)?)
+}
+
+/// pyca `rsa::parse_pkcs1_public_key` (RSAPublicKey { n, e } as BigUints).
+fn rsa_public(data: &[u8]) -> Pyca<PKey<Public>> {
+    let top = der_single(data, 0x30)?;
+    let mut der = Der::new(top.content);
+    let n = der_biguint(&der.any()?)?;
+    let e = der_biguint(&der.any()?)?;
+    der.finish()?;
+    Ok(PKey::from_rsa(Rsa::from_public_components(
+        bn(n)?,
+        bn(e)?,
+    )?)?)
+}
+
+/// pyca `spki::parse_public_key`.
+fn spki_public(data: &[u8]) -> Pyca<PKey<Public>> {
+    let top = der_single(data, 0x30)?;
+    let spki = spki_fields(&top)?;
+    let raw = |id: Id| -> Pyca<PKey<Public>> {
+        PKey::public_key_from_raw_bytes(spki.key, id).map_err(|_| invalid_key())
+    };
+    match &spki.alg.params {
+        AlgParams::Ec(params) => {
+            let group = ec_group(params)?;
+            let mut ctx = BigNumContext::new()?;
+            let point =
+                EcPoint::from_bytes(&group, spki.key, &mut ctx).map_err(|_| invalid_key())?;
+            let key = EcKey::from_public_key(&group, &point).map_err(|_| invalid_key())?;
+            Ok(PKey::from_ec_key(key)?)
+        }
+        _ if spki.alg.oid == O_ED25519 => raw(Id::ED25519),
+        _ if spki.alg.oid == O_ED448 => raw(Id::ED448),
+        _ if spki.alg.oid == O_X25519 => raw(Id::X25519),
+        _ if spki.alg.oid == O_X448 => raw(Id::X448),
+        _ if spki.alg.oid == O_RSA || spki.alg.oid == O_RSA_PSS => rsa_public(spki.key),
+        AlgParams::Dss { p, q, g } => {
+            let y = der_biguint(&der_single(spki.key, 0x02)?)?;
+            let dsa = Dsa::from_public_components(bn(p)?, bn(q)?, bn(g)?, bn(y)?)?;
+            Ok(PKey::from_dsa(dsa)?)
+        }
+        AlgParams::Dh { p, g, q } => {
+            let q = match q {
+                Some(q) => Some(bn(q)?),
+                None => None,
+            };
+            let dh = Dh::from_pqg(bn(p)?, q, bn(g)?)?;
+            let y = der_biguint(&der_single(spki.key, 0x02)?)?;
+            Ok(PKey::from_dh(dh.set_public_key(bn(y)?)?)?)
+        }
+        _ => Err(PycaError::Unsupported(format!(
+            "Unknown key type: {}",
+            spki.alg.dotted()
+        ))),
+    }
+}
+
+/// pyca's `private_key_from_pkey` checks: RSA keys must pass `RSA_check_key` with odd p
+/// and q ("Invalid private key"); an EC public point must not be at infinity.
+fn private_checks(pkey: PKey<Private>) -> Pyca<PKey<Private>> {
     match pkey.id() {
-        Id::RSA => Ok(pkey),
-        Id::RSA_PSS => {
-            let rsa = pkey.rsa().map_err(detail)?;
-            let rebuilt = Rsa::from_public_components(
-                rsa.n().to_owned().map_err(detail)?,
-                rsa.e().to_owned().map_err(detail)?,
-            )
-            .map_err(detail)?;
-            PKey::from_rsa(rebuilt).map_err(detail)
+        Id::RSA => {
+            let rsa = pkey.rsa()?;
+            let odd = |n: Option<&openssl::bn::BigNumRef>| n.is_some_and(|n| n.is_bit_set(0));
+            if !rsa.check_key().unwrap_or(false) || !odd(rsa.p()) || !odd(rsa.q()) {
+                return Err(PycaError::Value("Invalid private key".to_owned()));
+            }
         }
         Id::EC => {
-            let ec = pkey.ec_key().map_err(detail)?;
-            let nid = pyca_ec_nid(&pkey, ec.group())?;
-            let (group, point) = point_on(nid, ec.group(), ec.public_key()).map_err(detail)?;
-            let key = EcKey::from_public_key(&group, &point).map_err(detail)?;
-            if key.check_key().is_err() {
-                return Err("Invalid EC key.".to_owned());
+            let ec = pkey.ec_key()?;
+            if ec.public_key().is_infinity(ec.group()) {
+                return Err(PycaError::Value(EC_INFINITY_TEXT.to_owned()));
             }
-            PKey::from_ec_key(key).map_err(detail)
         }
-        Id::ED25519 | Id::ED448 | Id::X25519 | Id::X448 | Id::DSA | Id::DH | Id::DHX => Ok(pkey),
-        _ => Err(unsupported_type(&pkey)),
+        _ => {}
     }
+    Ok(pkey)
+}
+
+/// pyca `ECPublicKey::new`: the point must not be at infinity.
+fn public_checks(pkey: PKey<Public>) -> Pyca<PKey<Public>> {
+    if pkey.id() == Id::EC {
+        let ec = pkey.ec_key()?;
+        if ec.public_key().is_infinity(ec.group()) {
+            return Err(PycaError::Value(EC_INFINITY_TEXT.to_owned()));
+        }
+    }
+    Ok(pkey)
+}
+
+type PrivateParser = fn(&[u8]) -> Pyca<PKey<Private>>;
+
+/// pyca `load_der_private_key(data, password)`: PKCS#8, SEC1, PKCS#1 and DSA in turn (an
+/// ASN.1 parse error tries the next one, any other error is final), then an
+/// EncryptedPrivateKeyInfo (no password → `Encrypted`).
+pub(crate) fn load_der_private(data: &[u8], password: Option<&[u8]>) -> Pyca<PKey<Private>> {
+    let parsers: [PrivateParser; 4] = [pkcs8_private, sec1_private_alone, rsa_private, dsa_private];
+    for parser in parsers {
+        match parser(data) {
+            Ok(pkey) => return private_checks(pkey),
+            Err(PycaError::Parse(_)) => {}
+            Err(err) => return Err(err),
+        }
+    }
+    private_checks(encrypted_pkcs8_private(data, password)?)
+}
+
+/// pyca `load_der_public_key`: an SPKI, else a PKCS#1 RSAPublicKey (the SPKI error is
+/// kept when both fail).
+pub(crate) fn load_der_public(data: &[u8]) -> Pyca<PKey<Public>> {
+    let pkey = match spki_public(data) {
+        Ok(pkey) => pkey,
+        Err(err) => rsa_public(data).map_err(|_| err)?,
+    };
+    public_checks(pkey)
 }
 
 /// Outcome of pyca `load_der_private_key(data, password=None)`.
 pub(crate) enum PrivateLoadError {
     /// pyca TypeError "Password was not given but private key is encrypted".
     Encrypted,
-    /// pyca ValueError / UnsupportedAlgorithm: the detail text.
+    /// pyca UnsupportedAlgorithm: the detail text.
+    Unsupported(String),
+    /// pyca ValueError (or an OpenSSL failure): the detail text.
     Invalid(String),
 }
 
-/// pyca `load_der_private_key(data, None)` (PKCS#8 / PKCS#1 / SEC1), normalized.
+/// pyca `load_der_private_key(data, None)` (PKCS#8 / PKCS#1 / SEC1 / DSA).
 pub(crate) fn load_private_der(
     data: &[u8],
 ) -> std::result::Result<PKey<Private>, PrivateLoadError> {
-    x509info::check_key_der(data).map_err(PrivateLoadError::Invalid)?;
-    match PKey::private_key_from_der(data) {
-        Ok(pkey) => normalize_private(pkey).map_err(PrivateLoadError::Invalid),
-        Err(err) => {
-            if is_encrypted_pkcs8(data) {
-                Err(PrivateLoadError::Encrypted)
-            } else {
-                Err(PrivateLoadError::Invalid(ossl_detail(&err)))
+    load_der_private(data, None).map_err(|err| match err {
+        PycaError::Encrypted => PrivateLoadError::Encrypted,
+        PycaError::Unsupported(text) => PrivateLoadError::Unsupported(text),
+        other => PrivateLoadError::Invalid(other.text()),
+    })
+}
+
+/// pyca `load_der_public_key`: SPKI, or a PKCS#1 RSAPublicKey (`Err` = the detail text).
+pub(crate) fn load_public_der(data: &[u8]) -> std::result::Result<PKey<Public>, String> {
+    load_der_public(data).map_err(|err| err.text())
+}
+
+// ---------------------------------------------------------------------------------------
+// Encrypted PKCS#8 (pyca `parse_encrypted_private_key`, decrypted here with the whole
+// password — no OpenSSL password callback and its 1024-byte buffer)
+// ---------------------------------------------------------------------------------------
+
+/// pyca `cryptography_crypto::pkcs12::kdf` (RFC 7292 appendix B.2).
+pub(crate) fn pkcs12_kdf(
+    password: &str,
+    salt: &[u8],
+    id: u8,
+    rounds: u64,
+    key_len: usize,
+    md: MessageDigest,
+) -> std::result::Result<Zeroizing<Vec<u8>>, ErrorStack> {
+    let pass: Zeroizing<Vec<u8>> = Zeroizing::new(
+        password
+            .encode_utf16()
+            .chain([0])
+            .flat_map(u16::to_be_bytes)
+            .collect(),
+    );
+    let block = md.block_size();
+    let s_len = block * salt.len().div_ceil(block);
+    let p_len = block * pass.len().div_ceil(block);
+    let mut init: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0; s_len + p_len]);
+    for i in 0..s_len {
+        init[i] = salt[i % salt.len()];
+    }
+    for i in 0..p_len {
+        init[s_len + i] = pass[i % pass.len()];
+    }
+    let mut result: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0; key_len]);
+    let mut pos = 0;
+    loop {
+        let mut hasher = Hasher::new(md)?;
+        hasher.update(&vec![id; block])?;
+        hasher.update(&init)?;
+        let mut a = Zeroizing::new(hasher.finish()?.to_vec());
+        for _ in 1..rounds {
+            a = Zeroizing::new(openssl::hash::hash(md, &a)?.to_vec());
+        }
+        let take = a.len().min(key_len - pos);
+        result[pos..pos + take].copy_from_slice(&a[..take]);
+        pos += take;
+        if pos == key_len {
+            return Ok(result);
+        }
+        let b: Zeroizing<Vec<u8>> = Zeroizing::new((0..block).map(|i| a[i % a.len()]).collect());
+        for chunk in init.chunks_mut(block) {
+            let mut carry: u16 = 1;
+            for k in (0..block).rev() {
+                carry += u16::from(chunk[k]) + u16::from(b[k]);
+                chunk[k] = carry as u8;
+                carry >>= 8;
             }
         }
     }
 }
 
-/// The EncryptedPrivateKeyInfo probe: OpenSSL asks for a password only for encrypted
-/// PKCS#8 (the callback answers with an empty password; only the "asked" flag counts).
-fn is_encrypted_pkcs8(data: &[u8]) -> bool {
-    if x509info::check_key_der(data).is_err() {
-        return false;
+/// pyca `pbkdf1` (PKCS#5 v1.5, PBES1 with MD5).
+fn pbkdf1(
+    md: MessageDigest,
+    password: &[u8],
+    salt: &[u8],
+    iterations: u64,
+    length: usize,
+) -> Pyca<Zeroizing<Vec<u8>>> {
+    if length > md.size() || iterations == 0 {
+        return Err(PycaError::Internal("unknown error".to_owned()));
     }
-    let asked = Cell::new(false);
-    let _probe = PKey::private_key_from_pkcs8_callback(data, |_buf: &mut [u8]| {
-        asked.set(true);
-        Ok(0)
-    });
-    asked.get()
+    let mut hasher = Hasher::new(md)?;
+    hasher.update(password)?;
+    hasher.update(salt)?;
+    let mut t = Zeroizing::new(hasher.finish()?.to_vec());
+    for _ in 1..iterations {
+        t = Zeroizing::new(openssl::hash::hash(md, &t)?.to_vec());
+    }
+    Ok(Zeroizing::new(t[..length].to_vec()))
 }
 
-/// pyca `load_der_public_key`: SPKI, or a PKCS#1 RSAPublicKey; normalized.
-pub(crate) fn load_public_der(data: &[u8]) -> std::result::Result<PKey<Public>, String> {
-    x509info::check_key_der(data)?;
-    match PKey::public_key_from_der(data) {
-        Ok(pkey) => normalize_public(pkey),
-        Err(err) => Rsa::public_key_from_der_pkcs1(data)
-            .and_then(PKey::from_rsa)
-            .map_err(|_| ossl_detail(&err)),
-    }
+fn incorrect_password() -> PycaError {
+    PycaError::Value(INCORRECT_PASSWORD_TEXT.to_owned())
+}
+
+fn pbe_decrypt(cipher: Cipher, key: &[u8], iv: &[u8], data: &[u8]) -> Pyca<Zeroizing<Vec<u8>>> {
+    openssl::symm::decrypt(cipher, key, Some(iv), data)
+        .map(Zeroizing::new)
+        .map_err(|_| incorrect_password())
+}
+
+/// pyca `pkcs8::parse_encrypted_private_key`: EncryptedPrivateKeyInfo { AlgorithmIdentifier,
+/// OCTET STRING }; no (or an empty) password → `Encrypted`; then PBES1 (MD5-DES, SHA1-3DES,
+/// SHA1-RC2-40, SHA1-RC4-128) or PBES2 (PBKDF2 over HMAC-SHA1..512 or scrypt; AES-*-CBC,
+/// DES-EDE3-CBC, RC2-CBC version 58); anything else → "Unknown key encryption algorithm".
+fn encrypted_pkcs8_private(data: &[u8], password: Option<&[u8]>) -> Pyca<PKey<Private>> {
+    let top = der_single(data, 0x30)?;
+    let mut der = Der::new(top.content);
+    let alg = alg_id(&der.any()?)?;
+    let encrypted = der.tagged(0x04)?.content;
+    der.finish()?;
+    let password = match password {
+        None | Some([]) => return Err(PycaError::Encrypted),
+        Some(password) => password,
+    };
+    let unknown =
+        |oid: String| PycaError::Value(format!("Unknown key encryption algorithm: {oid}"));
+    let pkcs12_pbe = |cipher: Cipher, salt: &[u8], iterations: u64| -> Pyca<Zeroizing<Vec<u8>>> {
+        let text = std::str::from_utf8(password).map_err(|_| incorrect_password())?;
+        let md = MessageDigest::sha1();
+        let key = pkcs12_kdf(text, salt, 1, iterations, cipher.key_len(), md)?;
+        let iv = pkcs12_kdf(text, salt, 2, iterations, cipher.block_size(), md)?;
+        pbe_decrypt(cipher, &key, &iv, encrypted)
+    };
+    let plaintext = match &alg.params {
+        AlgParams::Pbe { salt, iterations } if alg.oid == O_PBE_MD5_DES => {
+            let cipher = Cipher::des_cbc();
+            let key_len = cipher.key_len();
+            let key_iv = pbkdf1(
+                MessageDigest::md5(),
+                password,
+                salt,
+                *iterations,
+                key_len + cipher.iv_len().unwrap_or(0),
+            )?;
+            pbe_decrypt(cipher, &key_iv[..key_len], &key_iv[key_len..], encrypted)?
+        }
+        AlgParams::Pbe { salt, iterations } if alg.oid == O_PBE_SHA_3DES => {
+            pkcs12_pbe(Cipher::des_ede3_cbc(), salt, *iterations)?
+        }
+        AlgParams::Pbe { salt, iterations } if alg.oid == O_PBE_SHA_RC2_40 => {
+            pkcs12_pbe(Cipher::rc2_40_cbc(), salt, *iterations)?
+        }
+        AlgParams::Pbe { salt, iterations } if alg.oid == O_PBE_SHA_RC4_128 => {
+            pkcs12_pbe(Cipher::rc4(), salt, *iterations)?
+        }
+        AlgParams::Pbes2 { kdf, enc } => {
+            let (cipher, iv) = match &enc.params {
+                AlgParams::Iv(iv) if enc.oid == O_DES_EDE3_CBC => (Cipher::des_ede3_cbc(), *iv),
+                AlgParams::Iv(iv) if enc.oid == O_AES128_CBC => (Cipher::aes_128_cbc(), *iv),
+                AlgParams::Iv(iv) if enc.oid == O_AES192_CBC => (Cipher::aes_192_cbc(), *iv),
+                AlgParams::Iv(iv) if enc.oid == O_AES256_CBC => (Cipher::aes_256_cbc(), *iv),
+                AlgParams::Rc2 { version, iv } => {
+                    // 58 = a 128-bit effective key (RFC 8018 B.2.3); the default is 32.
+                    if version.unwrap_or(32) != 58 {
+                        return Err(invalid_key());
+                    }
+                    (Cipher::rc2_cbc(), *iv)
+                }
+                _ => return Err(unknown(enc.dotted())),
+            };
+            let mut key: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0; cipher.key_len()]);
+            match &kdf.params {
+                AlgParams::Pbkdf2 {
+                    salt,
+                    iterations,
+                    prf,
+                } => {
+                    let digests = [
+                        MessageDigest::sha1(),
+                        MessageDigest::sha224(),
+                        MessageDigest::sha256(),
+                        MessageDigest::sha384(),
+                        MessageDigest::sha512(),
+                    ];
+                    let md = O_HMACS
+                        .iter()
+                        .position(|oid| oid == prf)
+                        .map(|i| digests[i])
+                        .ok_or_else(|| unknown(x509info::oid_dotted(prf).unwrap_or_default()))?;
+                    let iterations = usize::try_from(*iterations).map_err(|_| invalid_key())?;
+                    if iterations < 1 {
+                        return Err(invalid_key());
+                    }
+                    openssl::pkcs5::pbkdf2_hmac(password, salt, iterations, md, &mut key)?;
+                }
+                AlgParams::Scrypt { salt, n, r, p } => {
+                    let max_memory = u64::try_from(usize::MAX / 2).unwrap_or(u64::MAX);
+                    openssl::pkcs5::scrypt(password, salt, *n, *r, *p, max_memory, &mut key)?;
+                }
+                _ => return Err(unknown(kdf.dotted())),
+            }
+            pbe_decrypt(cipher, &key, iv, encrypted)?
+        }
+        _ => return Err(unknown(alg.dotted())),
+    };
+    pkcs8_private(&plaintext)
 }
 
 // ---------------------------------------------------------------------------------------
@@ -800,11 +1201,10 @@ fn parse_pem(data: &[u8], password: &mut Option<PasswordCallback<'_>>) -> Result
         }
         match expected {
             "PUBLIC KEY" => {
-                x509info::check_key_der(&body.der).map_err(|d| malformed(&d))?;
-                let pkey = PKey::public_key_from_der(&body.der)
-                    .map_err(|err| ossl_detail(&err))
-                    .and_then(normalize_public)
-                    .map_err(|d| malformed(&d))?;
+                // pyca `load_pem_public_key` of a "PUBLIC KEY" block: an SPKI only.
+                let pkey = spki_public(&body.der)
+                    .and_then(public_checks)
+                    .map_err(|err| malformed(&err.text()))?;
                 materials.push(public_material(&pkey, None)?);
             }
             "CERTIFICATE" => {
@@ -830,25 +1230,22 @@ fn traditional_cipher(name: &str) -> Option<Cipher> {
     }
 }
 
-/// The label-specific unencrypted DER loader of pyca's PEM private-key parser.
-fn load_private_by_label(der: &[u8], label: &str) -> std::result::Result<PKey<Private>, String> {
-    let detail = |e: ErrorStack| ossl_detail(&e);
-    x509info::check_key_der(der)?;
-    let pkey = match label {
-        "RSA PRIVATE KEY" => Rsa::private_key_from_der(der)
-            .and_then(PKey::from_rsa)
-            .map_err(detail)?,
-        "EC PRIVATE KEY" => EcKey::private_key_from_der(der)
-            .and_then(PKey::from_ec_key)
-            .map_err(detail)?,
-        _ => PKey::private_key_from_pkcs8(der).map_err(detail)?,
+/// pyca's PEM private-key dispatch on the block's tag (after `decrypt_pem`), then
+/// `private_key_from_pkey`'s checks.
+fn pem_private_by_tag(tag: &str, der: &[u8], password: Option<&[u8]>) -> Pyca<PKey<Private>> {
+    let pkey = match tag {
+        "PRIVATE KEY" => pkcs8_private(der)?,
+        "RSA PRIVATE KEY" => rsa_private(der)?,
+        "EC PRIVATE KEY" => sec1_private(der, None)?,
+        _ => encrypted_pkcs8_private(der, password)?,
     };
-    normalize_private(pkey)
+    private_checks(pkey)
 }
 
 /// Traditional (RFC 1421) decryption, pyca's `decrypt_pem`: `DEK-Info` = "{cipher},{iv hex}"
 /// split at the first ',' (neither part trimmed), EVP_BytesToKey(MD5, salt = IV[..8], one
-/// round) + CBC. `Err` = c2's wrong-password path.
+/// round) + CBC with the first IV-length bytes of the IV (pyca's OpenSSL call ignores the
+/// rest; a shorter IV fails). `Err` = c2's wrong-password path.
 fn decrypt_traditional(
     body: &PemBody,
     dek_info: &str,
@@ -857,7 +1254,8 @@ fn decrypt_traditional(
     let (cipher_name, iv_hex) = dek_info.split_once(',').ok_or(())?;
     let cipher = traditional_cipher(cipher_name).ok_or(())?;
     let iv = hex::decode(iv_hex).map_err(|_| ())?;
-    if iv.len() != cipher.iv_len().unwrap_or(0) || iv.len() < 8 {
+    let iv_len = cipher.iv_len().unwrap_or(0);
+    if iv.len() < iv_len || iv.len() < 8 {
         return Err(());
     }
     let openssl::pkcs5::KeyIvPair {
@@ -867,7 +1265,7 @@ fn decrypt_traditional(
         .map_err(|_| ())?;
     let key = Zeroizing::new(key);
     let _derived_iv = derived_iv.map(Zeroizing::new);
-    openssl::symm::decrypt(cipher, &key, Some(&iv), &body.der)
+    openssl::symm::decrypt(cipher, &key, Some(&iv[..iv_len]), &body.der)
         .map(Zeroizing::new)
         .map_err(|_| ())
 }
@@ -901,14 +1299,8 @@ fn parse_pem_private(
             let secret = ask_password(password, &prompt)?;
             let der =
                 decrypt_traditional(&body, dek_info, &secret).map_err(|()| wrong_key_password())?;
-            let pkey = if label == "ENCRYPTED PRIVATE KEY" {
-                if !is_encrypted_pkcs8(&der) {
-                    return Err(wrong_key_password());
-                }
-                decrypt_pkcs8(&der, &secret).ok_or_else(wrong_key_password)?
-            } else {
-                load_private_by_label(&der, label).map_err(|_| wrong_key_password())?
-            };
+            let pkey = pem_private_by_tag(&body.tag, &der, Some(&secret))
+                .map_err(|_| wrong_key_password())?;
             return private_material(&pkey, None);
         }
         Some(_) => {
@@ -918,124 +1310,17 @@ fn parse_pem_private(
         }
         None => {}
     }
-    if label == "ENCRYPTED PRIVATE KEY" {
-        // pyca asks for the password only when the body is an EncryptedPrivateKeyInfo.
-        if !is_encrypted_pkcs8(&body.der) {
-            let detail = match x509info::check_key_der(&body.der) {
-                Err(detail) => detail,
-                Ok(()) => PKey::private_key_from_pkcs8(&body.der).err().map_or_else(
-                    || "not an EncryptedPrivateKeyInfo".to_owned(),
-                    |e| ossl_detail(&e),
-                ),
-            };
-            return Err(malformed(&detail));
+    match pem_private_by_tag(&body.tag, &body.der, None) {
+        Ok(pkey) => private_material(&pkey, None),
+        Err(PycaError::Encrypted) => {
+            ensure_legacy_provider();
+            let secret = ask_password(password, &prompt)?;
+            let pkey = pem_private_by_tag(&body.tag, &body.der, Some(&secret))
+                .map_err(|_| wrong_key_password())?;
+            private_material(&pkey, None)
         }
-        let secret = ask_password(password, &prompt)?;
-        let pkey = decrypt_pkcs8(&body.der, &secret).ok_or_else(wrong_key_password)?;
-        return private_material(&pkey, None);
+        Err(err) => Err(malformed(&err.text())),
     }
-    let pkey = load_private_by_label(&body.der, label).map_err(|d| malformed(&d))?;
-    private_material(&pkey, None)
-}
-
-// ---------------------------------------------------------------------------------------
-// Encrypted PKCS#8 (pyca's supported schemes)
-// ---------------------------------------------------------------------------------------
-
-const OID_PBES2: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x05, 0x0d];
-const OID_PBKDF2: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x05, 0x0c];
-const OID_SCRYPT: &[u8] = &[0x2b, 0x06, 0x01, 0x04, 0x01, 0xda, 0x47, 0x04, 0x0b];
-/// PBES1 schemes pyca decrypts: pbeWithMD5AndDES-CBC, pbeWithSHAAnd128BitRC4,
-/// pbeWithSHAAnd3-KeyTripleDES-CBC, pbeWithSHAAnd40BitRC2-CBC.
-const PBES1_OK: [&[u8]; 4] = [
-    &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x05, 0x03],
-    &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x0c, 0x01, 0x01],
-    &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x0c, 0x01, 0x03],
-    &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x0c, 0x01, 0x06],
-];
-/// PBKDF2 PRFs pyca accepts: hmacWithSHA1/224/256/384/512.
-const PRF_OK: [&[u8]; 5] = [
-    &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x02, 0x07],
-    &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x02, 0x08],
-    &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x02, 0x09],
-    &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x02, 0x0a],
-    &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x02, 0x0b],
-];
-/// PBES2 ciphers pyca accepts: aes128/192/256-cbc, des-ede3-cbc, rc2-cbc.
-const PBES2_CIPHER_OK: [&[u8]; 5] = [
-    &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x01, 0x02],
-    &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x01, 0x16],
-    &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x01, 0x2a],
-    &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x03, 0x07],
-    &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x03, 0x02],
-];
-
-/// rc2-cbc (1.2.840.113549.3.2).
-const OID_RC2_CBC: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x03, 0x02];
-
-/// (OID content, parameters) of an AlgorithmIdentifier TLV content.
-fn algorithm_identifier(content: &[u8]) -> Option<(&[u8], &[u8])> {
-    let (oid, rest) = x509info::read_tlv(content).ok()?;
-    (oid.tag == 0x06).then_some((oid.content, rest))
-}
-
-/// False when the EncryptedPrivateKeyInfo names a scheme pyca does not decrypt ("Unknown key
-/// encryption algorithm", which c2 reports as a wrong password); true when supported or
-/// unparseable (OpenSSL then decides).
-fn pkcs8_scheme_supported(der: &[u8]) -> bool {
-    let check = || -> Option<bool> {
-        let (epki, _) = x509info::read_tlv(der).ok()?;
-        let (alg, _) = x509info::read_tlv(epki.content).ok()?;
-        let (oid, params) = algorithm_identifier(alg.content)?;
-        if PBES1_OK.contains(&oid) {
-            return Some(true);
-        }
-        if oid != OID_PBES2 {
-            return Some(false);
-        }
-        let (pbes2, _) = x509info::read_tlv(params).ok()?;
-        let (kdf, rest) = x509info::read_tlv(pbes2.content).ok()?;
-        let (enc, _) = x509info::read_tlv(rest).ok()?;
-        let (kdf_oid, kdf_params) = algorithm_identifier(kdf.content)?;
-        if kdf_oid == OID_PBKDF2 {
-            // PBKDF2-params ::= SEQUENCE { salt, iterationCount, keyLength OPTIONAL, prf DEFAULT sha1 }
-            let (seq, _) = x509info::read_tlv(kdf_params).ok()?;
-            let mut items = seq.content;
-            while !items.is_empty() {
-                let (item, next) = x509info::read_tlv(items).ok()?;
-                items = next;
-                if item.tag == 0x30 {
-                    let (prf, _) = algorithm_identifier(item.content)?;
-                    if !PRF_OK.contains(&prf) {
-                        return Some(false);
-                    }
-                }
-            }
-        } else if kdf_oid != OID_SCRYPT {
-            return Some(false);
-        }
-        let (enc_oid, enc_params) = algorithm_identifier(enc.content)?;
-        if enc_oid == OID_RC2_CBC {
-            // RC2-CBC-Parameter ::= SEQUENCE { rc2ParameterVersion INTEGER OPTIONAL, iv }:
-            // pyca decrypts only version 58 (128-bit effective key; absent = 32).
-            let (params, _) = x509info::read_tlv(enc_params).ok()?;
-            let (first, _) = x509info::read_tlv(params.content).ok()?;
-            return Some(first.tag == 0x02 && first.content == [58]);
-        }
-        Some(PBES2_CIPHER_OK.contains(&enc_oid))
-    };
-    check().unwrap_or(true)
-}
-
-/// Decrypt an EncryptedPrivateKeyInfo with pyca's scheme set; None = c2's wrong-password
-/// path (bad password, unsupported scheme, corrupt data, or a key pyca refuses).
-fn decrypt_pkcs8(der: &[u8], password: &[u8]) -> Option<PKey<Private>> {
-    ensure_legacy_provider();
-    if !pkcs8_scheme_supported(der) {
-        return None;
-    }
-    let pkey = PKey::private_key_from_pkcs8_callback(der, fill_password(password)).ok()?;
-    normalize_private(pkey).ok()
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1046,38 +1331,40 @@ fn parse_der(
     data: &[u8],
     password: &mut Option<PasswordCallback<'_>>,
 ) -> Result<Option<Vec<KeyMaterial>>> {
-    // pyca parses every DER input strictly (one TLV, minimal lengths, nothing after it);
-    // OpenSSL's key decoders do not, so key steps run only on strict DER.
-    let strict = x509info::check_key_der(data).is_ok();
-    // 1. PKCS#8 / PKCS#1 / SEC1
-    if strict
-        && let Ok(pkey) = PKey::private_key_from_der(data)
-        && let Ok(pkey) = normalize_private(pkey)
-    {
-        return Ok(Some(vec![private_material(&pkey, None)?]));
-    }
-    // 2. EncryptedPrivateKeyInfo (the callback fires only for encrypted PKCS#8)
-    if is_encrypted_pkcs8(data) {
-        let secret = ask_password(password, "Password for encrypted private key")?;
-        let pkey = decrypt_pkcs8(data, &secret).ok_or_else(wrong_key_password)?;
-        return Ok(Some(vec![private_material(&pkey, None)?]));
+    // 1. pyca `load_der_private_key(data, None)`: PKCS#8 / SEC1 / PKCS#1 / DSA; 2. an
+    // EncryptedPrivateKeyInfo is its TypeError, which prompts and loads again.
+    match load_der_private(data, None) {
+        Ok(pkey) => return Ok(Some(vec![private_material(&pkey, None)?])),
+        Err(PycaError::Encrypted) => {
+            ensure_legacy_provider();
+            let secret = ask_password(password, "Password for encrypted private key")?;
+            let pkey = load_der_private(data, Some(&secret)).map_err(|_| wrong_key_password())?;
+            return Ok(Some(vec![private_material(&pkey, None)?]));
+        }
+        Err(_) => {}
     }
     // 3. SPKI, 4. PKCS#1 RSAPublicKey
-    if strict {
-        if let Ok(pkey) = PKey::public_key_from_der(data) {
-            if let Ok(pkey) = normalize_public(pkey) {
-                return Ok(Some(vec![public_material(&pkey, None)?]));
-            }
-        } else if let Ok(pkey) = Rsa::public_key_from_der_pkcs1(data).and_then(PKey::from_rsa) {
-            return Ok(Some(vec![public_material(&pkey, None)?]));
+    if let Ok(pkey) = load_der_public(data) {
+        return Ok(Some(vec![public_material(&pkey, None)?]));
+    }
+    // 5. X.509, 6. CSR (pyca's strict parsers; InvalidVersion was not a ValueError in c2)
+    match x509info::load_certificate(data) {
+        Ok(_) => return Ok(Some(vec![cert_material(data, None)?])),
+        Err(detail) if x509info::is_invalid_version(&detail) => {
+            return Err(ConsoleError::key_parse(format!(
+                "certificate is not valid DER X.509: {detail}"
+            )));
         }
+        Err(_) => {}
     }
-    // 5. X.509, 6. CSR (pyca's strict parsers alone; OpenSSL's are not consulted)
-    if x509info::load_certificate(data).is_ok() {
-        return Ok(Some(vec![cert_material(data, None)?]));
-    }
-    if x509info::load_csr(data).is_ok() {
-        return Ok(Some(vec![csr_material(data)?]));
+    match x509info::load_csr(data) {
+        Ok(_) => return Ok(Some(vec![csr_material(data)?])),
+        Err(detail) if x509info::is_invalid_version(&detail) => {
+            return Err(ConsoleError::key_parse(format!(
+                "certificate request is not valid DER X.509: {detail}"
+            )));
+        }
+        Err(_) => {}
     }
     // 7. PKCS#12
     if looks_like_pkcs12(data) {
@@ -1100,19 +1387,53 @@ fn looks_like_pkcs12(data: &[u8]) -> bool {
         .is_some_and(|rest| rest.starts_with(&[0x02, 0x01, 0x03]))
 }
 
-/// One pyca `load_pkcs12(data, password)` attempt: `parse2`, then every certificate through
-/// pyca's strict loader (a ValueError there fails the attempt as a wrong password would).
+/// A PKCS#12 that one pyca `load_pkcs12` attempt accepted: the parse and its key loaded
+/// as pyca loads it.
+struct Pkcs12Contents {
+    parsed: ParsedPkcs12_2,
+    key: Option<PKey<Private>>,
+}
+
+/// One pyca `load_pkcs12(data, password)` attempt: `parse2`; the private key re-encoded as
+/// PKCS#8 and loaded by pyca's DER loader; every certificate through pyca's strict loader.
+/// `Ok(None)` = the attempt failed as with pyca's ValueError (wrong password, corrupt data,
+/// a key pyca refuses with a ValueError — "Invalid private key", "Invalid key" —, an invalid
+/// certificate): c2's loop moved on. A key pyca refuses with UnsupportedAlgorithm (curve or
+/// key type) and a certificate with pyca's InvalidVersion escaped c2's `except ValueError`
+/// (c2 crashed): `Err` (§11 D12(g), D12(b)).
 /// A PFX without a MAC is retried with a MAC computed for `password` (OpenSSL 3.0's
 /// PKCS12_parse refuses a non-empty password without a MAC; the OpenSSL pyca bundles, and
 /// r2's vendored one, do not).
-fn pkcs12_attempt(data: &[u8], p12: &Pkcs12, password: &str) -> Option<ParsedPkcs12_2> {
+fn pkcs12_attempt(data: &[u8], p12: &Pkcs12, password: &str) -> Result<Option<Pkcs12Contents>> {
     let parsed = match p12.parse2(password) {
         Ok(parsed) => parsed,
         Err(_) if !password.is_empty() => {
-            let with_mac = pkcs12_with_mac(data, password)?;
-            Pkcs12::from_der(&with_mac).ok()?.parse2(password).ok()?
+            let retried = pkcs12_with_mac(data, password)
+                .and_then(|with_mac| Pkcs12::from_der(&with_mac).ok())
+                .and_then(|p12| p12.parse2(password).ok());
+            match retried {
+                Some(parsed) => parsed,
+                None => return Ok(None),
+            }
         }
-        Err(_) => return None,
+        Err(_) => return Ok(None),
+    };
+    let key = match parsed.pkey.as_ref() {
+        None => None,
+        Some(pkey) => {
+            let Ok(pkcs8) = pkey.private_key_to_pkcs8().map(Zeroizing::new) else {
+                return Ok(None);
+            };
+            match load_private_der(&pkcs8) {
+                Ok(key) => Some(key),
+                Err(PrivateLoadError::Unsupported(detail)) => {
+                    return Err(ConsoleError::key_parse(format!(
+                        "PKCS#12 contains an unsupported private key: {detail}"
+                    )));
+                }
+                Err(_) => return Ok(None),
+            }
+        }
     };
     let certs = parsed
         .cert
@@ -1120,10 +1441,20 @@ fn pkcs12_attempt(data: &[u8], p12: &Pkcs12, password: &str) -> Option<ParsedPkc
         .map(|cert| &**cert)
         .chain(parsed.ca.iter().flat_map(|stack| stack.iter()));
     for cert in certs {
-        let der = cert.to_der().ok()?;
-        x509info::load_certificate(&der).ok()?;
+        let Ok(der) = cert.to_der() else {
+            return Ok(None);
+        };
+        match x509info::load_certificate(&der) {
+            Ok(_) => {}
+            Err(detail) if x509info::is_invalid_version(&detail) => {
+                return Err(ConsoleError::key_parse(format!(
+                    "certificate is not valid DER X.509: {detail}"
+                )));
+            }
+            Err(_) => return Ok(None),
+        }
     }
-    Some(parsed)
+    Ok(Some(Pkcs12Contents { parsed, key }))
 }
 
 /// pkcs7-data (1.2.840.113549.1.7.1) and SHA-1 (1.3.14.3.2.26).
@@ -1198,8 +1529,12 @@ fn parse_pkcs12(
 ) -> Result<Vec<KeyMaterial>> {
     ensure_legacy_provider();
     let p12 = Pkcs12::from_der(data).ok();
-    let parsed = match p12.as_ref().and_then(|p12| pkcs12_attempt(data, p12, "")) {
-        Some(parsed) => parsed,
+    let first = match p12.as_ref() {
+        Some(p12) => pkcs12_attempt(data, p12, "")?,
+        None => None,
+    };
+    let Pkcs12Contents { parsed, key } = match first {
+        Some(contents) => contents,
         None => {
             let Some(callback) = password.as_mut() else {
                 return Err(ConsoleError::key_parse(
@@ -1215,9 +1550,11 @@ fn parse_pkcs12(
             if secret.contains('\0') {
                 return Err(wrong());
             }
-            p12.as_ref()
-                .and_then(|p12| pkcs12_attempt(data, p12, secret))
-                .ok_or_else(wrong)?
+            let retried = match p12.as_ref() {
+                Some(p12) => pkcs12_attempt(data, p12, secret)?,
+                None => None,
+            };
+            retried.ok_or_else(wrong)?
         }
     };
     let label_hint = match parsed.cert.as_ref() {
@@ -1236,13 +1573,7 @@ fn parse_pkcs12(
         },
     };
     let mut materials = Vec::new();
-    if let Some(pkey) = parsed.pkey {
-        // A key pyca refuses here raised UnsupportedAlgorithm out of c2 (§11 D12(g)).
-        let pkey = normalize_private(pkey).map_err(|detail| {
-            ConsoleError::key_parse(format!(
-                "PKCS#12 contains an unsupported private key: {detail}"
-            ))
-        })?;
+    if let Some(pkey) = key {
         materials.push(private_material(&pkey, label_hint.clone())?);
     }
     if let Some(cert) = parsed.cert.as_ref() {

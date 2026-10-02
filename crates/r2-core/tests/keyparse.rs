@@ -1729,3 +1729,499 @@ fn lazily_undecodable_subject_names_are_keyparse_errors() {
         // a label supplied by a PKCS#12 friendly name never decodes the subject in c2
     }
 }
+
+// --------------------------- pyca's structures (cryptography 49's own ASN.1 parsers)
+
+const COULD_NOT_PARSE: &str = "could not parse key material (attempted: ";
+
+fn assert_could_not_parse(name: &str, data: &[u8]) {
+    let prompts = Rc::new(RefCell::new(Vec::new()));
+    let mut cb = recording_cb("pw", prompts.clone());
+    let err = parse_with(data, &mut cb).unwrap_err();
+    assert!(
+        err.message.starts_with(COULD_NOT_PARSE),
+        "{name}: {}",
+        err.message
+    );
+    assert!(prompts.borrow().is_empty(), "{name}");
+}
+
+fn int_tlv(value: u8) -> Vec<u8> {
+    if value & 0x80 != 0 {
+        tlv(0x02, &[0x00, value])
+    } else {
+        tlv(0x02, &[value])
+    }
+}
+
+/// A certificate assembled from TBS fields (not re-signed: pyca does not verify at load).
+fn cert_from(tbs: &[Vec<u8>], sig_alg: &[u8]) -> Vec<u8> {
+    der_seq(&[
+        der_seq(tbs),
+        sig_alg.to_vec(),
+        tlv(0x03, &[0x00, 0x01, 0x02]),
+    ])
+}
+
+const ECDSA_SHA256: &str = "300a06082a8648ce3d040302";
+
+/// TBS fields of a valid v3 EC certificate: version, serial, sigalg, issuer, validity,
+/// subject, SPKI, [3] extensions (basicConstraints critical CA:FALSE).
+fn tbs_fields(key: &PKey<Private>) -> Vec<Vec<u8>> {
+    let name = raw_name(&[(CN_OID, 0x0c, b"structure")]);
+    let validity = der_seq(&[tlv(0x17, b"200101000000Z"), tlv(0x17, b"300101000000Z")]);
+    let basic_constraints = der_seq(&[
+        tlv(0x06, &unhex("551d13")),
+        tlv(0x01, &[0xff]),
+        tlv(0x04, &der_seq(&[])),
+    ]);
+    vec![
+        tlv(0xa0, &int_tlv(2)),
+        int_tlv(7),
+        unhex(ECDSA_SHA256),
+        name.clone(),
+        validity,
+        name,
+        spki_der(key),
+        tlv(0xa3, &der_seq(&[basic_constraints])),
+    ]
+}
+
+#[test]
+fn certificate_structure_is_pycas() {
+    // pyca parses the whole Certificate at load (rust-asn1 + cryptography-x509): every
+    // case c2 answered "could not parse key material" (ValueError) is refused here too.
+    let key = p256();
+    let base = tbs_fields(&key);
+    let sig = unhex(ECDSA_SHA256);
+    let material = parse_one(&cert_from(&base, &sig));
+    assert_eq!(material.key_class, KeyClass::Certificate);
+    // still loads: critical TRUE, both unique IDs, the version absent (DEFAULT v1, no
+    // extensions), RSA-style NULL-less ECDSA params
+    let mut with_ids = base.clone();
+    with_ids.insert(7, tlv(0x81, &[0x00, 0xaa]));
+    with_ids.insert(8, tlv(0x82, &[0x00, 0xbb]));
+    parse_one(&cert_from(&with_ids, &sig));
+    parse_one(&cert_from(&base[1..7], &sig));
+
+    let with = |index: usize, field: Vec<u8>| {
+        let mut tbs = base.clone();
+        tbs[index] = field;
+        cert_from(&tbs, &sig)
+    };
+    let extension = |critical: &[u8]| {
+        let mut ext = vec![tlv(0x06, &unhex("551d13"))];
+        if !critical.is_empty() {
+            ext.push(critical.to_vec());
+        }
+        ext.push(tlv(0x04, &der_seq(&[])));
+        tlv(0xa3, &der_seq(&[der_seq(&ext)]))
+    };
+    let mut trailing = base.clone();
+    trailing.push(tlv(0x04, b"x"));
+    let sig_params = unhex("300d06082a8648ce3d0403020201ff");
+    let cases: Vec<(&str, Vec<u8>)> = vec![
+        // an encoded DEFAULT (v1), a negative version, a version over u8
+        ("explicit v1", with(0, tlv(0xa0, &int_tlv(0)))),
+        ("negative version", with(0, tlv(0xa0, &tlv(0x02, &[0xff])))),
+        ("version 256", with(0, tlv(0xa0, &tlv(0x02, &[0x01, 0x00])))),
+        // critical: BOOLEAN DEFAULT FALSE — FALSE encoded, a non-DER TRUE
+        ("critical false", with(7, extension(&[0x01, 0x01, 0x00]))),
+        ("critical 0x01", with(7, extension(&[0x01, 0x01, 0x01]))),
+        (
+            "extensions not a sequence",
+            with(7, tlv(0xa3, &tlv(0x04, &[]))),
+        ),
+        (
+            "extension not an Extension",
+            with(7, tlv(0xa3, &der_seq(&[der_seq(&[int_tlv(1)])]))),
+        ),
+        ("trailing TBS field", cert_from(&trailing, &sig)),
+        // ecdsa-with-SHA256 has no parameters in pyca's DEFINED BY table
+        ("tbs sigalg params", with(2, sig_params.clone())),
+        ("outer sigalg params", cert_from(&base, &sig_params)),
+        (
+            "spki rsa params not NULL",
+            with(6, {
+                let mut items = der_items(&spki_der(&rsa_key(1024)));
+                items[0] = der_seq(&[tlv(0x06, &unhex("2a864886f70d010101")), tlv(0x04, &[])]);
+                der_seq(&items)
+            }),
+        ),
+        (
+            "spki ec params not a curve",
+            with(6, {
+                let mut items = der_items(&spki_der(&key));
+                items[0] = der_seq(&[tlv(0x06, &unhex("2a8648ce3d0201")), int_tlv(1)]);
+                der_seq(&items)
+            }),
+        ),
+    ];
+    for (name, der) in &cases {
+        assert_could_not_parse(name, der);
+        let err = err(&pem_wrap(der, "CERTIFICATE"));
+        assert!(
+            err.message
+                .starts_with("malformed CERTIFICATE PEM block: error parsing asn1 value: "),
+            "{name}: {}",
+            err.message
+        );
+    }
+    // pyca's InvalidVersion (v2 = 1, or above v3) is not a ValueError: c2 crashed; r2
+    // raises KeyParse (§11 D12(b)).
+    for version in [1u8, 3, 5] {
+        let der = with(0, tlv(0xa0, &int_tlv(version)));
+        assert_eq!(
+            err(&der).message,
+            format!("certificate is not valid DER X.509: {version} is not a valid X509 version")
+        );
+    }
+}
+
+/// A CSR assembled from its CertificationRequestInfo fields (not re-signed).
+fn csr_from(info: &[Vec<u8>], sig_alg: &[u8]) -> Vec<u8> {
+    der_seq(&[der_seq(info), sig_alg.to_vec(), tlv(0x03, &[0x00, 0x01])])
+}
+
+#[test]
+fn csr_structure_is_pycas() {
+    let key = p256();
+    let name = raw_name(&[(CN_OID, 0x0c, b"csr")]);
+    let attribute = |oid: &str, values: &[Vec<u8>]| {
+        der_seq(&[tlv(0x06, &unhex(oid)), tlv(0x31, &values.concat())])
+    };
+    let challenge = attribute("2a864886f70d010907", &[tlv(0x0c, b"pw")]);
+    let info = vec![int_tlv(0), name, spki_der(&key), tlv(0xa0, &challenge)];
+    let sig = unhex(ECDSA_SHA256);
+    let material = parse_one(&csr_from(&info, &sig));
+    assert_eq!(material.label_hint.as_deref(), Some("csr"));
+    let with = |index: usize, field: Vec<u8>| {
+        let mut fields = info.clone();
+        fields[index] = field;
+        csr_from(&fields, &sig)
+    };
+    let unordered = tlv(
+        0xa0,
+        &[challenge.clone(), attribute("2a864886f70d010902", &[])].concat(),
+    );
+    let cases: Vec<(&str, Vec<u8>)> = vec![
+        (
+            "attributes not attributes",
+            with(3, tlv(0xa0, &tlv(0x04, &[]))),
+        ),
+        ("attributes out of order", with(3, unordered)),
+        (
+            "attribute values out of order",
+            with(
+                3,
+                tlv(
+                    0xa0,
+                    &attribute("2a864886f70d010907", &[tlv(0x0c, b"b"), tlv(0x0c, b"a")]),
+                ),
+            ),
+        ),
+        (
+            "bad attribute oid",
+            with(
+                3,
+                tlv(0xa0, &der_seq(&[tlv(0x06, &[0x80]), tlv(0x31, &[])])),
+            ),
+        ),
+        (
+            "sigalg params",
+            csr_from(&info, &unhex("300d06082a8648ce3d0403020201ff")),
+        ),
+    ];
+    for (name, der) in &cases {
+        assert_could_not_parse(name, der);
+    }
+    for version in [1u8, 2, 3] {
+        let der = with(0, int_tlv(version));
+        assert_eq!(
+            err(&der).message,
+            format!(
+                "certificate request is not valid DER X.509: {version} is not a valid CSR version"
+            )
+        );
+    }
+}
+
+/// `der` with its first element (the version INTEGER) replaced.
+fn with_version(der: &[u8], version: Vec<u8>) -> Vec<u8> {
+    let mut items = der_items(der);
+    items[0] = version;
+    der_seq(&items)
+}
+
+#[test]
+fn private_key_structures_are_pycas() {
+    // pyca's version checks (OpenSSL's decoders accept every one of these): PKCS#8 version
+    // 0 only, SEC1 ECPrivateKey version 1, PKCS#1 RSAPrivateKey version 0 without
+    // otherPrimeInfos (multi-prime RSA) — pyca's "Invalid key".
+    let (ec, rsa, ed) = (p256(), rsa_key(1024), ed25519());
+    let sec1 = ec.ec_key().unwrap().private_key_to_der().unwrap();
+    let pkcs1 = rsa.rsa().unwrap().private_key_to_der().unwrap();
+    let multi_prime = {
+        let mut items = der_items(&pkcs1);
+        items[0] = int_tlv(1);
+        let prime_info = der_seq(&[int_tlv(7), int_tlv(3), int_tlv(5)]);
+        items.push(der_seq(&[prime_info]));
+        der_seq(&items)
+    };
+    let pkcs8_of = |inner: &[u8]| {
+        let mut items = der_items(&pkcs8_der(&rsa));
+        items[2] = tlv(0x04, inner);
+        der_seq(&items)
+    };
+    let cases: Vec<(&str, Vec<u8>, &str)> = vec![
+        (
+            "pkcs8 v1",
+            with_version(&pkcs8_der(&ec), int_tlv(1)),
+            "PRIVATE KEY",
+        ),
+        (
+            "pkcs8 v2",
+            with_version(&pkcs8_der(&rsa), int_tlv(2)),
+            "PRIVATE KEY",
+        ),
+        (
+            "ed25519 pkcs8 v2",
+            with_version(&pkcs8_der(&ed), int_tlv(2)),
+            "PRIVATE KEY",
+        ),
+        ("sec1 v0", with_version(&sec1, int_tlv(0)), "EC PRIVATE KEY"),
+        ("sec1 v2", with_version(&sec1, int_tlv(2)), "EC PRIVATE KEY"),
+        (
+            "pkcs1 v1",
+            with_version(&pkcs1, int_tlv(1)),
+            "RSA PRIVATE KEY",
+        ),
+        ("multi-prime pkcs1", multi_prime.clone(), "RSA PRIVATE KEY"),
+        ("multi-prime pkcs8", pkcs8_of(&multi_prime), "PRIVATE KEY"),
+    ];
+    for (name, der, label) in &cases {
+        assert_could_not_parse(name, der);
+        assert_eq!(
+            err(&pem_wrap(der, label)).message,
+            format!("malformed {label} PEM block: Invalid key"),
+            "{name}"
+        );
+    }
+    // a OneAsymmetricKey [1] publicKey is not in pyca's PrivateKeyInfo; Ed25519 takes no
+    // parameters; a negative or oversized version is a parse error
+    let mut with_public = der_items(&pkcs8_der(&ed));
+    with_public[0] = int_tlv(1);
+    with_public.push(tlv(0x81, &[0x00; 33]));
+    let mut ed_null = der_items(&pkcs8_der(&ed));
+    ed_null[1] = der_seq(&[tlv(0x06, &unhex("2b6570")), tlv(0x05, &[])]);
+    for (name, der) in [
+        ("ed25519 v1 publicKey", der_seq(&with_public)),
+        ("ed25519 NULL params", der_seq(&ed_null)),
+        ("sec1 v -1", with_version(&sec1, tlv(0x02, &[0xff]))),
+        (
+            "pkcs8 v 0x80",
+            with_version(&pkcs8_der(&ec), tlv(0x02, &[0x00, 0x80])),
+        ),
+    ] {
+        assert_could_not_parse(name, &der);
+    }
+}
+
+#[test]
+fn public_key_structures_are_pycas() {
+    // pyca reads the RSA modulus and exponent as unsigned INTEGERs and the RSA parameters
+    // as NULL or absent; OpenSSL imported a different (positive) modulus from a negative one.
+    let rsa = rsa_key(1024);
+    let pkcs1_public = rsa.rsa().unwrap().public_key_to_der_pkcs1().unwrap();
+    let negative_modulus = {
+        let mut items = der_items(&pkcs1_public);
+        assert_eq!(items[0][..4], [0x02, 0x81, 0x81, 0x00]);
+        items[0][3] = 0x95; // the sign octet replaced: a negative INTEGER
+        der_seq(&items)
+    };
+    let mut spki = der_items(&spki_der(&rsa));
+    spki[1] = tlv(0x03, &[&[0x00][..], &negative_modulus].concat());
+    let negative_spki = der_seq(&spki);
+    let mut octet_params = der_items(&spki_der(&rsa));
+    octet_params[0] = der_seq(&[tlv(0x06, &unhex("2a864886f70d010101")), tlv(0x04, &[])]);
+    for (name, der) in [
+        ("negative modulus pkcs1", negative_modulus),
+        ("negative modulus spki", negative_spki),
+        ("rsa params not NULL", der_seq(&octet_params)),
+    ] {
+        assert_could_not_parse(name, &der);
+    }
+    // an absent RSA parameter is fine (pyca: Option<NULL>)
+    let mut absent = der_items(&spki_der(&rsa));
+    absent[0] = der_seq(&[tlv(0x06, &unhex("2a864886f70d010101"))]);
+    assert_eq!(parse_one(&der_seq(&absent)).size_bits, Some(1024));
+}
+
+/// An RSA key whose CRT coefficient is wrong (OpenSSL builds it; RSA_check_key refuses).
+fn tampered_rsa() -> PKey<Private> {
+    let rsa = rsa_key(1024).rsa().unwrap();
+    let mut iqmp = rsa.iqmp().unwrap().to_owned().unwrap();
+    iqmp.add_word(2).unwrap();
+    let bad = openssl::rsa::Rsa::from_private_components(
+        rsa.n().to_owned().unwrap(),
+        rsa.e().to_owned().unwrap(),
+        rsa.d().to_owned().unwrap(),
+        rsa.p().unwrap().to_owned().unwrap(),
+        rsa.q().unwrap().to_owned().unwrap(),
+        rsa.dmp1().unwrap().to_owned().unwrap(),
+        rsa.dmq1().unwrap().to_owned().unwrap(),
+        iqmp,
+    )
+    .unwrap();
+    PKey::from_rsa(bad).unwrap()
+}
+
+fn nocert_pkcs12(key: &PKey<Private>, password: &str) -> Vec<u8> {
+    Pkcs12::builder()
+        .pkey(key)
+        .build2(password)
+        .unwrap()
+        .to_der()
+        .unwrap()
+}
+
+#[test]
+fn invalid_rsa_private_keys_are_pycas_value_errors() {
+    // pyca's `RSA_check_key` refusal ("Invalid private key") is a ValueError: the DER chain
+    // moves on, PEM reports it, and inside a PKCS#12 it fails the attempt like a wrong
+    // password (c2's `except ValueError` loop) — not D12(g).
+    let key = tampered_rsa();
+    let pkcs1 = key.rsa().unwrap().private_key_to_der().unwrap();
+    assert_could_not_parse("tampered pkcs1", &pkcs1);
+    assert_could_not_parse("tampered pkcs8", &pkcs8_der(&key));
+    assert_eq!(
+        err(&pem_wrap(&pkcs1, "RSA PRIVATE KEY")).message,
+        "malformed RSA PRIVATE KEY PEM block: Invalid private key"
+    );
+    assert_eq!(
+        err(&pkcs8_pem(&key)).message,
+        "malformed PRIVATE KEY PEM block: Invalid private key"
+    );
+    let protected = nocert_pkcs12(&key, "pw");
+    let err_pw = parse_with(&protected, &mut answer("pw")).unwrap_err();
+    assert_eq!(
+        err_pw.message,
+        "incorrect password for PKCS#12 (or corrupt PKCS#12 data)"
+    );
+    let open = nocert_pkcs12(&key, "");
+    let err_open = err(&open);
+    assert_eq!(
+        err_open.message,
+        "PKCS#12 requires a password (or the PKCS#12 data is corrupt)"
+    );
+    assert_eq!(err_open.hint.as_deref(), Some(PASSWORD_HINT));
+    assert_eq!(err(&protected).message, err_open.message);
+}
+
+#[test]
+fn ec_private_keys_must_match_their_public_point() {
+    // pyca's SEC1 parser: the [1] public key must be the private key's point
+    // (EC_KEY_check_key → "Invalid key"), and the private value must be the curve's order
+    // length.
+    let (key, other) = (p256(), p256());
+    let mut items = der_items(&key.ec_key().unwrap().private_key_to_der().unwrap());
+    let other_items = der_items(&other.ec_key().unwrap().private_key_to_der().unwrap());
+    items[3] = other_items[3].clone();
+    let mismatched = der_seq(&items);
+    assert_could_not_parse("mismatched public point", &mismatched);
+    assert_eq!(
+        err(&pem_wrap(&mismatched, "EC PRIVATE KEY")).message,
+        "malformed EC PRIVATE KEY PEM block: Invalid key"
+    );
+    let mut short = der_items(&key.ec_key().unwrap().private_key_to_der().unwrap());
+    short[1] = tlv(0x04, &[0x01; 31]);
+    short.remove(3);
+    assert!(
+        err(&pem_wrap(&der_seq(&short), "EC PRIVATE KEY"))
+            .message
+            .starts_with(
+                "malformed EC PRIVATE KEY PEM block: EC private key is not encoded properly: private key value is too short."
+            )
+    );
+}
+
+#[test]
+fn pkcs12_with_a_key_pyca_does_not_support_is_d12g() {
+    // §11 D12(g): pyca's UnsupportedAlgorithm escaped c2's `except ValueError` loop (c2
+    // crashed); r2 raises KeyParse — both without and after the prompt.
+    let p239 = ec_key(Nid::X9_62_PRIME239V1);
+    let explicit224 = {
+        let mut group = EcGroup::from_curve_name(Nid::SECP224R1).unwrap();
+        group.set_asn1_flag(Asn1Flag::EXPLICIT_CURVE);
+        let ec = EcKey::generate(&group).unwrap();
+        PKey::from_ec_key(ec).unwrap()
+    };
+    let cases = [
+        (
+            p239,
+            "PKCS#12 contains an unsupported private key: Curve 1.2.840.10045.3.1.4 is not supported",
+        ),
+        (
+            explicit224,
+            "PKCS#12 contains an unsupported private key: ECDSA keys with explicit parameters are only supported when they map to secp256r1, secp384r1, or secp521r1. No custom curves are supported.",
+        ),
+    ];
+    for (key, text) in cases {
+        let open = nocert_pkcs12(&key, "");
+        assert_eq!(err(&open).message, text);
+        let protected = nocert_pkcs12(&key, "pw");
+        assert_eq!(
+            parse_with(&protected, &mut answer("pw"))
+                .unwrap_err()
+                .message,
+            text
+        );
+    }
+    // a DSA key loads (pyca supports the type) and is then refused by c2's classifier
+    let dsa = PKey::from_dsa(openssl::dsa::Dsa::generate(1024).unwrap()).unwrap();
+    let err = parse_with(&nocert_pkcs12(&dsa, "pw"), &mut answer("pw")).unwrap_err();
+    assert_eq!(err.message, "unsupported key algorithm: DSAPrivateKey");
+}
+
+#[test]
+fn long_passwords_decrypt_pkcs8_as_pyca() {
+    // pyca decrypts PKCS#8 with the whole password (no 1024-byte callback buffer).
+    let key = p256();
+    for len in [1023usize, 1024, 1025, 1500] {
+        let password = "a".repeat(len);
+        let der = key
+            .private_key_to_pkcs8_passphrase(Cipher::aes_256_cbc(), password.as_bytes())
+            .unwrap();
+        let materials = parse_with(&der, &mut answer(&password)).unwrap();
+        assert_eq!(*materials[0].data, pkcs8_der(&key), "{len}");
+    }
+    // a key encrypted under the 1024-byte prefix does not open with the longer password
+    let prefix = "a".repeat(1024);
+    let der = key
+        .private_key_to_pkcs8_passphrase(Cipher::aes_256_cbc(), prefix.as_bytes())
+        .unwrap();
+    assert_eq!(
+        parse_with(&der, &mut answer(&"a".repeat(1500)))
+            .unwrap_err()
+            .message,
+        WRONG_PW
+    );
+}
+
+#[test]
+fn traditional_pem_iv_longer_than_the_cipher_iv_decrypts() {
+    // pyca passes the whole DEK-Info IV to OpenSSL, which uses its first IV-length bytes.
+    let key = p256();
+    let trad = traditional_ec(&key);
+    let start = trad.find("AES-128-CBC,").unwrap() + "AES-128-CBC,".len();
+    let iv = &trad[start..start + 32];
+    for extra in ["00", "0011223344556677"] {
+        let data = trad.replacen(iv, &format!("{iv}{extra}"), 1);
+        let (result, prompts) = outcome(data.as_bytes());
+        assert_eq!(result, Ok(pkcs8_der(&key)), "{extra}");
+        assert_eq!(prompts.len(), 1);
+    }
+    // a shorter IV still fails after the prompt
+    let data = trad.replacen(iv, &iv[..30], 1);
+    assert_eq!(outcome(data.as_bytes()).0, Err(WRONG_PW.to_owned()));
+}

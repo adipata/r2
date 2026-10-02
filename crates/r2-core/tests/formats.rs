@@ -239,3 +239,55 @@ fn certificate_pem_of_a_name_openssl_refuses() {
     );
     assert_eq!(cert_spki(&der).unwrap(), spki_der(&key));
 }
+
+#[test]
+fn passwords_over_1023_bytes_are_refused_as_pyca() {
+    // pyca's BestAvailableEncryption refuses passwords over 1023 bytes (a ValueError c2 did
+    // not catch, §11 D12(h)); 1023 bytes round-trip through the parser.
+    let key = p256();
+    let pkcs8 = pkcs8_der(&key);
+    let ok = "a".repeat(1023);
+    let out = private_key_bytes(&pkcs8, Encoding::Der, Some(&secret(&ok))).unwrap();
+    let mut cb = answer(&ok);
+    let materials = parse_key_material(&out, KeyHint::Auto, Some(&mut cb)).unwrap();
+    assert_eq!(*materials[0].data, pkcs8);
+    for password in ["a".repeat(1024), "a".repeat(1500), "é".repeat(512)] {
+        for encoding in [Encoding::Der, Encoding::Pem] {
+            let err = private_key_bytes(&pkcs8, encoding, Some(&secret(&password))).unwrap_err();
+            assert_eq!(err.param_name(), Some("password"));
+            assert_eq!(
+                err.message,
+                "Passwords longer than 1023 bytes are not supported by this backend"
+            );
+        }
+    }
+}
+
+#[test]
+fn private_key_structures_pyca_refuses_are_not_exported() {
+    // pyca's PKCS#8 / PKCS#1 version checks (OpenSSL's decoders accept these): c2's
+    // `_load_private` raised "Invalid key".
+    let rsa = rsa_key(1024);
+    let mut multi_prime = der_items(&rsa.rsa().unwrap().private_key_to_der().unwrap());
+    multi_prime[0] = tlv(0x02, &[1]);
+    multi_prime.push(der_seq(&[der_seq(&[
+        tlv(0x02, &[7]),
+        tlv(0x02, &[3]),
+        tlv(0x02, &[5]),
+    ])]));
+    let mut pkcs8 = der_items(&pkcs8_der(&rsa));
+    pkcs8[2] = tlv(0x04, &der_seq(&multi_prime));
+    let mut v1 = der_items(&pkcs8_der(&p256()));
+    v1[0] = tlv(0x02, &[1]);
+    for der in [der_seq(&pkcs8), der_seq(&v1)] {
+        for result in [
+            private_key_bytes(&der, Encoding::Der, None).map(|_| ()),
+            pkcs8_public_spki(&der).map(|_| ()),
+        ] {
+            assert_eq!(
+                result.unwrap_err().message,
+                "exported private key is not valid unencrypted PKCS#8 DER: Invalid key"
+            );
+        }
+    }
+}
