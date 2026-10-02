@@ -4584,7 +4584,12 @@ pub fn install_line_assist(assist: Rc<dyn LineAssist>) -> AssistGuard { .. }
   ctrlc handler (the blocking read restarts and the tty discards the partial line), so
   after every plain read on a terminal: if `runtime::interrupted()`, reset the flag,
   discard the line and return Interrupted (Ctrl-C there takes effect at the next Enter —
-  §11 D2). A command read on a terminal resets the flag BEFORE it blocks (only a Ctrl-C
+  §11 D2). When stdin is NOT a terminal, a SIGINT (the ctrlc handler's flag) set before a
+  plain read makes it write "\n" after the prompt and return Interrupted without reading;
+  one that arrives while the read blocks resets the flag, writes "\n" (no echo), keeps the
+  line read in a one-slot stash and returns Interrupted — the next read returns the stashed
+  line (echoed after its prompt) before touching stdin, so no script line is lost (c2's
+  KeyboardInterrupt left the unread pipe data in place). A command read on a terminal resets the flag BEFORE it blocks (only a Ctrl-C
   pressed during that read counts; a stale one — pressed while a command ran, or the
   SIGINT rpassword raises for Ctrl-C at a hidden prompt — never swallows the next command),
   and `rpassword_secret` consumes the interrupt its own `raise(SIGINT)` causes (bounded
@@ -5067,7 +5072,11 @@ pub fn build_provider_registry(config: &AppConfig) -> r2_core::Result<ProviderRe
 ```
 
 Startup order: parse args (clap: `--version` prints "r2 {version}", `--config PATH`,
-`--debug`) → `load_config` → logging (rotating file at `app.log.file`, level from
+`--debug`) → the global tracing subscriber is installed (`logging::install`; until
+`setup_logging` stores its state, WARN+ records go to stderr as bare messages + "\n" — no
+timestamp, level or target — as Python's `logging.lastResort` printed c2's pre-setup
+warnings, e.g. the config loader's "unknown config key …" and below-range CKM warnings;
+lower levels are dropped) → `load_config` → logging (rotating file at `app.log.file`, level from
 `app.log.level` or DEBUG with `--debug`, which also mirrors WARN+ to stderr; a redaction
 layer rewrites `(?i)\b(pin|password)\s*=\s*\S+` to `${1}=***` (regex crate syntax); file
 setup below) → panic hook (`src/panic.rs`: `std::panic::set_hook` with a `Send + Sync` closure that
@@ -5909,6 +5918,7 @@ Ctrl-C / Ctrl-D / EOF (binding; TerminalIo keys, PlainIo end-of-input):
 | multiline paste prompt (`\| `) | Ctrl-C; Ctrl-D, EOF | Ctrl-C → `UserAbort` (`aborted multiline input`); Ctrl-D / EOF → ends the paste like an empty line |
 | while a command runs | Ctrl-C | the `ctrlc` handler sets the abort flag; commands/services check it at step boundaries and stop with `Aborted.` (§6, §11 D13) |
 | any prompt of PlainIo with stdin a terminal (`TERM=dumb`, stdout redirected, a degraded TerminalIo) | Ctrl-C | the tty discards the partial line and the handler sets the flag; at the next Enter the line is discarded and the read reports Interrupted (`Aborted.` / UserAbort as above) — §11 D2 |
+| any prompt of PlainIo with stdin NOT a terminal (pipe, file) | SIGINT | the read reports Interrupted (`Aborted.` / UserAbort as above) once data arrives (or at once when the flag was already set); the line read is not lost but returned by the next read (§4.9.7) |
 
 reedline signals map as `Signal::Success(s)` → line, `Signal::CtrlD` → EOF (reedline emits
 it only for an empty buffer), `Signal::CtrlC` and anything else → interrupted; rpassword's

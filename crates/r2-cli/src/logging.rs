@@ -192,6 +192,29 @@ fn current_level() -> Option<LevelFilter> {
         .map(|state| state.level)
 }
 
+/// Test override of the lastResort sink (None → stderr).
+#[cfg(test)]
+static LAST_RESORT_SINK: Mutex<Option<Mirror>> = Mutex::new(None);
+
+/// Python's `logging.lastResort` (level WARNING, format `%(message)s`, stderr): what c2
+/// printed for records emitted before `setup_logging` installed a handler — e.g. the
+/// config loader's "unknown config key …" and below-range CKM warnings.
+fn last_resort(message: &str) {
+    let line = format!("{message}\n");
+    #[cfg(test)]
+    if let Some(sink) = LAST_RESORT_SINK
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_mut()
+    {
+        let _ = sink.write_all(line.as_bytes());
+        return;
+    }
+    let mut stderr = io::stderr().lock();
+    let _ = stderr.write_all(line.as_bytes());
+    let _ = stderr.flush();
+}
+
 /// The one layer of the global subscriber; reads the replaceable state.
 struct R2Layer;
 impl<S: Subscriber> Layer<S> for R2Layer {
@@ -199,24 +222,30 @@ impl<S: Subscriber> Layer<S> for R2Layer {
         Interest::sometimes() // the level is re-read per record (re-setup changes it)
     }
     fn enabled(&self, metadata: &Metadata<'_>, _ctx: Context<'_, S>) -> bool {
-        current_level().is_some_and(|level| *metadata.level() <= level)
+        // before setup_logging: Python's lastResort handler (WARNING+)
+        *metadata.level() <= current_level().unwrap_or(LevelFilter::WARN)
     }
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
         let mut visitor = MessageVisitor::default();
         event.record(&mut visitor);
         let metadata = event.metadata();
+        let message = redact(&format!("{}{}", visitor.message, visitor.fields));
+        let mut guard = STATE.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(state) = guard.as_mut() else {
+            drop(guard);
+            if *metadata.level() <= Level::WARN {
+                last_resort(&message);
+            }
+            return;
+        };
         let mut time = String::new();
         let _ = SystemTime.format_time(&mut Writer::new(&mut time));
         let line = format!(
             "{time} {:<7} {}: {}\n",
             level_name(metadata.level()),
             metadata.target(),
-            redact(&format!("{}{}", visitor.message, visitor.fields))
+            message
         );
-        let mut guard = STATE.lock().unwrap_or_else(PoisonError::into_inner);
-        let Some(state) = guard.as_mut() else {
-            return;
-        };
         if *metadata.level() > state.level {
             return;
         }
@@ -298,12 +327,19 @@ pub(crate) fn configure(
         mirror: if debug { mirror } else { None },
     };
     *STATE.lock().unwrap_or_else(PoisonError::into_inner) = Some(state);
+    install();
+    tracing::callsite::rebuild_interest_cache();
+    Ok(())
+}
+
+/// Installs the global subscriber (once). Called before `load_config`, so records emitted
+/// before `setup_logging` reach the lastResort sink (stderr, bare messages, WARNING+), as
+/// Python's logging did for c2.
+pub(crate) fn install() {
     INSTALL.call_once(|| {
         let subscriber = tracing_subscriber::registry().with(R2Layer);
         let _ = tracing::subscriber::set_global_default(subscriber);
     });
-    tracing::callsite::rebuild_interest_cache();
-    Ok(())
 }
 
 /// `setup_logging(app.log, debug)`: level from the config unless `--debug` forces DEBUG;
@@ -320,6 +356,13 @@ pub(crate) fn settings() -> Option<(LevelFilter, bool)> {
         .unwrap_or_else(PoisonError::into_inner)
         .as_ref()
         .map(|state| (state.level, state.mirror.is_some()))
+}
+
+/// Drops the current setup (back to the pre-setup lastResort mode) — for tests.
+#[cfg(test)]
+pub(crate) fn reset() {
+    *STATE.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    tracing::callsite::rebuild_interest_cache();
 }
 
 #[cfg(test)]
@@ -637,5 +680,53 @@ mod tests {
             "mechanism AES-GCM len=16"
         );
         assert_eq!(redact("spin=3 pinned=1 pin= x"), "spin=3 pinned=1 pin=***");
+    }
+
+    #[test]
+    fn pre_setup_warnings_go_to_last_resort_as_bare_messages() {
+        let _lock = global_state_lock();
+        let sink = Buffer::default();
+        install();
+        reset();
+        *LAST_RESORT_SINK.lock().unwrap() = Some(Box::new(sink.clone()));
+        tracing::info!(target: "r2::config", "an info record");
+        tracing::warn!(target: "r2::config", "unknown config key 'ui.hex_widht'");
+        tracing::error!("an error pin=1234");
+        *LAST_RESORT_SINK.lock().unwrap() = None;
+        assert_eq!(
+            sink.text(),
+            "unknown config key 'ui.hex_widht'\nan error pin=***\n"
+        );
+    }
+
+    #[test]
+    fn config_loader_warnings_reach_last_resort() {
+        let _lock = global_state_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("r2.yaml");
+        std::fs::write(
+            &cfg,
+            "ui: {hex_widht: 3}\ncustom_mechanisms:\n  - {id: v.x, verb: encrypt, algorithm: aes, \
+             cli_name: x, label: X, ckm: 5}\n",
+        )
+        .unwrap();
+        let sink = Buffer::default();
+        install();
+        reset();
+        *LAST_RESORT_SINK.lock().unwrap() = Some(Box::new(sink.clone()));
+        let loaded = r2_config::loader::load_config(Some(&cfg));
+        *LAST_RESORT_SINK.lock().unwrap() = None;
+        let text = sink.text();
+        assert!(
+            text.contains("unknown config key 'ui.hex_widht' (did you mean 'hex_width'?)\n"),
+            "{text} / {loaded:?}"
+        );
+        assert!(
+            text.contains(
+                "custom_mechanisms[0].ckm: CKM code 0x00000005 is below the vendor-defined \
+                 range (>= 0x80000000)\n"
+            ),
+            "{text} / {loaded:?}"
+        );
     }
 }

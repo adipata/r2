@@ -5,6 +5,7 @@ use std::io::{self, BufRead, Write};
 
 use r2_core::runtime::{interrupted, reset_interrupt};
 use secrecy::SecretString;
+use zeroize::Zeroizing;
 
 use super::history::SecretFilteringHistory;
 use super::line::{LineIo, LineReader, ReadOutcome, SecretRead};
@@ -22,6 +23,9 @@ pub struct PlainReader {
     /// The physical lines of a command whose quote is still open (`…> ` continuations),
     /// joined with "\n" exactly as the REPL joins them; saved once the quote closes.
     pending: Option<String>,
+    /// Piped stdin: the line read by a read that a SIGINT interrupted, returned by the next
+    /// read (c2 never consumed it).
+    stashed: Option<Zeroizing<String>>,
 }
 
 impl PlainReader {
@@ -30,43 +34,70 @@ impl PlainReader {
             stdin_is_tty,
             history,
             pending: None,
+            stashed: None,
         }
     }
 
     /// Prompt to stdout, one byte-level line from the global stdin handle (never a second
     /// BufReader), trailing `\r`/`\n` stripped, lossy UTF-8; echo per the rules; at EOF a
-    /// newline and Eof (None). The byte buffer is wiped once decoded (it may hold a secret).
-    fn read_line(&mut self, prompt: &str, secret: bool) -> io::Result<Option<String>> {
+    /// newline and Eof. The byte buffer is wiped once decoded (it may hold a secret).
+    fn read_line(&mut self, prompt: &str, secret: bool) -> io::Result<ReadOutcome> {
         self.read_line_from(prompt, secret, &mut io::stdin().lock())
     }
 
     /// `read_line` over an explicit input (the global stdin lock; tests pass a cursor).
+    ///
+    /// Piped stdin (not a terminal): a SIGINT (the ctrlc handler's flag) set before the read
+    /// reports Interrupted without reading; one that arrived while the read blocked reports
+    /// Interrupted too, and the line read is kept (`stashed`) and returned, echoed, by the
+    /// next read — c2's KeyboardInterrupt left the unread pipe data in place (§11 D2).
     fn read_line_from(
         &mut self,
         prompt: &str,
         secret: bool,
         input: &mut dyn BufRead,
-    ) -> io::Result<Option<String>> {
-        {
-            let mut out = io::stdout().lock();
-            out.write_all(prompt.as_bytes())?;
-            out.flush()?;
-        }
-        let mut buffer = Vec::new();
-        let read = input.read_until(b'\n', &mut buffer)?;
-        if read == 0 {
-            let mut out = io::stdout().lock();
+    ) -> io::Result<ReadOutcome> {
+        let mut out = io::stdout().lock();
+        out.write_all(prompt.as_bytes())?;
+        out.flush()?;
+        if !self.stdin_is_tty && interrupted() {
+            reset_interrupt();
             out.write_all(b"\n")?;
             out.flush()?;
-            return Ok(None);
+            return Ok(ReadOutcome::Interrupted);
         }
-        while buffer.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
-            buffer.pop();
+        drop(out);
+        let line = match self.stashed.take() {
+            Some(line) => Some(line),
+            None => {
+                let mut buffer = Vec::new();
+                let read = input.read_until(b'\n', &mut buffer)?;
+                if read == 0 {
+                    None
+                } else {
+                    while buffer.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
+                        buffer.pop();
+                    }
+                    let line = Zeroizing::new(String::from_utf8_lossy(&buffer).into_owned());
+                    zeroize::Zeroize::zeroize(&mut buffer);
+                    Some(line)
+                }
+            }
+        };
+        let mut out = io::stdout().lock();
+        if !self.stdin_is_tty && interrupted() {
+            reset_interrupt();
+            self.stashed = line;
+            out.write_all(b"\n")?;
+            out.flush()?;
+            return Ok(ReadOutcome::Interrupted);
         }
-        let line = String::from_utf8_lossy(&buffer).into_owned();
-        zeroize::Zeroize::zeroize(&mut buffer);
+        let Some(line) = line else {
+            out.write_all(b"\n")?;
+            out.flush()?;
+            return Ok(ReadOutcome::Eof);
+        };
         if !self.stdin_is_tty {
-            let mut out = io::stdout().lock();
             if secret {
                 out.write_all(b"\n")?;
             } else {
@@ -75,7 +106,7 @@ impl PlainReader {
             }
             out.flush()?;
         }
-        Ok(Some(line))
+        Ok(ReadOutcome::Line(String::clone(&line)))
     }
 
     /// On a terminal, Ctrl-C reached the ctrlc handler while the cooked read blocked: the
@@ -89,14 +120,11 @@ impl PlainReader {
     }
 
     fn outcome(&mut self, prompt: &str, input: &mut dyn BufRead) -> io::Result<ReadOutcome> {
-        let line = self.read_line_from(prompt, false, input)?;
+        let outcome = self.read_line_from(prompt, false, input)?;
         if self.interrupted_on_tty() {
             return Ok(ReadOutcome::Interrupted);
         }
-        Ok(match line {
-            Some(line) => ReadOutcome::Line(line),
-            None => ReadOutcome::Eof,
-        })
+        Ok(outcome)
     }
 }
 
@@ -194,8 +222,9 @@ impl LineReader for PlainReader {
         }
         // piped: one plain line, never echoed (rpassword would open /dev/tty)
         Ok(match self.read_line(prompt, true)? {
-            Some(line) => SecretRead::Secret(SecretString::from(line)),
-            None => SecretRead::Eof,
+            ReadOutcome::Line(line) => SecretRead::Secret(SecretString::from(line)),
+            ReadOutcome::Interrupted => SecretRead::Interrupted,
+            ReadOutcome::Eof => SecretRead::Eof,
         })
     }
 }

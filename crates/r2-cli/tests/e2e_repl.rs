@@ -1,7 +1,8 @@
 //! Piped REPL sessions against the real `r2` binary (spec §5.1, §6, §11 D2; R7): PlainIo
 //! transcripts (prompt + echoed line), help, exit, Ctrl-D, the unknown-command suggestion,
 //! quoted multiline PEM paste, the caret echo, `config path` / `config show`, the CLI flags,
-//! the log-file rules of §4.9.11 and the history filter. The c2 CLI cases of test_app.py and
+//! the log-file rules of §4.9.11, pre-setup config warnings on stderr, SIGINT with piped
+//! stdin and the history filter. The c2 CLI cases of test_app.py and
 //! test_smoke.py are ported here.
 #![allow(
     clippy::unwrap_used,
@@ -410,4 +411,79 @@ fn test_main_end_to_end_with_real_providers() {
     let (out, err, code) = session(dir.path(), &path, b"help\nconfig path\nexit\n");
     assert_eq!(code, 0, "{err}");
     assert!(out.contains(&format!("config file: {}", path.display())));
+}
+
+#[test]
+fn config_loader_warnings_reach_stderr_before_logging_setup() {
+    // c2: load_config ran before setup_logging, so Python's lastResort handler printed
+    // its warnings to stderr as bare messages
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(
+        dir.path(),
+        "ui: {hex_widht: 3}\ncustom_mechanisms:\n  - {id: v.x, verb: encrypt, algorithm: aes, \
+         cli_name: x, label: X, ckm: 5}\n",
+    );
+    let (stdout, stderr, code) = session(dir.path(), &config, b"exit\n");
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stderr.contains("unknown config key 'ui.hex_widht' (did you mean 'hex_width'?)\n"));
+    assert!(stderr.contains(
+        "custom_mechanisms[0].ckm: CKM code 0x00000005 is below the vendor-defined range \
+         (>= 0x80000000)\n"
+    ));
+    // bare messages (no timestamp/level), and only pre-setup records reach stderr
+    assert_eq!(stderr.lines().count(), 2, "{stderr}");
+    assert!(!stderr.contains("WARNING"));
+}
+
+#[cfg(unix)]
+#[test]
+fn sigint_with_piped_stdin_aborts_the_read_and_keeps_the_line() {
+    // c2: KeyboardInterrupt at the prompt printed "Aborted." and the unread piped line was
+    // the next command
+    use std::io::Write as _;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), "");
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_r2"))
+        .env_clear()
+        .env("HOME", dir.path())
+        .current_dir(dir.path())
+        .arg("--config")
+        .arg(&config)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    // the startup record is logged after the Ctrl-C handler is installed
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !std::fs::read_to_string(dir.path().join("r2.log"))
+        .is_ok_and(|log| log.contains("started ("))
+    {
+        assert!(Instant::now() < deadline, "r2 never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    let status = std::process::Command::new("kill")
+        .arg("-INT")
+        .arg(child.id().to_string())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    std::thread::sleep(Duration::from_millis(200));
+    let mut stdin = child.stdin.take().unwrap();
+    stdin.write_all(b"config path\nexit\n").unwrap();
+    drop(stdin);
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert_eq!(
+        stdout,
+        format!(
+            "{}r2> \nAborted.\nr2> config path\nconfig file: {}\nr2> exit\n",
+            banner(),
+            config.display()
+        )
+    );
 }

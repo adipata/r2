@@ -1,6 +1,6 @@
 //! The `r2` binary (spec §4.9.11; owner R7) — the port of c2 `app.main` / `__main__.py`.
 //!
-//! Startup order: args → `load_config` → logging → panic hook → ctrlc handler →
+//! Startup order: args → subscriber (lastResort mode) → `load_config` → logging → panic hook → ctrlc handler →
 //! `ensure_legacy_provider` → IO → providers → operations → template editor → commands →
 //! AppContext → banner → REPL → shutdown of every provider. A ConsoleError before the REPL is
 //! written to stderr as "error: {message}" (+ " (hint: {hint})"), exit status 2.
@@ -74,6 +74,9 @@ type BuildProviders<'a> = &'a dyn Fn(&AppConfig) -> r2_core::Result<ProviderRegi
 /// c2 `main(argv, io=…)`: `io` is the test seam (None → the terminal's ConsoleIo), and so
 /// is `build_providers` (c2's tests injected stub provider modules).
 fn run(args: &Args, io: Option<Rc<dyn ConsoleIo>>, build_providers: BuildProviders<'_>) -> u8 {
+    // the subscriber exists before load_config: its warnings reach stderr as bare messages
+    // until setup_logging (Python's lastResort handler, which printed them for c2)
+    logging::install();
     let loaded = match load_config(args.config_path().as_deref()) {
         Ok(loaded) => loaded,
         Err(err) => return startup_error(&err),

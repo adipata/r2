@@ -729,3 +729,63 @@ fn plain_reader_on_a_terminal_ignores_a_stale_interrupt() {
     );
     r2_core::runtime::reset_interrupt();
 }
+
+// -- PlainReader: SIGINT with piped stdin (R7 fix round 2) ---------------------------
+
+/// A piped stdin whose read "receives" a SIGINT while it blocks (the ctrlc handler's flag
+/// is set before the data arrives).
+struct InterruptedRead(io::Cursor<Vec<u8>>);
+impl io::Read for InterruptedRead {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.0.read(buf)
+    }
+}
+impl io::BufRead for InterruptedRead {
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+        r2_core::runtime::request_interrupt();
+        self.0.fill_buf()
+    }
+    fn consume(&mut self, amount: usize) {
+        self.0.consume(amount);
+    }
+}
+
+#[test]
+fn piped_sigint_during_a_read_aborts_it_and_keeps_the_line() {
+    // c2: KeyboardInterrupt at the prompt → "Aborted.", the piped line is read next
+    let _lock = r2_testkit::global_state_lock();
+    r2_core::runtime::reset_interrupt();
+    let mut reader = crate::io::PlainReader::new(false, None);
+    let mut input = InterruptedRead(io::Cursor::new(b"config path\nhelp\n".to_vec()));
+    let first = reader.read_command_from("r2> ", &mut input).unwrap();
+    assert!(matches!(first, ReadOutcome::Interrupted), "{first:?}");
+    assert!(!r2_core::runtime::interrupted());
+    // the stashed line comes back first, then stdin continues (no further SIGINT)
+    let mut rest = io::Cursor::new(b"help\n".to_vec());
+    let second = reader.read_command_from("r2> ", &mut rest).unwrap();
+    assert!(
+        matches!(second, ReadOutcome::Line(ref l) if l == "config path"),
+        "{second:?}"
+    );
+    let third = reader.read_command_from("r2> ", &mut rest).unwrap();
+    assert!(
+        matches!(third, ReadOutcome::Line(ref l) if l == "help"),
+        "{third:?}"
+    );
+}
+
+#[test]
+fn piped_sigint_before_a_read_aborts_it_without_consuming_input() {
+    // a SIGINT that arrived while a command ran (or before the read) aborts the next read
+    let _lock = r2_testkit::global_state_lock();
+    let mut reader = crate::io::PlainReader::new(false, None);
+    let mut input = io::Cursor::new(b"answer\n".to_vec());
+    r2_core::runtime::request_interrupt();
+    let first = reader.read_command_from("r2> ", &mut input).unwrap();
+    assert!(matches!(first, ReadOutcome::Interrupted), "{first:?}");
+    let second = reader.read_command_from("r2> ", &mut input).unwrap();
+    assert!(
+        matches!(second, ReadOutcome::Line(ref l) if l == "answer"),
+        "{second:?}"
+    );
+}
