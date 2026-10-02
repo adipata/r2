@@ -7347,16 +7347,22 @@ custom_mechanisms: []      # entry schema: spec §4.8 / example §5.14
     `--softhsm`). Session files under `parity/harness/sessions/`, fixed key fixtures under
     `parity/harness/fixtures/` (generated once with pyca). The interop and token suites run
     each producer/creator against each consumer/user and require the four transcripts to
-    be equal. Normalized beyond the bullets above: input echo of both tools (c2's
-    prompt_toolkit renders it with carriage returns; r2's PlainIo prints prompt + line),
+    be equal. `key template` YAML crosses tools in the token suite (dumped by one tool,
+    re-seeded by the other) and a c2 user config renamed to `r2.yaml` in
+    `transcript_user_config`. Normalized beyond the bullets above: the echo of both tools
+    is reduced to one `PROMPT: <prompt><answer>` line per answered prompt (c2's
+    prompt_toolkit copy rejoined from its carriage-return rendering; r2's PlainIo prompt +
+    line; hidden answers, named by the session's `## secret:` header, as c2's `*` run), so
+    prompt TEXTS are compared and only the REPL prompt's command echo is dropped,
     `18446744073709551615` ≙ `-1` (§11 D18), and — for the shared token only — `handle
     <n>` numbers and the order of consecutive `<provider>:` table rows (SoftHSM's handle and
     find order depend on its token file names).
 - **Coverage**: `cargo llvm-cov` with an 80% line floor on the workspace, enforced from R13
   (as c2's floor was wired in L13). As built (R13): the `coverage` CI job runs `cargo llvm-cov nextest --workspace
   --features softhsm --fail-under-lines 80` on the SoftHSM 2.6.1 fixture token (`just
-  coverage` locally); at R13 sign-off: 91.38% lines (28,358 lines, 2,445 missed), 89.40%
-  regions, 89.10% functions over 2,015 tests.
+  coverage` locally); at R13 sign-off: 92.13% lines (28,366 lines, 2,233 missed), 90.02%
+  regions, 89.94% functions over 2,016 tests — the spawned `r2` binary's runs included
+  (the e2e tests forward `LLVM_PROFILE_FILE` through `env_clear()`, R13 fix round 1).
 - **CI** (GitHub Actions, `ci.yml` from R0): `lint` (`cargo fmt --check` plus `rustfmt
   --edition 2024 --check crates/r2-console/src/commands/*.rs
   crates/r2-console/src/tests/*.rs` — those modules are `include!`-only and invisible to
@@ -7483,7 +7489,8 @@ names the test or harness check that pins the deviation.
   `box.SIMPLE_HEAD`): same columns, same cell content (control codes stripped as rich did),
   but no outer edge spaces or blank edge rows, the header rule spans the computed width, a
   table title is an r2-rendered italic line, wrapped like rich's at RICH's table width
-  (r2's body plus the two `SIMPLE_HEAD` edge columns, so the line breaks equal c2's) and
+  (r2's body plus the two `SIMPLE_HEAD` edge columns, at most the console width, which
+  rich's table never exceeds, so the line breaks equal c2's) and
   centered over r2's body, and comfy-table measures cells with
   unicode-width (column widths may differ where that differs from rich's cell table). A
   word longer than its column is folded onto further lines of the cell, its content kept
@@ -7521,7 +7528,9 @@ names the test or harness check that pins the deviation.
   it; secrets are read as one unechoed plain line when stdin is not a terminal. c2 ran
   prompt_toolkit in these cases (warning `Input is not a terminal`, CR padding, doubled
   prompt echo; stdout-redirected sessions still used the full editor; on Windows piped
-  stdin could not be read at all). A terminal that stops answering `ESC[6n` degrades the
+  stdin could not be read at all; with stdin redirected from a regular file,
+  `c2 < session.txt`, prompt_toolkit read nothing: c2 printed the warning and the banner,
+  ran no command and exited 0 — r2 reads the file like a pipe). A terminal that stops answering `ESC[6n` degrades the
   session to plain input with one warning (`warning: line editor unavailable (<error>);
   continuing with plain input`) instead of failing; under mintty/msys r2 warns once that
   hidden input is unavailable. Invalid UTF-8 on stdin becomes U+FFFD. When PlainIo reads a
@@ -7534,7 +7543,8 @@ names the test or harness check that pins the deviation.
   limitation. A blocking cooked-mode read cannot be interrupted without unsafe code
   (`SA_RESTART`).
 - *Verified by*: `assert_cmd` piped sessions on all three OSes in CI and in the release
-  smoke tests; S0 degrade checks ported to the optional pty smoke test.
+  smoke tests; r2-cli e2e_repl `file_redirected_stdin_runs_the_session_like_a_pipe`; S0
+  degrade checks ported to the optional pty smoke test.
 
 **D3 — Real zeroization.**
 - *Description*: exactly these buffers are `Zeroizing` / `SecretString` and wiped on drop:
