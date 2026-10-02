@@ -1,0 +1,50 @@
+## Artifact interop, export half: every file format, written by the producing tool.
+load mem --file {FIX}/rsa2048.pem --label rsa
+load mem --file {FIX}/rsa2048_pub.pem --label rsa
+load mem --file {FIX}/p256.pem --label p256
+load mem --file {FIX}/p256_pub.pem --label p256
+load mem --file {FIX}/p384.pem --label p384
+load mem --file {FIX}/ed25519.pem --label ed
+load mem --file {FIX}/ed25519_pub.pem --label ed
+load mem --file {FIX}/ed448.pem --label ed448
+load mem --file {FIX}/x25519.pem --label x25519
+load mem --file {FIX}/rsa2048_cert.pem --label rsacert
+load mem aes 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f --label aes
+load mem generic 0x0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b --label gen
+load mem aes 2b7e151628aed2a6abf7158809cf4f3c --label kek
+export mem:rsa {WORK}/rsa_p8.pem
+export mem:rsa {WORK}/rsa_p8.der --format der
+export mem:rsa {WORK}/rsa_p8enc.pem --password pw8
+export mem:rsa {WORK}/rsa_p8enc.der --format der --password pw8
+export mem:rsa {WORK}/rsa_pub.pem --public
+export mem:rsa {WORK}/rsa_pub.der --public --format der
+export mem:p256 {WORK}/p256_p8.pem
+export mem:p256 {WORK}/p256_p8enc.pem --password pw8
+export mem:p256 {WORK}/p256_pub.pem --public
+export mem:p384 {WORK}/p384_p8.der --format der
+export mem:ed {WORK}/ed_p8.pem
+export mem:ed {WORK}/ed_pub.pem --public
+export mem:ed448 {WORK}/ed448_p8.pem
+export mem:x25519 {WORK}/x25519_p8.pem
+export mem:x25519 {WORK}/x25519_pub.der --public --format der
+export mem:rsacert {WORK}/cert.pem
+export mem:rsacert {WORK}/cert.der --format der
+export mem:rsa {WORK}/rsa.p12 --format p12 --password pw12 --cert mem:rsacert
+export mem:p256 {WORK}/p256.p12 --format p12 --password pw12
+export mem:ed {WORK}/ed.p12 --format p12 --password pw12
+export mem:aes {WORK}/aes.bin
+export mem:gen {WORK}/gen.bin
+csr mem:rsa {WORK}/rsa.csr --subject "CN=interop,O=R2 Parity"
+csr mem:p256 {WORK}/p256.csr --hash sha384
+csr mem:ed {WORK}/ed.csr
+export mem:aes {WORK}/aes_kwp.raw --kek kek --mech kwp
+export mem:aes {WORK}/aes_kwp.hex --kek kek --mech kwp --outformat hex
+export mem:aes {WORK}/aes_kw.b64 --kek kek --mech kw --outformat b64
+export mem:gen {WORK}/gen_kwp.b64 --kek kek --mech kwp --outformat b64
+export mem:rsa {WORK}/rsa_kwp.raw --kek kek --mech kwp
+export mem:p256 {WORK}/p256_kwp.hex --kek kek --mech kwp --outformat hex
+export mem:aes {WORK}/aes_oaep.b64 --kek rsa:pub --mech oaep --outformat b64
+export mem:aes {WORK}/aes_pkcs1.raw --kek rsa:pub --mech pkcs1
+export mem:aes {WORK}/aes_cbc.raw --kek kek --mech cbc iv=0x000102030405060708090a0b0c0d0e0f
+export mem:aes {WORK}/aes_gcm.raw --kek kek --mech gcm iv=0x000102030405060708090a0b
+exit

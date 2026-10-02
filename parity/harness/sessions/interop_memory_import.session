@@ -1,0 +1,77 @@
+## Artifact interop, import half: the consuming tool loads every file the producer wrote
+## and proves the material by deterministic operations (RSA-PKCS1 / Ed25519 signatures,
+## AES-ECB, HMAC, re-exports listed by `keys`).
+load mem aes 2b7e151628aed2a6abf7158809cf4f3c --label kek
+load mem --file {FIX}/rsa2048.pem --label kekrsa
+load mem --file {SRC}/rsa_p8.pem --label rsa1
+load mem --file {SRC}/rsa_p8.der --label rsa2
+load mem --file {SRC}/rsa_p8enc.pem --label rsa3
+pw8
+load mem --file {SRC}/rsa_p8enc.der --label rsa4 --password pw8
+load mem --file {SRC}/rsa_pub.pem --label rsa1
+load mem --file {SRC}/rsa_pub.der --label rsa2
+load mem --file {SRC}/p256_p8.pem --label p256a
+load mem --file {SRC}/p256_p8enc.pem --label p256b --password pw8
+load mem --file {SRC}/p256_pub.pem --label p256a
+load mem --file {SRC}/p384_p8.der --label p384
+load mem --file {SRC}/ed_p8.pem --label ed
+load mem --file {SRC}/ed_pub.pem --label ed
+load mem --file {SRC}/ed448_p8.pem --label ed448
+load mem --file {SRC}/x25519_p8.pem --label x25519
+load mem --file {SRC}/x25519_pub.der --label x25519
+load mem --file {SRC}/cert.pem --label cert1
+load mem --file {SRC}/cert.der --label cert2
+load mem --file {SRC}/rsa.p12 --label p12rsa --password pw12
+load mem --file {SRC}/p256.p12 --label p12ec
+pw12
+load mem --file {SRC}/ed.p12 --label p12ed --password pw12
+load mem --file {SRC}/aes.bin --format aes --label aes
+load mem --file {SRC}/gen.bin --format generic --label gen
+load mem --file {SRC}/rsa.csr --label csr1
+load mem --file {SRC}/p256.csr --label csr2
+load mem --file {SRC}/ed.csr --label csr3
+load mem aes --file {SRC}/aes_kwp.raw --kek kek --mech kwp --label w1
+load mem aes --file {SRC}/aes_kwp.hex --kek kek --mech kwp --label w2
+load mem aes --file {SRC}/aes_kw.b64 --kek kek --mech kw --label w3
+load mem generic --file {SRC}/gen_kwp.b64 --kek kek --mech kwp --label w4
+load mem rsa --file {SRC}/rsa_kwp.raw --kek kek --mech kwp --label w5
+load mem ec --file {SRC}/p256_kwp.hex --kek kek --mech kwp --label w6
+load mem aes --file {SRC}/aes_oaep.b64 --kek kekrsa --mech oaep --label w7
+load mem aes --file {SRC}/aes_pkcs1.raw --kek kekrsa --mech pkcs1 --label w8
+load mem aes --file {SRC}/aes_cbc.raw --kek kek --mech cbc iv=0x000102030405060708090a0b0c0d0e0f --label w9
+load mem aes --file {SRC}/aes_gcm.raw --kek kek --mech gcm iv=0x000102030405060708090a0b --label w10
+keys mem
+key info mem:cert1
+key info mem:p12rsa
+key info mem:csr1
+key info mem:csr2
+sign mem:rsa1 pkcs1 0x00112233
+sign mem:rsa2 pkcs1 0x00112233
+sign mem:rsa3 pkcs1 0x00112233
+sign mem:rsa4 pkcs1 0x00112233
+sign mem:p12rsa pkcs1 0x00112233
+sign mem:w5 pkcs1 0x00112233
+sign mem:ed eddsa 0x00112233
+sign mem:ed448 eddsa 0x00112233
+sign mem:p12ed eddsa 0x00112233
+encrypt mem:aes ecb 0x00112233445566778899aabbccddeeff
+encrypt mem:w1 ecb 0x00112233445566778899aabbccddeeff
+encrypt mem:w2 ecb 0x00112233445566778899aabbccddeeff
+encrypt mem:w3 ecb 0x00112233445566778899aabbccddeeff
+encrypt mem:w7 ecb 0x00112233445566778899aabbccddeeff
+encrypt mem:w8 ecb 0x00112233445566778899aabbccddeeff
+encrypt mem:w9 ecb 0x00112233445566778899aabbccddeeff
+encrypt mem:w10 ecb 0x00112233445566778899aabbccddeeff
+sign mem:gen hmac 0x00
+sign mem:w4 hmac 0x00
+export mem:p256a {WORK}/p256a.der --format der
+export mem:p256b {WORK}/p256b.der --format der
+export mem:w6 {WORK}/w6.der --format der
+export mem:p384 {WORK}/p384.der --format der
+export mem:x25519 {WORK}/x25519.der --format der
+export mem:p12ec {WORK}/p12ec.der --format der
+export mem:csr1 {WORK}/csr1.der --public --format der
+export mem:csr2 {WORK}/csr2.der --public --format der
+export mem:csr3 {WORK}/csr3.der --public --format der
+derive mem:x25519 x25519 peer=0x302a300506032b656e032100a82f4dbf1af2ee173dc5f6ceb5543bc3665a666ba888a71e3bae9dfdad8a0868
+exit

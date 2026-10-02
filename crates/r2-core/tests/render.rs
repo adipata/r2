@@ -371,9 +371,24 @@ fn table_layout_is_simple_head() {
     // A title wider than the table wraps at the table width, each line centered.
     let narrow = table(Some("long titles"), &["name"], vec![vec!["aes".into()]]);
     assert_eq!(rendered(&narrow), " long\ntitles\n name\n──────\n aes");
-    // … and words longer than the table fold (rich `overflow="fold"`).
+    // … at RICH's table width, which counts the two SIMPLE_HEAD edge columns comfy-table
+    // does not draw (R13 parity harness; rich 15 renders "  a  \nlong \ntitle\n…" here),
+    // and words longer than that fold (rich `overflow="fold"`).
     let tiny = table(Some("a long title"), &["a"], vec![vec!["1".into()]]);
-    assert_eq!(rendered(&tiny), " a\nlon\n g\ntit\nle\n a\n───\n 1");
+    assert_eq!(rendered(&tiny), " a\nlong\ntitle\n a\n───\n 1");
+    let tinier = table(Some("a longer title"), &["a"], vec![vec!["1".into()]]);
+    assert_eq!(rendered(&tinier), " a\nlonge\n r\ntitle\n a\n───\n 1");
+    // a title exactly two cells wider than r2's body stays on one line (c2's
+    // "unwrapped into mem (RSA-PKCS1)" over a 29-cell table)
+    let unwrap = table(
+        Some("unwrapped into mem (RSA-PKCS1)"),
+        &["ref", "class", "algorithm"],
+        vec![vec!["mem:w8".into(), "secret".into(), "aes".into()]],
+    );
+    assert_eq!(
+        rendered(&unwrap).lines().next(),
+        Some("unwrapped into mem (RSA-PKCS1)")
+    );
     // rich `if self.title:` — an empty (or all-control-code) title is no title; a table
     // with no columns renders nothing, title included.
     let untitled = table(None, &["a"], vec![vec!["x".into()]]);

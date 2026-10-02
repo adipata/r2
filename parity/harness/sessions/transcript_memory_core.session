@@ -1,0 +1,80 @@
+## Memory provider, deterministic operations only (spec §8 transcript diff).
+## same-files: rsa.der rsa_pub.pem rsa_pub.der aes.bin p256.pem ed.pem cert.pem cert.der rsa.csr ecb.bin gcm.b64 cmac.hex rsa_pkcs1.sig ed.sig x25519.secret ecdh.secret
+help
+help load
+help nosuchcommand
+providers
+ops
+load mem aes 2b7e151628aed2a6abf7158809cf4f3c --label aes128
+load mem aes 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f --label aes256
+load mem generic 0x0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b --label hmac
+load mem --file {FIX}/rsa2048.pem --label rsa
+load mem --file {FIX}/rsa2048_pub.pem --label rsa
+load mem --file {FIX}/p256.pem --label p256
+load mem --file {FIX}/p256_pub.pem --label p256
+load mem --file {FIX}/ed25519.pem --label ed
+load mem --file {FIX}/ed25519_pub.pem --label ed
+load mem --file {FIX}/ed448.pem --label ed448
+load mem --file {FIX}/x25519.pem --label x25519
+load mem --file {FIX}/p384.pem --label p384
+load mem --file {FIX}/rsa2048_cert.pem --label rsacert
+keys
+keys mem aes
+key info mem:aes128
+key info mem:rsa
+key info mem:rsa:public
+key info mem:rsacert
+key info mem:p256
+key info mem:ed
+ops mem
+encrypt mem:aes128 ecb padding=none 0x6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e51
+encrypt mem:aes128 ecb 0x6bc1bee22e409f96e93d7e117393172a --out {WORK}/ecb.bin
+encrypt mem:aes128 cbc iv=0x000102030405060708090a0b0c0d0e0f padding=none 0x6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e51
+encrypt mem:aes128 cbc iv=0x000102030405060708090a0b0c0d0e0f 0x6bc1bee22e409f96e93d7e117393172a
+encrypt mem:aes128 ctr counter_block=0xf0f1f2f3f4f5f6f7f8f9fafbfcfdfeff 0x6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e51
+encrypt mem:aes256 gcm iv=0xcafebabefacedbaddecaf888 aad=0xfeedfacedeadbeef 0xd9313225f88406e5a55909c5aff5269a --outformat b64 --out {WORK}/gcm.b64
+encrypt mem:aes256 gcm iv=0xcafebabefacedbaddecaf888 0xd9313225f88406e5a55909c5aff5269a
+encrypt mem:aes256 gcm iv=0xcafebabefacedbaddecaf888 tag_bits=96 0xd9313225
+decrypt mem:aes128 cbc iv=0x000102030405060708090a0b0c0d0e0f 0x7649abac8119b246cee98e9b12e9197d8964e0b149c10b7b682e6e39fbd7ad6b
+decrypt mem:aes128 ecb --in {WORK}/ecb.bin
+decrypt mem:aes256 gcm iv=0xcafebabefacedbaddecaf888 aad=0xfeedfacedeadbeef --in {WORK}/gcm.b64
+decrypt mem:aes256 gcm iv=0xcafebabefacedbaddecaf888 0x00112233445566778899aabbccddeeff00112233
+sign mem:aes128 cmac 0x6bc1bee22e409f96e93d7e117393172a
+sign mem:aes128 cmac mac_len=8 0x6bc1bee22e409f96e93d7e117393172a --outformat hex --out {WORK}/cmac.hex
+verify mem:aes128 cmac 0x6bc1bee22e409f96e93d7e117393172a --sig 0x070a16b46b4d4144f79bdd9dd04a287c
+verify mem:aes128 cmac 0x6bc1bee22e409f96e93d7e117393172a --sig 0x070a16b46b4d4144f79bdd9dd04a287d
+sign mem:aes256 gmac iv=0xcafebabefacedbaddecaf888 0xfeedfacedeadbeef
+sign mem:hmac hmac hash=sha256 0x4869205468657265
+sign mem:hmac hmac hash=sha512 mac_len=16 0x4869205468657265
+sign mem:hmac hmac hash=sha1 0x4869205468657265
+verify mem:hmac hmac hash=sha256 0x4869205468657265 --sig 0xb0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7
+sign mem:rsa pkcs1 0x00112233 --out {WORK}/rsa_pkcs1.sig
+sign mem:rsa pkcs1 hash=sha512 0x00112233
+verify mem:rsa pkcs1 0x00112233 --sig-file {WORK}/rsa_pkcs1.sig
+verify mem:rsa pkcs1 0x00112234 --sig-file {WORK}/rsa_pkcs1.sig
+sign mem:rsa pss 0x00112233 --out {WORK}/pss.sig
+verify mem:rsa pss 0x00112233 --sig-file {WORK}/pss.sig
+sign mem:p256 ecdsa 0x00112233 --out {WORK}/ecdsa.sig
+verify mem:p256 ecdsa 0x00112233 --sig-file {WORK}/ecdsa.sig
+sign mem:ed eddsa 0x00112233 --out {WORK}/ed.sig
+sign mem:ed448 eddsa 0x00112233
+verify mem:ed eddsa 0x00112233 --sig-file {WORK}/ed.sig
+encrypt mem:rsa:public oaep 0x00112233 --out {WORK}/oaep.bin
+decrypt mem:rsa oaep --in {WORK}/oaep.bin
+encrypt mem:rsa:public pkcs1 0x00112233 --out {WORK}/rsapkcs1.bin
+decrypt mem:rsa pkcs1 --in {WORK}/rsapkcs1.bin
+derive mem:x25519 x25519 peer=0x302a300506032b656e032100a82f4dbf1af2ee173dc5f6ceb5543bc3665a666ba888a71e3bae9dfdad8a0868 --out {WORK}/x25519.secret
+derive mem:p256 ecdh peer=0x3059301306072a8648ce3d020106082a8648ce3d03010703420004a4c6003935ca6cc9756fe0a0aaa65de75dbd969538c2f0f425a3ac57284239e0cd7dc0d4dbd7005a1cfa2c3cbe713ba2c49fc46cf547bd23b2120b432c73342f --out {WORK}/ecdh.secret
+export mem:rsa {WORK}/rsa.der --format der
+export mem:rsa {WORK}/rsa_pub.pem --public
+export mem:rsa {WORK}/rsa_pub.der --public --format der
+export mem:aes256 {WORK}/aes.bin
+export mem:p256 {WORK}/p256.pem
+export mem:ed {WORK}/ed.pem
+export mem:rsacert {WORK}/cert.pem
+export mem:rsacert {WORK}/cert.der --format der
+csr mem:rsa {WORK}/rsa.csr --subject "CN=parity,O=R2 Parity"
+config path
+delete mem:aes128
+keys mem
+exit

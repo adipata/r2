@@ -1,0 +1,66 @@
+## Error messages, hints and parse carets on the memory provider (spec §8: errors and
+## hints are compared verbatim after glyph normalization).
+frobnicate
+help frob
+keys nosuchprovider
+load
+load mem
+load mem aes
+
+load mem aes 00112233 --label short
+load mem aes zz --label bad
+load mem rsa 0x3000 --label junk
+load mem aes 000102030405060708090a0b0c0d0e0f --label k
+load mem aes 000102030405060708090a0b0c0d0e0f --label k
+load mem nosuchkind 00 --label x
+load mem --file /nonexistent/path.pem --label x
+encrypt
+encrypt mem:nosuch ecb 0x00
+encrypt nosuch:k ecb 0x00
+encrypt mem:k nosuchmech 0x00
+encrypt mem:k ecb padding=none 0x0011
+encrypt mem:k ecb padding=bogus 0x00112233445566778899aabbccddeeff
+encrypt mem:k cbc iv=0x0011 0x00
+encrypt mem:k gcm iv=0x00 tag_bits=7 0x00
+encrypt mem:k ctr counter_block=0x00 0x00
+encrypt mem:k ecb 0x00 --outformat weird
+encrypt mem:k ecb 0x00 --in /nonexistent
+sign mem:k cmac mac_len=0 0x00
+sign mem:k cmac mac_len=17 0x00
+sign mem:k hmac 0x00
+verify mem:k cmac 0x00
+
+verify mem:k cmac 0x00 --sig 0x00 --sig-file /x
+decrypt mem:k gcm iv=0x000102030405060708090a0b 0x0011
+derive mem:k ecdh peer=0x00
+export mem:k
+export mem:k {WORK}/k.pem --format pem
+export mem:k {WORK}/k.p12 --format p12
+pw-one
+pw-two
+export mem:nosuch {WORK}/x
+csr mem:k {WORK}/k.csr
+generate mem aes size=100
+generate mem rsa size=1000
+generate mem ec curve=nosuch
+generate mem bogus
+key info
+key info mem:nosuch
+key frob mem:k
+keys mem
+delete mem:nosuch
+delete mem:k
+delete mem:k
+copy mem:k mem
+login mem
+logout mem
+slots mem
+config show --bogus
+config frob
+key edit mem:k --label renamed
+key edit mem:renamed --id 0011
+key info mem:renamed
+keys mem
+load mem aes "00112233" --label "a b
+"unterminated
+exit

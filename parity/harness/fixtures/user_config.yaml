@@ -1,0 +1,27 @@
+# A user config file exercising YAML 1.1 spellings and every section (renamed c2.yaml →
+# r2.yaml for r2; the harness prepends app/ui/softhsm keys of its own).
+ui:
+  hex_group: 4
+  hex_width: 16
+  color: never
+  extra_ui_key: yes
+templates:
+  pkcs11:
+    aes:
+      CKA_EXTRACTABLE: yes
+      CKA_WRAP: on
+      CKA_ACME_USAGE: 0x10
+  custom_attributes:
+    CKA_ACME_USAGE: {code: 0x80000101, kind: ulong}
+    CKA_ACME_TAG: {code: 0x80000102, kind: bytes}
+custom_mechanisms:
+  - id: vendor.acme.kcv
+    verb: sign
+    algorithm: aes
+    cli_name: acme-kcv
+    label: ACME key check value
+    ckm: 0x80000A01
+    param_struct: raw
+    params:
+      - {name: rounds, kind: int, prompt: KCV rounds, required: no, default: 1}
+unknown_top_level: 1

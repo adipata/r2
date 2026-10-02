@@ -1,0 +1,56 @@
+## Interactive flows on the memory provider: mechanism pick lists, parameter prompts,
+## multiline pastes, password prompts, quoted multi-line tokens and the config views.
+load mem aes 000102030405060708090a0b0c0d0e0f --label k
+load mem generic 0x0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b --label hmac
+encrypt mem:k
+3
+0x00112233445566778899aabbccddeeff
+
+encrypt mem:k
+ctr — AES-CTR encryption
+0x000102030405060708090a0b0c0d0e0f
+0x00112233
+
+encrypt mem:k cbc 0x00112233
+0x000102030405060708090a0b0c0d0e0f
+encrypt mem:k gcm 0x00112233
+0x000102030405060708090a0b
+sign mem:hmac
+1
+0x4869205468657265
+
+sign mem:k cmac
+0x6bc1bee22e409f96e93d7e117393172a
+
+verify mem:k cmac 0x6bc1bee22e409f96e93d7e117393172a
+070a16b46b4d4144f79bdd9dd04a287c
+
+load mem rsa --label pasted
+{PASTE:rsa2048_pkcs1.pem}
+
+load mem ec --label pastedec
+{PASTE:p256_sec1.pem}
+
+load mem cert --label pastedcert
+{PASTE:rsa2048_cert.pem}
+
+load mem --file {FIX}/rsa2048.p12 --label p12
+p12pw
+load mem --file {FIX}/rsa2048_enc.pem --label enc
+wrong
+load mem --file {FIX}/rsa2048_enc.pem --label enc
+pw8
+load mem --file {FIX}/rsa2048.p12 --label p12b --password p12pw
+load mem auto "-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEA
+-----END PUBLIC KEY-----" --label quoted
+keys mem
+key info mem:p12
+key info mem:pastedcert
+export mem:p12 {WORK}/p12.der --format der
+export mem:pastedcert {WORK}/pastedcert.der --public --format der
+config path
+config show
+config show --origin
+config show --defaults
+exit

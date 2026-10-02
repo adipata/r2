@@ -781,7 +781,15 @@ fn render_table(data: &TableData, cfg: &RenderConfig, sgr: Sgr) -> String {
     } else {
         table_width
     };
-    let mut lines: Vec<String> = wrap_lines(&[title], title_width)
+    // rich wraps the title at ITS table width, which includes the two edge columns of
+    // `box.SIMPLE_HEAD` that comfy-table does not draw (§11 D1): a title one or two cells
+    // wider than r2's body stays on one line, as in c2 (R13 parity harness).
+    let wrap_width = if table_width == 0 {
+        title_width
+    } else {
+        table_width + 2
+    };
+    let mut lines: Vec<String> = wrap_lines(&[title], wrap_width)
         .into_iter()
         .map(|line| {
             let mut end = line.len();
