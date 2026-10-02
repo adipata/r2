@@ -70,11 +70,11 @@ tests/integration/test_objects_softhsm.py::test_short_key_sha512_is_a_key_size_r
 tests/integration/test_objects_softhsm.py::test_generic_secret_copy_round_trip,1,R10,todo,,"softhsm; PLAN R13 card lists this file but it holds no console e2e test: provider-level -> R5b, transfer::copy_key legs -> R10; transfer::copy_key mem<->SoftHSM"
 tests/integration/test_objects_softhsm.py::test_data_object_lifecycle_on_token,1,R10,todo,,"softhsm; PLAN R13 card lists this file but it holds no console e2e test: provider-level -> R5b, transfer::copy_key legs -> R10; provider data-object lifecycle (R5a/R5b) plus transfer::copy_key legs"
 tests/integration/test_objects_softhsm.py::test_certificate_copy_round_trip,1,R10,todo,,"softhsm; PLAN R13 card lists this file but it holds no console e2e test: provider-level -> R5b, transfer::copy_key legs -> R10; transfer::copy_key mem<->SoftHSM"
-tests/integration/test_pkcs11_provider.py::TestLogin::test_login_status_logout,1,R5a,todo,,softhsm; R5a accept: SoftHSM login
-tests/integration/test_pkcs11_provider.py::TestLogin::test_wrong_pin,1,R5a,todo,,softhsm; R5a accept: SoftHSM login
-tests/integration/test_pkcs11_provider.py::TestGenerate::test_generate_aes_applies_template,1,R5a,todo,,softhsm; R5a accept: generate
-tests/integration/test_pkcs11_provider.py::TestGenerate::test_generate_rsa_keypair_shared_label_and_id,1,R5a,todo,,softhsm; R5a accept: generate
-tests/integration/test_pkcs11_provider.py::TestLoadObjects::test_load_aes_rsa_ec_and_cert,1,R5a,todo,,softhsm; R5a accept: import of every object kind
+tests/integration/test_pkcs11_provider.py::TestLogin::test_login_status_logout,1,R5a,ported,r2-pkcs11::softhsm_provider softhsm_login_status_logout,softhsm; R5a accept: SoftHSM login
+tests/integration/test_pkcs11_provider.py::TestLogin::test_wrong_pin,1,R5a,ported,r2-pkcs11::softhsm_provider softhsm_wrong_pin,softhsm; R5a accept: SoftHSM login
+tests/integration/test_pkcs11_provider.py::TestGenerate::test_generate_aes_applies_template,1,R5a,ported,r2-pkcs11::softhsm_provider softhsm_generate_aes_applies_template,softhsm; R5a accept: generate
+tests/integration/test_pkcs11_provider.py::TestGenerate::test_generate_rsa_keypair_shared_label_and_id,1,R5a,ported,r2-pkcs11::softhsm_provider softhsm_generate_rsa_keypair_shared_label_and_id,softhsm; R5a accept: generate
+tests/integration/test_pkcs11_provider.py::TestLoadObjects::test_load_aes_rsa_ec_and_cert,1,R5a,ported,r2-pkcs11::softhsm_provider softhsm_load_every_object_kind,softhsm; R5a accept: import of every object kind
 tests/integration/test_pkcs11_provider.py::TestCrypto::test_cbc_round_trip_and_padding_modes,1,R5b,todo,,softhsm
 tests/integration/test_pkcs11_provider.py::TestCrypto::test_gcm_round_trip_matches_pyca,1,R5b,todo,,softhsm
 tests/integration/test_pkcs11_provider.py::TestCrypto::test_gmac_construction_matches_pyca,1,R5b,todo,,softhsm
@@ -82,7 +82,7 @@ tests/integration/test_pkcs11_provider.py::TestCrypto::test_pkcs1_sign_verify_an
 tests/integration/test_pkcs11_provider.py::TestCrypto::test_ecdsa_sign_verify_and_pyca_crosscheck,1,R5b,todo,,softhsm
 tests/integration/test_pkcs11_provider.py::TestCrypto::test_wrap_unwrap_round_trip,1,R5b,todo,,softhsm
 tests/integration/test_pkcs11_provider.py::TestPkcs11ProviderContract,0,R5b,todo,,"softhsm; contract instantiation: provider_contract_tests! for Pkcs11Provider on SoftHSM (logged in, per-test shutdown); its 34 tests are the tests/contract/base.py rows (params=0: node IDs counted there)"
-tests/integration/test_pkcs11_provider.py::TestInitToken::test_init_token_label_round_trips_exactly,1,R5a,todo,,softhsm; init_token is R5a-owned
+tests/integration/test_pkcs11_provider.py::TestInitToken::test_init_token_label_round_trips_exactly,1,R5a,ported,r2-pkcs11::softhsm_provider softhsm_init_token_label_round_trips_exactly,softhsm; init_token is R5a-owned
 tests/integration/test_pkcs11_provider.py::TestKeyEdit::test_edit_mixes_applied_and_refused_attributes,1,R5b,todo,,softhsm
 tests/integration/test_pkcs11_provider.py::TestKeyEdit::test_read_key_template_snapshots_the_object,1,R5b,todo,,softhsm
 tests/integration/test_pkcs11_provider.py::TestKeyEdit::test_keypair_half_rename_leaves_sibling,1,R5b,todo,,softhsm
@@ -566,45 +566,45 @@ tests/unit/core/test_templates.py::test_set_does_not_flip_enabled_or_locked,1,R1
 tests/unit/core/test_templates.py::test_enabled_attrs_omits_disabled_preserving_order,1,R1,ported,r2-core::template test_enabled_attrs_omits_disabled_preserving_order,
 tests/unit/core/test_templates.py::test_disable_then_reenable_roundtrip,1,R1,ported,r2-core::template test_disable_then_reenable_roundtrip,
 tests/unit/core/test_templates.py::test_locked_flag_is_carried_not_enforced_by_model,1,R1,ported,r2-core::template test_locked_flag_is_carried_not_enforced_by_model,
-tests/unit/pkcs11/test_attributes.py::TestCatalog::test_frozen_shape,1,R5a,todo,,
+tests/unit/pkcs11/test_attributes.py::TestCatalog::test_frozen_shape,1,R5a,ported,r2-pkcs11 tests::attributes::catalog_frozen_shape,
 tests/unit/pkcs11/test_attributes.py::TestCatalog::test_read_only,1,R5a,n/a:python-readonly-mapping,,MappingProxyType assignment TypeError; the Rust CKA_CATALOG is an immutable static
-tests/unit/pkcs11/test_attributes.py::TestCatalog::test_every_entry_well_formed,1,R5a,todo,,
-tests/unit/pkcs11/test_attributes.py::TestConversion::test_enabled_only_disabled_omitted,1,R5a,todo,,
-tests/unit/pkcs11/test_attributes.py::TestConversion::test_order_preserved,1,R5a,todo,,
-tests/unit/pkcs11/test_attributes.py::TestConversion::test_unknown_name_raises,1,R5a,todo,,
-tests/unit/pkcs11/test_attributes.py::TestConversion::test_symbolic_ulong_passes_through,1,R5a,todo,,
-tests/unit/pkcs11/test_attributes.py::TestConversion::test_value_kind_mismatches,1,R5a,todo,,
+tests/unit/pkcs11/test_attributes.py::TestCatalog::test_every_entry_well_formed,1,R5a,ported,r2-pkcs11 tests::attributes::catalog_every_entry_well_formed,
+tests/unit/pkcs11/test_attributes.py::TestConversion::test_enabled_only_disabled_omitted,1,R5a,ported,r2-pkcs11 tests::attributes::conversion_enabled_only_disabled_omitted,
+tests/unit/pkcs11/test_attributes.py::TestConversion::test_order_preserved,1,R5a,ported,r2-pkcs11 tests::attributes::conversion_order_preserved,
+tests/unit/pkcs11/test_attributes.py::TestConversion::test_unknown_name_raises,1,R5a,ported,r2-pkcs11 tests::attributes::conversion_unknown_name_raises,
+tests/unit/pkcs11/test_attributes.py::TestConversion::test_symbolic_ulong_passes_through,1,R5a,ported,r2-pkcs11 tests::attributes::conversion_symbolic_ulong_passes_through,
+tests/unit/pkcs11/test_attributes.py::TestConversion::test_value_kind_mismatches,1,R5a,ported,r2-pkcs11 tests::attributes::conversion_value_kind_mismatches,
 tests/unit/pkcs11/test_attributes.py::TestConversion::test_bytearray_normalized_to_bytes,1,R5a,n/a:python-bytearray,,bytes vs bytearray normalization; Rust has one byte type (Vec<u8>)
-tests/unit/pkcs11/test_attributes.py::TestConversion::test_custom_attribute_resolution,1,R5a,todo,,
-tests/unit/pkcs11/test_attributes.py::TestConversion::test_catalog_wins_over_custom,1,R5a,todo,,
-tests/unit/pkcs11/test_attributes.py::TestVendorEncoding::test_bool,1,R5a,todo,,
-tests/unit/pkcs11/test_attributes.py::TestVendorEncoding::test_ulong_native_endian,1,R5a,todo,,
-tests/unit/pkcs11/test_attributes.py::TestVendorEncoding::test_ulong_rejects_non_int,1,R5a,todo,,
-tests/unit/pkcs11/test_attributes.py::TestVendorEncoding::test_str_and_bytes,1,R5a,todo,,
-tests/unit/pkcs11/test_attributes.py::TestVendorDecoding::test_round_trips_every_kind,1,R5a,todo,,
-tests/unit/pkcs11/test_attributes.py::TestVendorDecoding::test_bool_any_nonzero_byte_is_true,1,R5a,todo,,
-tests/unit/pkcs11/test_attributes.py::TestVendorDecoding::test_str_replaces_undecodable_bytes,1,R5a,todo,,
-tests/unit/pkcs11/test_attributes.py::TestTemplateIdentity::test_none_templates_yield_nothing,1,R5a,todo,,
-tests/unit/pkcs11/test_attributes.py::TestTemplateIdentity::test_extracts_enabled_rows,1,R5a,todo,,
-tests/unit/pkcs11/test_attributes.py::TestTemplateIdentity::test_disabled_rows_ignored,1,R5a,todo,,
-tests/unit/pkcs11/test_attributes.py::TestTemplateIdentity::test_agreeing_templates_merge,1,R5a,todo,,
-tests/unit/pkcs11/test_attributes.py::TestTemplateIdentity::test_conflicting_ids_rejected,1,R5a,todo,,
-tests/unit/pkcs11/test_attributes.py::TestTemplateIdentity::test_conflicting_labels_rejected,1,R5a,todo,,
-tests/unit/pkcs11/test_attributes.py::TestTemplateIdentity::test_empty_id_rejected,1,R5a,todo,,
-tests/unit/pkcs11/test_attributes.py::TestTemplateIdentity::test_empty_label_rejected,1,R5a,todo,,
+tests/unit/pkcs11/test_attributes.py::TestConversion::test_custom_attribute_resolution,1,R5a,ported,r2-pkcs11 tests::attributes::conversion_custom_attribute_resolution,
+tests/unit/pkcs11/test_attributes.py::TestConversion::test_catalog_wins_over_custom,1,R5a,ported,r2-pkcs11 tests::attributes::conversion_catalog_wins_over_custom,
+tests/unit/pkcs11/test_attributes.py::TestVendorEncoding::test_bool,1,R5a,ported,r2-pkcs11 tests::attributes::vendor_encoding_bool,
+tests/unit/pkcs11/test_attributes.py::TestVendorEncoding::test_ulong_native_endian,1,R5a,ported,r2-pkcs11 tests::attributes::vendor_encoding_ulong_native_endian,
+tests/unit/pkcs11/test_attributes.py::TestVendorEncoding::test_ulong_rejects_non_int,1,R5a,ported,r2-pkcs11 tests::attributes::vendor_encoding_ulong_rejects_non_int,
+tests/unit/pkcs11/test_attributes.py::TestVendorEncoding::test_str_and_bytes,1,R5a,ported,r2-pkcs11 tests::attributes::vendor_encoding_str_and_bytes,
+tests/unit/pkcs11/test_attributes.py::TestVendorDecoding::test_round_trips_every_kind,1,R5a,ported,r2-pkcs11 tests::attributes::vendor_decoding_round_trips_every_kind,
+tests/unit/pkcs11/test_attributes.py::TestVendorDecoding::test_bool_any_nonzero_byte_is_true,1,R5a,ported,r2-pkcs11 tests::attributes::vendor_decoding_bool_any_nonzero_byte_is_true,
+tests/unit/pkcs11/test_attributes.py::TestVendorDecoding::test_str_replaces_undecodable_bytes,1,R5a,ported,r2-pkcs11 tests::attributes::vendor_decoding_str_replaces_undecodable_bytes,
+tests/unit/pkcs11/test_attributes.py::TestTemplateIdentity::test_none_templates_yield_nothing,1,R5a,ported,r2-pkcs11 tests::attributes::identity_none_templates_yield_nothing,
+tests/unit/pkcs11/test_attributes.py::TestTemplateIdentity::test_extracts_enabled_rows,1,R5a,ported,r2-pkcs11 tests::attributes::identity_extracts_enabled_rows,
+tests/unit/pkcs11/test_attributes.py::TestTemplateIdentity::test_disabled_rows_ignored,1,R5a,ported,r2-pkcs11 tests::attributes::identity_disabled_rows_ignored,
+tests/unit/pkcs11/test_attributes.py::TestTemplateIdentity::test_agreeing_templates_merge,1,R5a,ported,r2-pkcs11 tests::attributes::identity_agreeing_templates_merge,
+tests/unit/pkcs11/test_attributes.py::TestTemplateIdentity::test_conflicting_ids_rejected,1,R5a,ported,r2-pkcs11 tests::attributes::identity_conflicting_ids_rejected,
+tests/unit/pkcs11/test_attributes.py::TestTemplateIdentity::test_conflicting_labels_rejected,1,R5a,ported,r2-pkcs11 tests::attributes::identity_conflicting_labels_rejected,
+tests/unit/pkcs11/test_attributes.py::TestTemplateIdentity::test_empty_id_rejected,1,R5a,ported,r2-pkcs11 tests::attributes::identity_empty_id_rejected,
+tests/unit/pkcs11/test_attributes.py::TestTemplateIdentity::test_empty_label_rejected,1,R5a,ported,r2-pkcs11 tests::attributes::identity_empty_label_rejected,
 tests/unit/pkcs11/test_attributes.py::TestTemplateIdentity::test_bytearray_id_normalized,1,R5a,n/a:python-bytearray,,bytes vs bytearray normalization; Rust has one byte type (Vec<u8>)
-tests/unit/pkcs11/test_mechanisms.py::TestFolding::test_hash_variants_fold,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (folding)
-tests/unit/pkcs11/test_mechanisms.py::TestFolding::test_cbc_and_cbc_pad_fold_to_one_name,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (folding)
-tests/unit/pkcs11/test_mechanisms.py::TestFolding::test_gmac_advertised_via_gcm_fallback,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (folding)
-tests/unit/pkcs11/test_mechanisms.py::TestFolding::test_wrap_and_derive_names,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (folding)
-tests/unit/pkcs11/test_mechanisms.py::TestFolding::test_rsa_aes_key_wrap_not_advertised,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (folding)
-tests/unit/pkcs11/test_mechanisms.py::TestFolding::test_empty_codes_fold_to_nothing,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (folding)
-tests/unit/pkcs11/test_mechanisms.py::TestEddsaProbe::test_standard_ckm_wins,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (EdDSA probe)
-tests/unit/pkcs11/test_mechanisms.py::TestEddsaProbe::test_vendor_probe_is_advisory,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (EdDSA probe)
-tests/unit/pkcs11/test_mechanisms.py::TestEddsaProbe::test_default_candidates_only_when_token_lists_them,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (EdDSA probe)
-tests/unit/pkcs11/test_mechanisms.py::TestCustomMerge::test_custom_ckm_advertised_when_token_lists_it,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (custom merge)
-tests/unit/pkcs11/test_mechanisms.py::TestCustomMerge::test_custom_and_builtin_coexist,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (custom merge)
-tests/unit/pkcs11/test_mechanisms.py::TestNormalize::test_names_and_ints_mix,1,R5a,todo,,unfiltered mechanism-list normalization feeding the fold (R5a accept: unknown CKMs survive the unfiltered mechanism list)
+tests/unit/pkcs11/test_mechanisms.py::TestFolding::test_hash_variants_fold,1,R5a,ported,r2-pkcs11 tests::capability::folding_hash_variants_fold,moved to R5a (spec §4.1.1): capability.rs (folding)
+tests/unit/pkcs11/test_mechanisms.py::TestFolding::test_cbc_and_cbc_pad_fold_to_one_name,1,R5a,ported,r2-pkcs11 tests::capability::folding_cbc_and_cbc_pad_fold_to_one_name,moved to R5a (spec §4.1.1): capability.rs (folding)
+tests/unit/pkcs11/test_mechanisms.py::TestFolding::test_gmac_advertised_via_gcm_fallback,1,R5a,ported,r2-pkcs11 tests::capability::folding_gmac_advertised_via_gcm_fallback,moved to R5a (spec §4.1.1): capability.rs (folding)
+tests/unit/pkcs11/test_mechanisms.py::TestFolding::test_wrap_and_derive_names,1,R5a,ported,r2-pkcs11 tests::capability::folding_wrap_and_derive_names,moved to R5a (spec §4.1.1): capability.rs (folding)
+tests/unit/pkcs11/test_mechanisms.py::TestFolding::test_rsa_aes_key_wrap_not_advertised,1,R5a,ported,r2-pkcs11 tests::capability::folding_rsa_aes_key_wrap_not_advertised,moved to R5a (spec §4.1.1): capability.rs (folding)
+tests/unit/pkcs11/test_mechanisms.py::TestFolding::test_empty_codes_fold_to_nothing,1,R5a,ported,r2-pkcs11 tests::capability::folding_empty_codes_fold_to_nothing,moved to R5a (spec §4.1.1): capability.rs (folding)
+tests/unit/pkcs11/test_mechanisms.py::TestEddsaProbe::test_standard_ckm_wins,1,R5a,ported,r2-pkcs11 tests::capability::eddsa_standard_ckm_wins,moved to R5a (spec §4.1.1): capability.rs (EdDSA probe)
+tests/unit/pkcs11/test_mechanisms.py::TestEddsaProbe::test_vendor_probe_is_advisory,1,R5a,ported,r2-pkcs11 tests::capability::eddsa_vendor_probe_is_advisory,moved to R5a (spec §4.1.1): capability.rs (EdDSA probe)
+tests/unit/pkcs11/test_mechanisms.py::TestEddsaProbe::test_default_candidates_only_when_token_lists_them,1,R5a,ported,r2-pkcs11 tests::capability::eddsa_default_candidates_only_when_token_lists_them,moved to R5a (spec §4.1.1): capability.rs (EdDSA probe)
+tests/unit/pkcs11/test_mechanisms.py::TestCustomMerge::test_custom_ckm_advertised_when_token_lists_it,1,R5a,ported,r2-pkcs11 tests::capability::custom_ckm_advertised_when_token_lists_it,moved to R5a (spec §4.1.1): capability.rs (custom merge)
+tests/unit/pkcs11/test_mechanisms.py::TestCustomMerge::test_custom_and_builtin_coexist,1,R5a,ported,r2-pkcs11 tests::capability::custom_and_builtin_coexist,moved to R5a (spec §4.1.1): capability.rs (custom merge)
+tests/unit/pkcs11/test_mechanisms.py::TestNormalize::test_names_and_ints_mix,1,R5a,ported,r2-pkcs11 tests::capability::unknown_ckms_survive_the_unfiltered_mechanism_list,unfiltered mechanism-list normalization feeding the fold (R5a accept: unknown CKMs survive the unfiltered mechanism list)
 tests/unit/pkcs11/test_mechanisms.py::TestHashHelpers::test_digest_info_sha256_prefix,1,R5b,todo,,
 tests/unit/pkcs11/test_mechanisms.py::TestHashHelpers::test_unknown_hash_rejected,1,R5b,todo,,
 tests/unit/pkcs11/test_mechanisms.py::TestPackers::test_none_packer,1,R5b,todo,,
@@ -618,24 +618,24 @@ tests/unit/pkcs11/test_mechanisms.py::TestPackers::test_raw_packer_prefers_raw_p
 tests/unit/pkcs11/test_mechanisms.py::TestPackers::test_raw_packer_falls_back_to_mechparam,1,R5b,todo,,
 tests/unit/pkcs11/test_mechanisms.py::TestPackers::test_raw_packer_requires_bytes,1,R5b,todo,,
 tests/unit/pkcs11/test_mechanisms.py::TestPackers::test_missing_raw_ckm_is_a_bug,1,R5b,todo,,
-tests/unit/pkcs11/test_mechanisms.py::TestCmacFolding::test_cmac_general_alone_is_not_advertised,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (folding)
-tests/unit/pkcs11/test_mechanisms.py::TestCmacFolding::test_cmac_advertised_with_plain_ckm,1,R5a,todo,,moved to R5a (spec §4.1.1): capability.rs (folding)
-tests/unit/pkcs11/test_objects.py::TestGenericSecrets::test_mechanisms_fold_hmac,1,R5a,todo,,"HMAC CKM folding in mechanisms() (capability.rs, spec §4.1.1)"
-tests/unit/pkcs11/test_objects.py::TestGenericSecrets::test_generate_uses_generic_keygen_and_value_len,1,R5a,todo,,
-tests/unit/pkcs11/test_objects.py::TestGenericSecrets::test_generic_import_reads_back_as_generic,1,R5a,todo,,
+tests/unit/pkcs11/test_mechanisms.py::TestCmacFolding::test_cmac_general_alone_is_not_advertised,1,R5a,ported,r2-pkcs11 tests::capability::cmac_general_alone_is_not_advertised,moved to R5a (spec §4.1.1): capability.rs (folding)
+tests/unit/pkcs11/test_mechanisms.py::TestCmacFolding::test_cmac_advertised_with_plain_ckm,1,R5a,ported,r2-pkcs11 tests::capability::cmac_advertised_with_plain_ckm,moved to R5a (spec §4.1.1): capability.rs (folding)
+tests/unit/pkcs11/test_objects.py::TestGenericSecrets::test_mechanisms_fold_hmac,1,R5a,ported,r2-pkcs11 tests::capability::mechanisms_fold_hmac,"HMAC CKM folding in mechanisms() (capability.rs, spec §4.1.1)"
+tests/unit/pkcs11/test_objects.py::TestGenericSecrets::test_generate_uses_generic_keygen_and_value_len,1,R5a,ported,r2-pkcs11 tests::objects::generate_uses_generic_keygen_and_value_len,
+tests/unit/pkcs11/test_objects.py::TestGenericSecrets::test_generic_import_reads_back_as_generic,1,R5a,ported,r2-pkcs11 tests::objects::generic_import_reads_back_as_generic,
 tests/unit/pkcs11/test_objects.py::TestGenericSecrets::test_hmac_key_types_fold_into_generic,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (read_key_template; the CKK fold on read is R5a)
 tests/unit/pkcs11/test_objects.py::TestGenericSecrets::test_hmac_sign_selects_ckm_by_hash_and_truncates,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (HMAC sign/verify)
 tests/unit/pkcs11/test_objects.py::TestGenericSecrets::test_hmac_requires_generic_and_cmac_requires_aes,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (HMAC/CMAC key-type rule)
 tests/unit/pkcs11/test_objects.py::TestGenericSecrets::test_missing_hmac_ckm_is_an_unsupported_operation,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (HMAC sign)
 tests/unit/pkcs11/test_objects.py::TestGenericSecrets::test_key_size_range_is_translated_with_a_hint,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (HMAC sign; CKR row itself is R5a)
 tests/unit/pkcs11/test_objects.py::TestGenericSecrets::test_unwrap_into_generic_secret,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (unwrap + CKA_VALUE_LEN injection)
-tests/unit/pkcs11/test_objects.py::TestDataObjects::test_import_template_has_no_key_type_id_or_policy,1,R5a,todo,,
-tests/unit/pkcs11/test_objects.py::TestDataObjects::test_list_find_export_delete,1,R5a,todo,,
-tests/unit/pkcs11/test_objects.py::TestDataObjects::test_identity_rules,1,R5a,todo,,
+tests/unit/pkcs11/test_objects.py::TestDataObjects::test_import_template_has_no_key_type_id_or_policy,1,R5a,ported,r2-pkcs11 tests::objects::data_import_template_has_no_key_type_id_or_policy,
+tests/unit/pkcs11/test_objects.py::TestDataObjects::test_list_find_export_delete,1,R5a,ported,r2-pkcs11 tests::objects::data_list_find_export_delete,
+tests/unit/pkcs11/test_objects.py::TestDataObjects::test_identity_rules,1,R5a,ported,r2-pkcs11 tests::objects::data_identity_rules,
 tests/unit/pkcs11/test_objects.py::TestDataObjects::test_verbs_refused,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (verb refusals)
 tests/unit/pkcs11/test_objects.py::TestDataObjects::test_edit_surfaces,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (read_key_template/read_full_template/update_key)
 tests/unit/pkcs11/test_objects.py::TestOtherKeyTypes::test_listed_as_other_and_refused_elsewhere,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (verb refusals + read_full_template; listing part is R5a)
-tests/unit/pkcs11/test_objects.py::TestOtherKeyTypes::test_import_and_generate_refuse_other,1,R5a,todo,,
+tests/unit/pkcs11/test_objects.py::TestOtherKeyTypes::test_import_and_generate_refuse_other,1,R5a,ported,r2-pkcs11 tests::objects::import_and_generate_refuse_other,
 tests/unit/pkcs11/test_objects.py::test_certificate_category_round_trips_through_the_byte_path,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (read_full_template/read_key_template; import byte path is R5a)
 tests/unit/pkcs11/test_provider_edit.py::TestReadKeyTemplate::test_secret_key_snapshot,1,R5b,todo,,
 tests/unit/pkcs11/test_provider_edit.py::TestReadKeyTemplate::test_certificate_has_no_key_type_row,1,R5b,todo,,
@@ -652,40 +652,40 @@ tests/unit/pkcs11/test_provider_edit.py::TestUpdateKey::test_vendor_attribute_en
 tests/unit/pkcs11/test_provider_edit.py::TestUpdateKey::test_keep_pin_recovery_retries_whole_edit_once,1,R5b,todo,,
 tests/unit/pkcs11/test_provider_edit.py::TestUpdateKey::test_recovery_after_rename_landed_re_resolves_new_identity,1,R5b,todo,,
 tests/unit/pkcs11/test_provider_edit.py::TestCkrMapping::test_attribute_read_only_maps_to_friendly_pkcs11_error,1,R5b,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestTemplateConversion::test_enabled_only_and_disabled_omitted,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestTemplateConversion::test_locked_class_mismatch_rejected,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestTemplateConversion::test_locked_key_type_mismatch_rejected,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestTemplateConversion::test_import_defaults_exportable_when_template_silent,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestTemplateConversion::test_vendor_attribute_byte_encoded,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestTemplateConversion::test_certificate_template_drops_key_type,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_generate_aes_passes_value_len,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_generate_aes_requires_size,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_generate_keypair_shares_label_and_id,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_generate_ec_curve_checks,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_generate_ec_injects_params_into_public_template,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_generate_honors_template_id,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_generate_explicit_id_conflicting_with_template_rejected,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_generate_explicit_id_agreeing_with_template_ok,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_generate_keypair_shares_template_id,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_generate_keypair_templates_disagreeing_on_id_rejected,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_generate_template_label_overrides_argument,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_import_honors_template_id,1,R5a,todo,,
+tests/unit/pkcs11/test_provider_objects.py::TestTemplateConversion::test_enabled_only_and_disabled_omitted,1,R5a,ported,r2-pkcs11 tests::objects::enabled_only_and_disabled_omitted ; r2-pkcs11 tests::objects::str_attr_unknown_constant_is_a_param_error ; r2-pkcs11 tests::objects::str_attr_known_constant_stored_as_decimal_text,c2 _entry_value resolves CKO_/CKK_/CKC_/CKM_ str values of any non-vendor attr (STR rows too; known -> decimal text)
+tests/unit/pkcs11/test_provider_objects.py::TestTemplateConversion::test_locked_class_mismatch_rejected,1,R5a,ported,r2-pkcs11 tests::objects::locked_class_mismatch_rejected,
+tests/unit/pkcs11/test_provider_objects.py::TestTemplateConversion::test_locked_key_type_mismatch_rejected,1,R5a,ported,r2-pkcs11 tests::objects::locked_key_type_mismatch_rejected,
+tests/unit/pkcs11/test_provider_objects.py::TestTemplateConversion::test_import_defaults_exportable_when_template_silent,1,R5a,ported,r2-pkcs11 tests::objects::import_defaults_exportable_when_template_silent,
+tests/unit/pkcs11/test_provider_objects.py::TestTemplateConversion::test_vendor_attribute_byte_encoded,1,R5a,ported,r2-pkcs11 tests::objects::vendor_attribute_byte_encoded,
+tests/unit/pkcs11/test_provider_objects.py::TestTemplateConversion::test_certificate_template_drops_key_type,1,R5a,ported,r2-pkcs11 tests::objects::certificate_template_drops_key_type,
+tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_generate_aes_passes_value_len,1,R5a,ported,r2-pkcs11 tests::objects::generate_aes_passes_value_len,
+tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_generate_aes_requires_size,1,R5a,ported,r2-pkcs11 tests::objects::generate_aes_requires_size,
+tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_generate_keypair_shares_label_and_id,1,R5a,ported,r2-pkcs11 tests::objects::generate_keypair_shares_label_and_id,
+tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_generate_ec_curve_checks,1,R5a,ported,r2-pkcs11 tests::objects::generate_ec_curve_checks,
+tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_generate_ec_injects_params_into_public_template,1,R5a,ported,r2-pkcs11 tests::objects::generate_ec_injects_params_into_public_template,
+tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_generate_honors_template_id,1,R5a,ported,r2-pkcs11 tests::objects::generate_honors_template_id,
+tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_generate_explicit_id_conflicting_with_template_rejected,1,R5a,ported,r2-pkcs11 tests::objects::generate_explicit_id_conflicting_with_template_rejected,
+tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_generate_explicit_id_agreeing_with_template_ok,1,R5a,ported,r2-pkcs11 tests::objects::generate_explicit_id_agreeing_with_template_ok,
+tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_generate_keypair_shares_template_id,1,R5a,ported,r2-pkcs11 tests::objects::generate_keypair_shares_template_id,
+tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_generate_keypair_templates_disagreeing_on_id_rejected,1,R5a,ported,r2-pkcs11 tests::objects::generate_keypair_templates_disagreeing_on_id_rejected,
+tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_generate_template_label_overrides_argument,1,R5a,ported,r2-pkcs11 tests::objects::generate_template_label_overrides_argument,
+tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_import_honors_template_id,1,R5a,ported,r2-pkcs11 tests::objects::import_honors_template_id,
 tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_unwrap_honors_template_id,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (unwrap)
-tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_find_ambiguity_and_delete,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_keypair_family_prefers_private,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_find_key_class_selector_targets_half,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_find_key_handle_selects_among_identical_objects,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_key_info_handle_is_a_plain_int,1,R5a,todo,,Option<u64> by type; port as 'every KeyInfo from import/list_keys carries Some(handle)'
+tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_find_ambiguity_and_delete,1,R5a,ported,r2-pkcs11 tests::objects::find_ambiguity_and_delete,
+tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_keypair_family_prefers_private,1,R5a,ported,r2-pkcs11 tests::objects::keypair_family_prefers_private,
+tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_find_key_class_selector_targets_half,1,R5a,ported,r2-pkcs11 tests::objects::find_key_class_selector_targets_half,
+tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_find_key_handle_selects_among_identical_objects,1,R5a,ported,r2-pkcs11 tests::objects::find_key_handle_selects_among_identical_objects,
+tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_key_info_handle_is_a_plain_int,1,R5a,ported,r2-pkcs11 tests::objects::key_info_carries_the_numeric_handle,Option<u64> by type; port as 'every KeyInfo from import/list_keys carries Some(handle)'
 tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_handle_value_uses_swig_accessor_never_repr,1,R5a,n/a:pykcs11-repr-hazard,,PyKCS11 handle repr/coercion hazard; KeyInfo.handle is Option<u64> (PLAN §5); SWIG .value() vs __repr__ (Utimaco)
 tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_rsa_raw_decrypt_with_public_key_runs_in_software,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (public-key RSA-RAW software fallback)
-tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_export_refused_for_non_exportable,1,R5a,todo,,
+tests/unit/pkcs11/test_provider_objects.py::TestKeyManagement::test_export_refused_for_non_exportable,1,R5a,ported,r2-pkcs11 tests::objects::export_refused_for_non_exportable,
 tests/unit/pkcs11/test_provider_objects.py::TestCkrMapping::test_mechanism_invalid_maps_to_unsupported,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (encrypt path; CKR table itself is R5a)
-tests/unit/pkcs11/test_provider_objects.py::TestCkrMapping::test_attribute_invalid_maps_to_pkcs11error,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestCkrMapping::test_user_not_logged_in_maps_to_auth_required,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestCkrMapping::test_unknown_ckr_keeps_code_and_name,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestCkrMapping::test_key_handle_invalid_message,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestCustomMechanisms::test_custom_ckm_advertised,1,R5a,todo,,"custom ckm->id merge in mechanisms()/supports() (capability.rs, spec §4.1.1)"
-tests/unit/pkcs11/test_provider_objects.py::TestCustomMechanisms::test_custom_ckm_not_advertised_without_token_support,1,R5a,todo,,"custom ckm->id merge in mechanisms() (capability.rs, spec §4.1.1)"
+tests/unit/pkcs11/test_provider_objects.py::TestCkrMapping::test_attribute_invalid_maps_to_pkcs11error,1,R5a,ported,r2-pkcs11 tests::ckr::attribute_invalid_maps_to_pkcs11error,
+tests/unit/pkcs11/test_provider_objects.py::TestCkrMapping::test_user_not_logged_in_maps_to_auth_required,1,R5a,ported,r2-pkcs11 tests::ckr::user_not_logged_in_maps_to_auth_required,
+tests/unit/pkcs11/test_provider_objects.py::TestCkrMapping::test_unknown_ckr_keeps_code_and_name,1,R5a,ported,r2-pkcs11 tests::ckr::unknown_ckr_keeps_code_and_name,
+tests/unit/pkcs11/test_provider_objects.py::TestCkrMapping::test_key_handle_invalid_message,1,R5a,ported,r2-pkcs11 tests::ckr::key_handle_invalid_message,
+tests/unit/pkcs11/test_provider_objects.py::TestCustomMechanisms::test_custom_ckm_advertised,1,R5a,ported,r2-pkcs11 tests::capability::custom_ckm_advertised,"custom ckm->id merge in mechanisms()/supports() (capability.rs, spec §4.1.1)"
+tests/unit/pkcs11/test_provider_objects.py::TestCustomMechanisms::test_custom_ckm_not_advertised_without_token_support,1,R5a,ported,r2-pkcs11 tests::capability::custom_ckm_not_advertised_without_token_support,"custom ckm->id merge in mechanisms() (capability.rs, spec §4.1.1)"
 tests/unit/pkcs11/test_provider_objects.py::TestCustomMechanisms::test_custom_dispatch_uses_raw_ckm,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (raw packer dispatch)
 tests/unit/pkcs11/test_provider_objects.py::TestCustomMechanisms::test_unadvertised_mechanism_rejected,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (encrypt path)
 tests/unit/pkcs11/test_provider_objects.py::TestWrapUnwrap::test_wrap_pad_prefers_kwp_when_advertised,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (KWP preference)
@@ -694,46 +694,46 @@ tests/unit/pkcs11/test_provider_objects.py::TestWrapUnwrap::test_wrap_unwrap_rou
 tests/unit/pkcs11/test_provider_objects.py::TestWrapUnwrap::test_wrap_refuses_unextractable_target,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (wrap/unwrap)
 tests/unit/pkcs11/test_provider_objects.py::TestDerive::test_derive_extractable_returns_raw,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (derive)
 tests/unit/pkcs11/test_provider_objects.py::TestDerive::test_derive_degrades_to_resident_key_when_forbidden,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (derive resident fallback)
-tests/unit/pkcs11/test_provider_objects.py::TestTwinSafety::test_delete_with_twins_and_stale_handle_raises_and_destroys_nothing,2,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestTwinSafety::test_delete_with_twins_targets_selected_twin,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestTwinSafety::test_export_with_twins_returns_selected_twins_value,1,R5a,todo,,
+tests/unit/pkcs11/test_provider_objects.py::TestTwinSafety::test_delete_with_twins_and_stale_handle_raises_and_destroys_nothing,2,R5a,ported,r2-pkcs11 tests::objects::delete_with_twins_and_stale_handle_raises_and_destroys_nothing,
+tests/unit/pkcs11/test_provider_objects.py::TestTwinSafety::test_delete_with_twins_targets_selected_twin,1,R5a,ported,r2-pkcs11 tests::objects::delete_with_twins_targets_selected_twin,
+tests/unit/pkcs11/test_provider_objects.py::TestTwinSafety::test_export_with_twins_returns_selected_twins_value,1,R5a,ported,r2-pkcs11 tests::objects::export_with_twins_returns_selected_twins_value,
 tests/unit/pkcs11/test_provider_objects.py::TestTwinSafety::test_sign_with_twins_uses_selected_twin,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (sign; twin targeting itself is R5a)
-tests/unit/pkcs11/test_provider_objects.py::TestTwinSafety::test_single_match_with_stale_handle_still_succeeds,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestTwinSafety::test_twin_ambiguity_lists_handle_suffixed_candidates,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestDuplicateGuard::test_import_duplicate_identity_refused,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestDuplicateGuard::test_import_same_label_different_id_allowed,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestDuplicateGuard::test_generate_over_existing_identity_refused,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestDuplicateGuard::test_generate_keypair_over_existing_half_refused_atomically,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestDuplicateGuard::test_keypair_and_certificates_may_share_identity,1,R5a,todo,,
+tests/unit/pkcs11/test_provider_objects.py::TestTwinSafety::test_single_match_with_stale_handle_still_succeeds,1,R5a,ported,r2-pkcs11 tests::objects::single_match_with_stale_handle_still_succeeds,
+tests/unit/pkcs11/test_provider_objects.py::TestTwinSafety::test_twin_ambiguity_lists_handle_suffixed_candidates,1,R5a,ported,r2-pkcs11 tests::objects::twin_ambiguity_lists_handle_suffixed_candidates,
+tests/unit/pkcs11/test_provider_objects.py::TestDuplicateGuard::test_import_duplicate_identity_refused,1,R5a,ported,r2-pkcs11 tests::objects::import_duplicate_identity_refused,
+tests/unit/pkcs11/test_provider_objects.py::TestDuplicateGuard::test_import_same_label_different_id_allowed,1,R5a,ported,r2-pkcs11 tests::objects::import_same_label_different_id_allowed,
+tests/unit/pkcs11/test_provider_objects.py::TestDuplicateGuard::test_generate_over_existing_identity_refused,1,R5a,ported,r2-pkcs11 tests::objects::generate_over_existing_identity_refused,
+tests/unit/pkcs11/test_provider_objects.py::TestDuplicateGuard::test_generate_keypair_over_existing_half_refused_atomically,1,R5a,ported,r2-pkcs11 tests::objects::generate_keypair_over_existing_half_refused_atomically,
+tests/unit/pkcs11/test_provider_objects.py::TestDuplicateGuard::test_keypair_and_certificates_may_share_identity,1,R5a,ported,r2-pkcs11 tests::objects::keypair_and_certificates_may_share_identity,
 tests/unit/pkcs11/test_provider_objects.py::TestDuplicateGuard::test_unwrap_duplicate_identity_refused,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (unwrap; guard itself is R5a)
 tests/unit/pkcs11/test_provider_objects.py::TestReadFullTemplate::test_full_dump_covers_catalog_and_identity,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (read_full_template)
 tests/unit/pkcs11/test_provider_objects.py::TestReadFullTemplate::test_full_dump_skips_refused_value_on_sensitive_key,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (read_full_template)
 tests/unit/pkcs11/test_provider_objects.py::TestReadFullTemplate::test_full_dump_includes_vendor_attr,1,R5b,todo,,moved from the R5a test file: exercises R5b-owned provider code (read_full_template)
-tests/unit/pkcs11/test_provider_session.py::TestInitialize::test_load_failure_is_provider_unavailable,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_session.py::TestInitialize::test_wrong_library_path,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_session.py::TestInitialize::test_idempotent,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_session.py::TestInitialize::test_instance_env_applied_before_load,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_session.py::TestInitialize::test_shutdown_safe_when_never_initialized,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_session.py::TestLogin::test_status_and_token_enumeration,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_session.py::TestLogin::test_login_logout_cycle,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_session.py::TestLogin::test_wrong_pin,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_session.py::TestLogin::test_pin_locked,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_session.py::TestLogin::test_already_logged_in_provider_state,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_session.py::TestLogin::test_raw_ckr_user_already_logged_in_swallowed,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_session.py::TestLogin::test_logout_keeps_session_reusable,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_session.py::TestLogin::test_single_token_rule_closes_previous_session,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_session.py::TestRecovery::test_keep_pin_recovers_and_retries_once,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_session.py::TestRecovery::test_without_keep_pin_drops_to_logged_out,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_session.py::TestRecovery::test_second_failure_drops_even_with_keep_pin,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_session.py::TestRecovery::test_recovery_fails_when_token_gone,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_session.py::TestShutdown::test_shutdown_clears_everything,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_session.py::TestLoginFailureHygiene::test_failed_login_closes_fresh_session,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_session.py::TestLoginFailureHygiene::test_mechanism_list_failure_leaves_consistent_state,1,R5a,todo,,
-tests/unit/pkcs11/test_provider_session.py::TestInitToken::test_init_token_pads_label_and_sets_user_pin,1,R5a,todo,,
-tests/unit/pkcs11/test_softhsm_detect.py::test_env_override_wins,1,R5a,todo,,
-tests/unit/pkcs11/test_softhsm_detect.py::test_env_override_missing_never_falls_through,1,R5a,todo,,
-tests/unit/pkcs11/test_softhsm_detect.py::test_first_existing_search_path,1,R5a,todo,,
-tests/unit/pkcs11/test_softhsm_detect.py::test_nothing_found,1,R5a,todo,,
+tests/unit/pkcs11/test_provider_session.py::TestInitialize::test_load_failure_is_provider_unavailable,1,R5a,ported,r2-pkcs11 tests::session::load_failure_is_provider_unavailable,
+tests/unit/pkcs11/test_provider_session.py::TestInitialize::test_wrong_library_path,1,R5a,ported,r2-pkcs11 tests::session::wrong_library_path,
+tests/unit/pkcs11/test_provider_session.py::TestInitialize::test_idempotent,1,R5a,ported,r2-pkcs11 tests::session::idempotent,
+tests/unit/pkcs11/test_provider_session.py::TestInitialize::test_instance_env_applied_before_load,1,R5a,ported,r2-pkcs11 tests::session::instance_env_applied_before_load,
+tests/unit/pkcs11/test_provider_session.py::TestInitialize::test_shutdown_safe_when_never_initialized,1,R5a,ported,r2-pkcs11 tests::session::shutdown_safe_when_never_initialized,
+tests/unit/pkcs11/test_provider_session.py::TestLogin::test_status_and_token_enumeration,1,R5a,ported,r2-pkcs11 tests::session::status_and_token_enumeration ; r2-pkcs11 tests::session::raw_token_info_ignores_a_blank_utc_time,raw C_GetTokenInfo: utcTime never parsed (PyKCS11 parity)
+tests/unit/pkcs11/test_provider_session.py::TestLogin::test_login_logout_cycle,1,R5a,ported,r2-pkcs11 tests::session::login_logout_cycle,
+tests/unit/pkcs11/test_provider_session.py::TestLogin::test_wrong_pin,1,R5a,ported,r2-pkcs11 tests::session::wrong_pin,
+tests/unit/pkcs11/test_provider_session.py::TestLogin::test_pin_locked,1,R5a,ported,r2-pkcs11 tests::session::pin_locked,
+tests/unit/pkcs11/test_provider_session.py::TestLogin::test_already_logged_in_provider_state,1,R5a,ported,r2-pkcs11 tests::session::already_logged_in_provider_state,
+tests/unit/pkcs11/test_provider_session.py::TestLogin::test_raw_ckr_user_already_logged_in_swallowed,1,R5a,ported,r2-pkcs11 tests::session::raw_ckr_user_already_logged_in_swallowed,
+tests/unit/pkcs11/test_provider_session.py::TestLogin::test_logout_keeps_session_reusable,1,R5a,ported,r2-pkcs11 tests::session::logout_keeps_session_reusable,
+tests/unit/pkcs11/test_provider_session.py::TestLogin::test_single_token_rule_closes_previous_session,1,R5a,ported,r2-pkcs11 tests::session::single_token_rule_closes_previous_session,
+tests/unit/pkcs11/test_provider_session.py::TestRecovery::test_keep_pin_recovers_and_retries_once,1,R5a,ported,r2-pkcs11 tests::session::keep_pin_recovers_and_retries_once,
+tests/unit/pkcs11/test_provider_session.py::TestRecovery::test_without_keep_pin_drops_to_logged_out,1,R5a,ported,r2-pkcs11 tests::session::without_keep_pin_drops_to_logged_out,
+tests/unit/pkcs11/test_provider_session.py::TestRecovery::test_second_failure_drops_even_with_keep_pin,1,R5a,ported,r2-pkcs11 tests::session::second_failure_drops_even_with_keep_pin,
+tests/unit/pkcs11/test_provider_session.py::TestRecovery::test_recovery_fails_when_token_gone,1,R5a,ported,r2-pkcs11 tests::session::recovery_fails_when_token_gone,
+tests/unit/pkcs11/test_provider_session.py::TestShutdown::test_shutdown_clears_everything,1,R5a,ported,r2-pkcs11 tests::session::shutdown_clears_everything,
+tests/unit/pkcs11/test_provider_session.py::TestLoginFailureHygiene::test_failed_login_closes_fresh_session,1,R5a,ported,r2-pkcs11 tests::session::failed_login_closes_fresh_session,
+tests/unit/pkcs11/test_provider_session.py::TestLoginFailureHygiene::test_mechanism_list_failure_leaves_consistent_state,1,R5a,ported,r2-pkcs11 tests::session::mechanism_list_failure_leaves_consistent_state,
+tests/unit/pkcs11/test_provider_session.py::TestInitToken::test_init_token_pads_label_and_sets_user_pin,1,R5a,ported,r2-pkcs11 tests::session::init_token_pads_label_and_sets_user_pin,
+tests/unit/pkcs11/test_softhsm_detect.py::test_env_override_wins,1,R5a,ported,r2-pkcs11 tests::softhsm_detect::env_override_wins,
+tests/unit/pkcs11/test_softhsm_detect.py::test_env_override_missing_never_falls_through,1,R5a,ported,r2-pkcs11 tests::softhsm_detect::env_override_missing_never_falls_through,
+tests/unit/pkcs11/test_softhsm_detect.py::test_first_existing_search_path,1,R5a,ported,r2-pkcs11 tests::softhsm_detect::first_existing_search_path,
+tests/unit/pkcs11/test_softhsm_detect.py::test_nothing_found,1,R5a,ported,r2-pkcs11 tests::softhsm_detect::nothing_found,
 tests/unit/pkcs11/test_wrap_kek.py::TestWrapMechanismBranches::test_cbc_picks_pad_ckm_by_the_padding_param,1,R5b,todo,,
 tests/unit/pkcs11/test_wrap_kek.py::TestWrapMechanismBranches::test_cbc_defaults_to_pkcs7,1,R5b,todo,,
 tests/unit/pkcs11/test_wrap_kek.py::TestWrapMechanismBranches::test_cbc_passes_the_iv_as_the_mechanism_parameter,1,R5b,todo,,

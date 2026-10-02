@@ -119,7 +119,7 @@ against a vendored, statically linked OpenSSL (§9); source builds via cargo.
 | `ConsoleError` / `ErrorKind` | r2's single error type: `{ kind, message, hint }`, where the `ErrorKind` variant replaces c2's exception subclass and carries its extra fields (§4.2). Every fallible public fn returns `r2_core::Result<T>` |
 | backend seam | The crate-private `trait Backend` inside `r2-pkcs11`: ~25 raw-shaped PKCS#11 calls (u64 CKM codes, `(CK_ATTRIBUTE_TYPE, bytes)` templates, `MechSpec` mechanisms, raw CKR errors). Implemented by `CryptokiBackend` (real) and `FakeBackend` (tests) |
 | CKR choke point | The single place (`CryptokiBackend` + r2-pkcs11's `crate::ckr::translate`) where every cryptoki/RawFns failure becomes a `Ckr { code, function }` value (names looked up in PyKCS11's table, §4.5.5) and is translated per §5.2 |
-| `RawFns` | r2-pkcs11's narrow `unsafe` shim: a second `dlopen` of the same module plus its `CK_FUNCTION_LIST`, used only where the safe cryptoki API is unsound or lossy (unfiltered mechanism list, single-attribute reads, raw-parameter crypto, truncating `C_WrapKey`) |
+| `RawFns` | r2-pkcs11's narrow `unsafe` shim: a second `dlopen` of the same module plus its `CK_FUNCTION_LIST`, used only where the safe cryptoki API is unsound or lossy (unfiltered mechanism list, token info without `utcTime` parsing, single-attribute reads, raw-parameter crypto, truncating `C_WrapKey`) |
 | `MechSpec` | r2-owned enum describing one PKCS#11 mechanism invocation; mapped to cryptoki per the normative table in §5.8–§5.10 |
 | TerminalIo / PlainIo | The two `ConsoleIo` implementations, chosen once by `r2_console::io::open_console_io`: `LineIo<DegradingReader>` (reedline + rpassword on an interactive terminal; a terminal that stops answering degrades to plain reads inside it) and `LineIo<PlainReader>` (line reads from stdin when stdin or stdout is not a terminal, or `TERM=dumb`). See §6 |
 | `LineReader` / `LineIo` | Console-internal reader trait (`Line` / `Interrupted` / `Eof` outcomes) and the one generic type holding all prompt/select/confirm logic over it |
@@ -237,7 +237,7 @@ Compile-time and lint enforcement of c2's CLAUDE.md conventions (workspace lints
 | env mutation only before `C_Initialize` | `disallowed-methods`: `std::env::set_var`/`remove_var`, with exactly one audited production `#[allow]` site in `r2-pkcs11` (`crate::env::apply_env`; edition 2024 makes it `unsafe`; the single-thread invariant is the safety argument; the site asserts no spinner is active) and one test-only site, `r2_testkit::env` (`set_env` + `EnvGuard`, used under `global_state_lock()`; c2 `monkeypatch.setenv`/`delenv`) |
 | no bare `except`; every raised error is a `ConsoleError` | every fallible public fn returns `r2_core::Result<T>`; `clippy::unwrap_used` / `expect_used` = deny outside tests (test exemption mechanism: §4.1.3); panics that still occur are caught per command (§5.1, §11 D4) |
 | mypy strict | the compiler; `#![forbid(unsafe_code)]` in every crate except `r2-pkcs11` and the dev-only `r2-testkit` (`#![deny(unsafe_code)]` + audited `#[allow]`s) |
-| PyKCS11 only in `providers/pkcs11/` | crate graph above; `disallowed-methods` for the lossy cryptoki APIs: `Pkcs11::get_mechanism_list` (drops unknown CKMs), `Session::get_attributes` (fails whole calls / omits refusals), `Session::wrap_key` (no truncation) — use the `RawFns` equivalents |
+| PyKCS11 only in `providers/pkcs11/` | crate graph above; `disallowed-methods` for the lossy cryptoki APIs: `Pkcs11::get_mechanism_list` (drops unknown CKMs), `Pkcs11::get_token_info` (parses `utcTime`; fails on a token with CKF_CLOCK_ON_TOKEN and a non-digit clock), `Session::get_attributes` (fails whole calls / omits refusals), `Session::wrap_key` (no truncation) — use the `RawFns` equivalents |
 | pyca hazards (S0 OpenSSL spike) | `disallowed-methods`: `PKey`/`Rsa`/`EcKey::private_key_from_pem` (prompt on the TTY), every `*_from_pem_passphrase` and `PKey::private_key_from_pkcs8_passphrase` (panic on NUL), `openssl::aes::wrap_key`/`unwrap_key` (deprecated, RFC 3394 only), `openssl::memcmp::eq` (panics on a length mismatch; allowed only inside `r2_core::crypto::ct_eq`) |
 | terminal hazards (S0 terminal spike) | `disallowed-methods`: `std::io::IsTerminal::is_terminal` — it must not decide the TerminalIo/PlainIo switch (it accepts msys/mintty pipes on Windows); `crossterm::tty::IsTty` does. One allowed site: the mintty/msys warning in `r2_console::io::open_console_io` |
 | skeleton stubs are temporary | `clippy::todo` / `unimplemented` = allow until R13, deny from R13 (allow, not warn: `-D warnings` would fail on the skeleton's stubs) |
@@ -781,7 +781,9 @@ never calls crossterm itself and does no terminal I/O (`force_no_tty()`, §4.9.2
   `openssl::aes::wrap_key`, `openssl::aes::unwrap_key` (deprecated; KWP is EVP-only),
   `openssl::memcmp::eq` (allowed only inside `r2_core::crypto::ct_eq`: it panics on a
   length mismatch), the lossy cryptoki APIs `cryptoki::context::Pkcs11::get_mechanism_list`
-  (drops unknown CKMs), `cryptoki::session::Session::get_attributes` (fails whole calls /
+  (drops unknown CKMs), `cryptoki::context::Pkcs11::get_token_info` (parses `utcTime`;
+  fails on a token with CKF_CLOCK_ON_TOKEN and a non-digit clock),
+  `cryptoki::session::Session::get_attributes` (fails whole calls /
   omits refusals) and `cryptoki::session::Session::wrap_key` (no truncation) — use the
   `RawFns` equivalents (§4.5.5) — and `std::io::IsTerminal::is_terminal` (the
   TerminalIo/PlainIo switch uses `crossterm::tty::IsTty`, §4.9.7; one allowed site: the
@@ -2332,7 +2334,9 @@ pub trait TokenInit {
     /// ≤ 32 UTF-8 bytes (Param "token label must be at most 32 bytes" otherwise — r2
     /// validates because cryptoki silently truncates; §11 D15); it is space-padded to the 32-byte
     /// field and `list_tokens` returns it exactly. After C_InitToken the token is re-found
-    /// by label, then login(SO) + C_InitPIN(user_pin) + logout on an RW session.
+    /// by label, then login(SO) + C_InitPIN(user_pin) + logout on an RW session. r2 runs that
+    /// session in place of the provider's own: once that session is opened, a session the
+    /// provider held (and a login on it) is gone (§11 D15(c)).
     fn init_token(&self, slot: u64, label: &str, so_pin: &SecretString, user_pin: &SecretString) -> Result<()>;
     /// §5.13 step 2: set `key=value` in the process environment at the single audited
     /// `set_var` site, then shut this provider down (drop its session, release the shared
@@ -2570,7 +2574,8 @@ pub(crate) fn obj(handle: u64) -> BResult<ObjectHandle> { .. }
 
 R5a-internal (prose only, not materialized by R0, §4.1.1): `backend/raw.rs` holds
 `RawFns` — second `dlopen` of the module + its `CK_FUNCTION_LIST`, with at least
-`mechanism_list(slot) -> BResult<Vec<u64>>`, `get_attr(session, object, type) ->
+`mechanism_list(slot) -> BResult<Vec<u64>>`, `token_info(slot) -> BResult<RawTokenInfo>`,
+`get_attr(session, object, type) ->
 BResult<Option<Zeroizing<Vec<u8>>>>` and the truncating `wrap(...) -> BResult<Vec<u8>>` and
 raw-parameter crypto calls — and the thread-local registry of `Rc<SharedModule { ctx:
 cryptoki::context::Pkcs11, raw: RawFns }>`.
@@ -2594,8 +2599,11 @@ PKCS#11 environment and lifecycle rules (S0 spike 1, binding for R5a):
   are one dlopen handle, so string keys would let one provider's last release
   `C_Finalize` the other's sessions. R5a SoftHSM test: two providers whose libraries are a
   symlink (in a temp dir) and its target share one `SharedModule`; shutting one down leaves
-  the other's session usable, and `is_sole_module_user` is false for both while both are
-  initialized. First acquire: `Pkcs11::new` +
+  the other's session usable (no C_Finalize under it: the survivor, logged in, still
+  generates a key — the sibling shut down only loaded the module, since its C_Logout would
+  end the token-wide login exactly as in c2), and `is_sole_module_user` is false for both
+  while both are initialized (both `set_env_and_reset` calls are refused) and true for the
+  survivor afterwards (its reset succeeds). First acquire: `Pkcs11::new` +
   `initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK))` (the args PyKCS11
   passes); `CKR_CRYPTOKI_ALREADY_INITIALIZED` = success; any other CKR →
   ProviderUnavailable (§5.2). Last release: sessions already dropped; the entry is removed
@@ -2606,18 +2614,32 @@ PKCS#11 environment and lifecycle rules (S0 spike 1, binding for R5a):
   `Rc<SharedModule>` (RW|SERIAL). Switching slot replaces the Option (Drop =
   C_CloseSession). `logout()` keeps the session. `shutdown()` drops the session before
   releasing the module. `C_Login` uses `UserType::User`; `CKR_USER_ALREADY_LOGGED_IN`
-  from the token is swallowed (login state is token-wide).
+  from the token is swallowed (login state is token-wide). An empty PIN is sent as
+  `pPin=NULL, ulPinLen=0` (cryptoki `login(user, None)`), as PyKCS11 does — never a
+  non-NULL empty buffer, which tokens count as CKR_PIN_INCORRECT (SoftHSM answers
+  CKR_ARGUMENTS_BAD → "PKCS#11 login failed (CKR_ARGUMENTS_BAD)", c2 parity).
 - Capability discovery folds `RawFns::mechanism_list(slot) -> Vec<u64>`;
   `Pkcs11::get_mechanism_list` MUST NOT be used (it drops every CKM without a TryFrom
   arm, incl. all vendor CKMs).
+- Token info is a raw `C_GetTokenInfo` through `RawFns::token_info(slot)`, which reads
+  only label, manufacturerID, model, serialNumber (UTF-8 with invalid sequences dropped —
+  PyKCS11 `errors="ignore"`, no U+FFFD — then trailing spaces and NULs trimmed) and
+  `CKF_TOKEN_INITIALIZED`; `Pkcs11::get_token_info` MUST NOT be used — its
+  `TokenInfo` conversion parses `utcTime` whenever CKF_CLOCK_ON_TOKEN is set and fails on
+  a blank or non-digit clock, which would make `slots`/`login`/session recovery fail on
+  such a token, while PyKCS11 never parses `utcTime` (c2 parity).
 - Attribute reads are one attribute per call through `RawFns::get_attr` (None =
-  SENSITIVE, TYPE_INVALID or unavailable — i.e. the size pass returned `ulValueLen ==
-  CK_UNAVAILABLE_INFORMATION`); `Session::get_attributes` MUST NOT be used. ULONG values
+  the size pass answered CKR_ATTRIBUTE_SENSITIVE, CKR_ATTRIBUTE_TYPE_INVALID or
+  CKR_ARGUMENTS_BAD — PyKCS11 `getAttributeValue`/`_fragmented` parity — or returned
+  `ulValueLen == CK_UNAVAILABLE_INFORMATION`; any other CKR is an error); `Session::get_attributes` MUST NOT be used. ULONG values
   are native-endian `CK_ULONG` of `size_of::<CK_ULONG>()` bytes; a ULONG VALUE that happens
   to equal `CK_UNAVAILABLE_INFORMATION` is a real value and is reported numerically (e.g.
   `CKA_KEY_GEN_MECHANISM: 18446744073709551615`, §5.16 — c2/PyKCS11 parity); BOOL = 1 byte.
   A CKA_ID read of `Some(empty)` becomes `KeyRef.key_id = None` (c2 `or None`; the §4.3
-  invariant) — `get_attr` itself still reports the bytes it got.
+  invariant) — `get_attr` itself still reports the bytes it got. CKA_LABEL and
+  CKA_APPLICATION (PyKCS11's `isString` attributes) decode as UTF-8 with invalid sequences
+  dropped (`errors="ignore"`); CKA_APPLICATION is reported only when the DECODED text is
+  non-empty (c2 `if app_v:`). Vendor STR values keep c2's own `errors="replace"`.
 - Templates cross the seam as `RawAttr = (u64, Zeroizing<Vec<u8>>)` (they carry
   CKA_VALUE / private RSA components on import and unwrap) and become
   `Attribute::VendorDefined((AttributeType::VendorDefined(CK_ATTRIBUTE_TYPE::try_from(t)?), bytes))`
@@ -2819,6 +2841,7 @@ pub(crate) trait Backend {
     /// (§4.5.5; TokenInit::set_env_and_reset).
     fn is_sole_module_user(&self) -> bool;
     fn slots_with_token(&self) -> BResult<Vec<u64>>;
+    /// Raw C_GetTokenInfo (RawFns; `utcTime` never parsed).
     fn token_info(&self, slot: u64) -> BResult<RawTokenInfo>;
     /// Unfiltered C_GetMechanismList (RawFns).
     fn mechanism_list(&self, slot: u64) -> BResult<Vec<u64>>;
@@ -2833,7 +2856,7 @@ pub(crate) trait Backend {
     fn init_token(&self, slot: u64, so_pin: &SecretString, label: &str) -> BResult<()>;
     fn init_pin(&self, pin: &SecretString) -> BResult<()>;
     fn find_objects(&self, template: &[RawAttr]) -> BResult<Vec<u64>>;
-    /// One attribute per call; None = sensitive, type-invalid or unavailable.
+    /// One attribute per call; None = sensitive, type-invalid, arguments-bad or unavailable.
     fn get_attr(&self, object: u64, attribute: u64) -> BResult<Option<Zeroizing<Vec<u8>>>>;
     /// One C_SetAttributeValue call (all-or-nothing).
     fn set_attrs(&self, object: u64, template: &[RawAttr]) -> BResult<()>;
@@ -2862,11 +2885,14 @@ use r2_core::error::ConsoleError;
 
 use crate::backend::BackendError;
 
-/// Implements the §5.2 table (names via `catalog::ckr_name`). `token_label` = the label in
-/// the CKR_PIN_* texts: callers pass the logged-in token's label (or the token being
-/// logged in to); None renders "?" (c2's default). The CALLER logs
-/// "{provider}: {context} failed with {CKR}" at INFO (it knows the provider name).
-pub(crate) fn translate(err: BackendError, context: &str, token_label: Option<&str>) -> ConsoleError { .. }
+/// Implements the §5.2 table (names via `catalog::ckr_name`). `provider` = the provider
+/// instance name (the ``login <provider>`` / ``slots <provider>`` texts of the table).
+/// `token_label` = the label in the CKR_PIN_* texts: callers pass the logged-in token's
+/// label (or the token being logged in to); None renders "?" (c2's default). The CALLER
+/// logs "{provider}: {context} failed with {CKR}" at INFO. For `LibraryUnavailable` the
+/// `context` is the library path ("cannot load PKCS#11 library {context}: {detail}"):
+/// `Provider::initialize` renders every load failure through it.
+pub(crate) fn translate(err: BackendError, provider: &str, context: &str, token_label: Option<&str>) -> ConsoleError { .. }
 ```
 
 `Backend::initialize` reports any `C_Initialize` CKR other than
@@ -3441,7 +3467,12 @@ apply):
   - BYTES needs Bytes, else "template attribute {name} expects bytes, got {T}" (hint "use a
     0x… hex value");
   - STR needs Str (or a Symbol, which is a string in c2), else "template attribute {name}
-    expects a string, got {T}".
+    expects a string, got {T}". At encoding (c2 `_entry_value`), a non-vendor STR value
+    starting with CKO_/CKK_/CKC_/CKM_ is resolved like a ULONG symbol, whatever the
+    attribute: an unknown name → the same Param "unknown PKCS#11 constant {v!r}" (also for
+    the CKA_LABEL row the injected label later overwrites); a known one is stored as its
+    decimal text (PyKCS11 `SetString(str(int))`), e.g. CKA_APPLICATION `CKM_SHA256` →
+    `592`.
   Vendor (`custom_attributes`) values are byte-encoded explicitly after that check: BOOL →
   1 byte, ULONG → native-endian CK_ULONG — Ulong ONLY: a symbol or string fails with c2's
   "vendor ULONG attribute expects an integer, got {value!r}" (vendor ULONGs never resolve
@@ -5945,8 +5976,9 @@ error (0x%08X)` (code with `CKR_VENDOR_DEFINED` masked off) for vendor codes, el
 (`CKF_SERIAL_SESSION | CKF_RW_SESSION`, `open_rw_session`), held in
 `RefCell<Option<Session>>` beside the provider's `Rc<SharedModule>`; `login` enumerates
 tokens (`get_slots_with_token()` = `getSlotList(tokenPresent=True)`, plus
-`get_token_info`; label, serial, model and manufacturer are trimmed of trailing spaces
-**and** NULs — c2 `_strip_padding`; cryptoki trims spaces only), selects by token-label
+a raw `C_GetTokenInfo` through `RawFns::token_info`, never cryptoki's `get_token_info`,
+which fails on a non-digit `utcTime` — §4.5.5; label, serial, model and manufacturer are
+trimmed of trailing spaces **and** NULs — c2 `_strip_padding`), selects by token-label
 arg / `--slot` (`Slot::try_from(u64)`) / config default (`slot`, `token_label`) /
 `select()` prompt, opens the session and `C_Login(CKU_USER)`
 (`Session::login(UserType::User, Some(&AuthPin))`, the PIN passing through as a
@@ -6822,7 +6854,8 @@ Codec + seeding policy live in `r2-services::templatefile` (§4.1).
 
 Attribute reads (r2, normative): one attribute per call through
 `RawFns::get_attr(session, object, type) -> Option<Vec<u8>>` (size pass, then value pass;
-`None` = sensitive, type-invalid or otherwise unavailable — the counterpart of c2's
+`None` = sensitive, type-invalid, arguments-bad (the three codes PyKCS11's
+`getAttributeValue` turns into a None value) or otherwise unavailable — the counterpart of c2's
 one-by-one `_read_one_attr`). cryptoki's typed `Session::get_attributes` is not used: it
 silently omits refused attributes and fails the **whole** call with `Error::NotSupported`
 when a value has no typed decoding — SoftHSM returns two such values on ordinary objects
@@ -7598,6 +7631,25 @@ merges).**
     `InvalidUnwrap` (the integrity failure c2 reached), and a wrap payload over 2³¹ − 1
     bytes is the ValueError `The key to wrap must be at most 2147483647 bytes (OpenSSL key
     wrap limit)` where c2's pure-Python RFC 3394/5649 loop would have wrapped it.
+  - (n) a `providers.pkcs11[].env` entry Python's `os.environ` cannot set (an empty name,
+    a name containing `=`, a NUL in the name or value): c2's initialize let `ValueError`
+    (`OSError` for the empty name) escape on the provider's first use; `std::env::set_var`
+    would panic. r2 checks every entry before setting any and raises ProviderUnavailable
+    `cannot load PKCS#11 library {library}: {detail}: {py_repr(name)}` (detail `illegal
+    environment variable name` or `embedded null byte`; hint `check providers.pkcs11[].env
+    in the configuration`); the wizard's `set_env_and_reset` refuses such a pair with
+    Provider `cannot set environment variable {py_repr(name)}: {detail}`.
+  - (o) a token whose C_GetMechanismList includes a code below CKM_VENDOR_DEFINED that
+    PyKCS11's `CKM` table does not name (a CKM newer than PyKCS11): `getMechanismList`
+    raised `KeyError` out of c2's `login` (and session recovery); r2 keeps the code (the
+    unfiltered list, §4.5.5) and the login succeeds. Listed vendor codes are named
+    `CKM_VENDOR_DEFINED_0x<HEX>` and accepted by template ULONG symbol resolution for the
+    rest of the process, as PyKCS11's global table did.
+  - (p) PKCS#11 import (`load`/`copy` to a pkcs11 provider) of private key material pyca
+    loads only as `UnsupportedAlgorithm` (e.g. a curve pyca does not support): c2's
+    `_private_material_attrs` caught only ValueError/TypeError, so it crashed; r2 raises
+    KeyParse `private key material is not DER PKCS#8: {pyca detail}` (likewise
+    `public key material is not DER SPKI: …`).
 - *Reason*: every expected failure must be a `ConsoleError`; OpenSSL would reject the CN
   with a different text anyway.
 - *Verified by*: R8 certops test (a), R6 keyparse/x509info/formats fixtures (b, h, i, j:
@@ -7617,7 +7669,11 @@ merges).**
   codec differential vectors (e), R2 loader tests (d, f: `invalid_utf8_is_a_read_error`,
   `deleted_working_directory_skips_the_cwd_candidate`, the `LOAD` vectors; g:
   `discovery::expand_user_is_python_expanduser`,
-  `discovery::expand_user_resolves_other_users`).
+  `discovery::expand_user_resolves_other_users`), R5a session test (l:
+  `unsettable_env_entries_are_errors_not_panics`), R5a capability/objects tests (m:
+  `unknown_ckms_survive_the_unfiltered_mechanism_list`,
+  `listed_vendor_mechanisms_resolve_by_pykcs11_name`; n: the pyca gate of
+  `key_material_is_gated_by_pycas_der_loaders`).
 
 **D13 — Ctrl-C while a command runs is honored at step boundaries.**
 - *Description*: c2's `KeyboardInterrupt` surfaced at the next Python bytecode after the
@@ -7660,10 +7716,19 @@ merges).**
   so a non-ASCII label of ≤ 32 characters but > 32 bytes was accepted by c2 and is re-asked
   by r2 (cryptoki's `init_token` would silently truncate it). As a backstop,
   `TokenInit::init_token` itself refuses such a label with `Param` `token label must be at
-  most 32 bytes` (an r2 text; unreachable through the wizard).
+  most 32 bytes` (an r2 text; unreachable through the wizard). (c) `TokenInit::init_token`
+  runs its SO session (login SO, C_InitPIN, logout) on the provider's one backend session:
+  once that session is opened (after C_InitToken succeeded), a session the provider held — kept after `logout`, or a
+  user login — is closed and the provider reports logged out; c2 opened a separate
+  PyKCS11 session and left its own session and login untouched. A failure before that
+  (e.g. C_InitToken with a wrong SO PIN) leaves the provider's session as it was. Unobservable through the
+  wizard, which only runs from `login` while logged out (where a fresh login opens a new
+  session anyway).
 - *Reason*: cryptoki module-state semantics (one context's `C_Finalize` kills every session
   on the path) and label truncation, S0 cryptoki spike.
-- *Verified by*: R11 wizard tests (shared-path case, multibyte label).
+- *Verified by*: R11 wizard tests (shared-path case, multibyte label); R5a session tests
+  (c: `init_token_on_a_logged_in_provider_ends_its_login`,
+  `failed_init_token_keeps_the_provider_session`).
 
 **D16 — NUL bytes in OpenSSL C-string parameters (PKCS#12 parse path only).**
 - *Description*: rust-openssl's `Pkcs12::parse2` `CString::new(..).unwrap()`s the

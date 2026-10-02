@@ -21,6 +21,7 @@ disallowed-methods = [
     { path = "openssl::aes::unwrap_key", reason = "deprecated; KWP is EVP-only" },
     { path = "openssl::memcmp::eq", reason = "panics on a length mismatch; only r2_core::crypto::ct_eq" },
     { path = "cryptoki::context::Pkcs11::get_mechanism_list", reason = "drops unknown CKMs; use RawFns::mechanism_list" },
+    { path = "cryptoki::context::Pkcs11::get_token_info", reason = "parses utcTime and fails on a non-digit clock; use RawFns::token_info" },
     { path = "cryptoki::session::Session::get_attributes", reason = "fails whole calls / omits refusals; use RawFns::get_attr" },
     { path = "cryptoki::session::Session::wrap_key", reason = "no truncation; use RawFns::wrap" },
     { path = "std::io::IsTerminal::is_terminal", reason = "use crossterm::tty::IsTty (one allowed site: open_console_io)" },
