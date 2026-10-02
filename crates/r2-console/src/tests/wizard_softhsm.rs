@@ -203,7 +203,6 @@ fn softhsm_wizard_yields_working_provider() {
 }
 
 #[test]
-#[ignore = "needs R5b's Pkcs11Provider::encrypt/decrypt (merge checklist: drop this ignore when R11 merges after R5b)"]
 fn softhsm_wizard_token_round_trips_aes_gcm() {
     // The GCM round trip of c2's test_wizard_yields_working_provider.
     let wiz = WizardEnv::new();

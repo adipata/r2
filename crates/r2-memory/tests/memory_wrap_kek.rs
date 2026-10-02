@@ -372,14 +372,16 @@ fn test_pkcs1_unwrap_of_a_bogus_blob_leaks_no_padding_detail() {
     // decrypt branch. Either way the message says nothing about the padding.
     let provider = make();
     let private = import_private_key(&provider, &rsa_2048(), "rsakek");
-    let err = provider
-        .unwrap_key(
-            &private,
-            &mech("RSA-PKCS1", &[]),
-            &[0x01u8; 256],
-            &unwrap_req(KeyAlgorithm::Aes, KeyClass::Secret, "nope", None, None),
-        )
-        .unwrap_err();
+    let result = provider.unwrap_key(
+        &private,
+        &mech("RSA-PKCS1", &[]),
+        &[0x01u8; 256],
+        &unwrap_req(KeyAlgorithm::Aes, KeyClass::Secret, "nope", None, None),
+    );
+    // Under implicit rejection the pseudo-random plaintext is occasionally 16, 24 or 32
+    // bytes long, which the AES backstop accepts: an unwrap that "succeeds" with garbage
+    // is exactly the oracle-free behaviour this test protects, so it is not a failure.
+    let Err(err) = result else { return };
     assert!(!err.message.to_lowercase().contains("padding"));
     assert!(
         err.message == "RSA-PKCS1 unwrap failed" || err.message.contains("AES key must be"),

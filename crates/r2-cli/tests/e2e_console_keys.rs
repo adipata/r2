@@ -431,7 +431,6 @@ mod softhsm {
     /// The full c2 session, CSRs included: on-token C_Sign is R5b's (merge checklist: the
     /// R5b merge deletes this ignore).
     #[test]
-    #[ignore = "needs R5b (merge checklist)"]
     fn test_console_keys_end_to_end_softhsm() {
         end_to_end(true);
     }

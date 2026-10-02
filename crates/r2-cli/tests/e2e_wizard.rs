@@ -97,7 +97,6 @@ impl Setup {
 }
 
 #[test]
-#[ignore = "needs R8's `login` command (merge checklist: drop this ignore when R11 merges after R8)"]
 fn softhsm_wizard_e2e_first_login_sets_up_and_persists() {
     let setup = Setup::new();
     let (out, code) = setup.session(&[
@@ -159,7 +158,6 @@ fn softhsm_wizard_e2e_first_login_sets_up_and_persists() {
 }
 
 #[test]
-#[ignore = "needs R8's `login` command (merge checklist: drop this ignore when R11 merges after R8)"]
 fn softhsm_wizard_e2e_decline_keeps_memory_usable() {
     let setup = Setup::new();
     let original = std::fs::read_to_string(&setup.config).unwrap();

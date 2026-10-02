@@ -1677,7 +1677,6 @@ fn softhsm_registry() -> (ProviderRegistry, Rc<FakeProvider>) {
 }
 
 #[test]
-#[ignore = "needs R8's `login` command (merge checklist: drop this ignore when R11 merges after R8)"]
 fn test_login_softhsm_live_wizard_skips_for_initialized_token() {
     // No stubbing: the REAL wizard is consulted; the FakeProvider token carries
     // label+serial → token_needs_init is false and the normal login proceeds.
@@ -1732,7 +1731,6 @@ fn uninitialized_registry() -> (ProviderRegistry, Rc<FakeProvider>) {
 }
 
 #[test]
-#[ignore = "needs R8's `login` command (merge checklist: drop this ignore when R11 merges after R8)"]
 fn test_login_softhsm_live_wizard_triggers_and_decline_stops() {
     // No stubbing: an uninitialized token triggers the REAL wizard; declining its confirm
     // stops the login cleanly (§5.13 — the provider stays listed).
