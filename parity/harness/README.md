@@ -57,9 +57,12 @@ The user config file case (`transcript_user_config`) appends `fixtures/user_conf
   blank lines are dropped. Both tools run with `COLUMNS=200` (the token suite with 1000, so
   no long attribute value is cropped by rich or folded by r2 — the D1 overflow rule).
 - **ULONG ≥ 2^63** (§11 D18): `18446744073709551615` is compared as c2's `-1`.
-- **Token enumeration** (token suite): `handle <n>` loses its number and consecutive table
-  rows starting with `<provider>:` are sorted — SoftHSM's handle numbers and find order
-  depend on its token file names, which differ between runs of either tool.
+- **Token enumeration** (token suite only; `normalize(..., token_provider="hsm")`):
+  `handle <n>` loses its number and consecutive table rows starting with `hsm:` are
+  sorted — SoftHSM's handle numbers and find order depend on its token file names, which
+  differ between runs of either tool. The transcript and interop suites reorder nothing:
+  memory listing order is compared (`test_normalize.py` checks that a swapped `keys mem`
+  row pair is reported).
 - The work and fixture directories become `{WORK}`, `{SRC}`, `{FIX}`.
 
 Nothing else is normalized.

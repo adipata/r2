@@ -65,6 +65,10 @@ class Ctx:
     failures: list[str] = field(default_factory=list)
 
 
+# the shared-token suite's PKCS#11 provider name (sessions use ``hsm:<label>`` refs)
+TOKEN_PROVIDER = "hsm"
+
+
 def config_text(tool: str, work: Path, softhsm_lib: str | None, extra: str = "") -> str:
     text = (
         "app:\n"
@@ -77,7 +81,7 @@ def config_text(tool: str, work: Path, softhsm_lib: str | None, extra: str = "")
         "  autodetect: false\n"
     )
     if softhsm_lib:
-        text += f"providers:\n  pkcs11:\n    - name: hsm\n      library: {softhsm_lib}\n"
+        text += f"providers:\n  pkcs11:\n    - name: {TOKEN_PROVIDER}\n      library: {softhsm_lib}\n"
     return text + extra
 
 
@@ -157,9 +161,11 @@ def compare(
     works: dict[str, Path],
     inputs: dict[str, list[str]],
     secrets: set[str] | None = None,
+    token_provider: str | None = None,
 ) -> bool:
     """``outputs``/``works``/``inputs`` are keyed by label ``[<producer>->]<consumer>``
-    whose last ``:``-separated part is the tool that produced the transcript."""
+    whose last ``:``-separated part is the tool that produced the transcript.
+    ``token_provider`` (token suite only) enables the token-enumeration normalization."""
     norm = {
         label: normalize(
             text,
@@ -168,6 +174,7 @@ def compare(
             str(FIXTURES),
             inputs[label],
             secrets or set(),
+            token_provider,
         )
         for label, text in outputs.items()
     }
@@ -273,7 +280,9 @@ def suite_token(ctx: Ctx) -> None:
                 )
                 works[label] = uwork
                 inputs[label] = [line.replace(str(cwork), "{SRC}") for line in lines]
-        compare(ctx, stem, outputs, works, inputs, set(headers.get("secret", [])))
+        compare(
+            ctx, stem, outputs, works, inputs, set(headers.get("secret", [])), TOKEN_PROVIDER
+        )
 
 
 SUITES = {"transcript": suite_transcript, "interop": suite_interop, "token": suite_token}

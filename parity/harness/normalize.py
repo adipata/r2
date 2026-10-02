@@ -21,9 +21,11 @@ records as a deviation (§11) or as non-TTY noise is normalized away, nothing el
   whitespace collapse, blank lines are dropped — cell CONTENT, order and wording remain.
 - PKCS#11 ULONG values >= 2^63 (§11 D18): r2 shows CK_UNAVAILABLE_INFORMATION unsigned
   (``18446744073709551615``) where c2 showed PyKCS11's signed ``-1``.
-- Token enumeration order (shared-token suite): SoftHSM hands out object handles and
-  find order from its token files, which differ between runs, so ``handle <n>`` loses its
-  number and each run of consecutive table rows starting with ``<provider>:`` is sorted.
+- Token enumeration order (shared-token suite ONLY, opt-in via ``token_provider``):
+  SoftHSM hands out object handles and find order from its token files, which differ
+  between runs, so ``handle <n>`` loses its number and each run of consecutive table rows
+  starting with ``<token_provider>:`` is sorted. Transcript and interop runs keep both:
+  memory listing order (insertion order) is c2 behavior the harness compares.
 - The per-run work directory (``{WORK}``) and the fixture directory (``{FIX}``).
 """
 
@@ -128,8 +130,12 @@ def normalize(
     fixtures: str,
     inputs: list[str] | None = None,
     secrets: set[str] | None = None,
+    token_provider: str | None = None,
 ) -> list[str]:
-    """Normalized, comparable lines of one tool's stdout."""
+    """Normalized, comparable lines of one tool's stdout.
+
+    ``token_provider`` (shared-token suite only) names the PKCS#11 provider whose handle
+    numbers and table-row order are run-dependent; without it nothing is reordered."""
     if tool == "c2":
         # prompt_toolkit's 80-column wrap: the 80th cell is written after ``\r`` + 79
         # blanks, then the line breaks; rejoin it so the doubled echo is one line again
@@ -147,17 +153,18 @@ def normalize(
         line = line.replace("18446744073709551615", "-1")  # §11 D18
         line = _BOX_RE.sub(" ", line)
         line = _WS_RE.sub(" ", line).strip()
-        line = _HANDLE_RE.sub("handle N", line)
+        if token_provider:
+            line = _HANDLE_RE.sub("handle N", line)
         if line:
             out.append(line)
-    return _sort_rows(out)
+    return _sort_rows(out, token_provider) if token_provider else out
 
 
-def _sort_rows(lines: list[str]) -> list[str]:
+def _sort_rows(lines: list[str], provider: str) -> list[str]:
     out: list[str] = []
     run: list[str] = []
     for line in lines + [""]:
-        if _ROW_RE.match(line):
+        if line.startswith(provider + ":") and _ROW_RE.match(line):
             run.append(line)
             continue
         out.extend(sorted(run))

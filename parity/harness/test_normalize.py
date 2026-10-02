@@ -109,5 +109,33 @@ class PromptsAreCompared(unittest.TestCase):
         self.assertNotEqual(norm("c2", text), norm("r2", r2_out()))
 
 
+class RowOrderIsCompared(unittest.TestCase):
+    MEM_AB = "r2> keys mem\n mem:a  secret  aes\n mem:b  secret  aes\n"
+    MEM_BA = "r2> keys mem\n mem:b  secret  aes\n mem:a  secret  aes\n"
+
+    def test_memory_row_order_is_a_difference(self) -> None:
+        # memory listing order (insertion order) is c2 behavior: never sorted away
+        self.assertNotEqual(
+            normalize(self.MEM_AB, "r2", "/w", "/f", ["keys mem"]),
+            normalize(self.MEM_BA, "r2", "/w", "/f", ["keys mem"]),
+        )
+        self.assertNotEqual(
+            normalize(self.MEM_AB, "r2", "/w", "/f", ["keys mem"], token_provider="hsm"),
+            normalize(self.MEM_BA, "r2", "/w", "/f", ["keys mem"], token_provider="hsm"),
+        )
+
+    def test_token_rows_and_handles_are_normalized_only_in_token_mode(self) -> None:
+        ab = "r2> keys hsm\n hsm:a  secret  aes\n hsm:b  secret  aes\nhandle 7\n"
+        ba = "r2> keys hsm\n hsm:b  secret  aes\n hsm:a  secret  aes\nhandle 9\n"
+        self.assertEqual(
+            normalize(ab, "r2", "/w", "/f", ["keys hsm"], token_provider="hsm"),
+            normalize(ba, "r2", "/w", "/f", ["keys hsm"], token_provider="hsm"),
+        )
+        self.assertNotEqual(
+            normalize(ab, "r2", "/w", "/f", ["keys hsm"]),
+            normalize(ba, "r2", "/w", "/f", ["keys hsm"]),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
