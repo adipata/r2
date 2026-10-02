@@ -7988,6 +7988,12 @@ merges).**
     `str.isdigit()`), which is ASCII-only too: CPython's `isdigit()` also accepts e.g.
     superscript digits, for which c2's following `int()` then raised (unexpected-error
     path) and r2 answers "invalid choice …" / "… is not a row number";
+  - a template-editor ULONG value (§5.12 `<n>=<value>` / `add CKA_X=<value>`) above
+    18446744073709551615 is refused in the editor with Param `<name>: <value!r> does not fit
+    a 64-bit CK_ULONG` (hint `the largest value is 18446744073709551615`; editing continues)
+    where c2 stored the Python int (`AttrValue::Ulong` is a `u64`, §4.7) — any well-formed
+    integer text counts, also beyond i128; a negative one keeps c2's `<name> must not be
+    negative`;
   - `text::py_os_error_str` always renders the POSIX `[Errno n] …` form (CPython on Windows
     prints `[WinError n] …` for some calls);
   - PKCS#11 ULONG attribute values ≥ 2^63 read back from a token (notably

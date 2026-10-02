@@ -43,14 +43,14 @@ tests/integration/test_console_crypto.py::test_ops_table_for_memory_provider,1,R
 tests/integration/test_console_crypto.py::test_ops_key_filter_restricts_to_the_key,1,R9,ported,r2-console tests::console_crypto::test_ops_key_filter_restricts_to_the_key,
 tests/integration/test_console_keys.py::test_console_keys_end_to_end,1,R8,ported,r2-cli::e2e_console_keys softhsm::test_console_keys_end_to_end_softhsm ; r2-cli::e2e_console_keys softhsm::console_keys_end_to_end_without_signing_softhsm ; r2-cli::e2e_console_keys memory_console_keys_end_to_end,"softhsm; drives the real checklist editor ('ok' answers, R10): port once R10 merges or script an accept-all editor until then | R8: the full session (CSRs on token) is #[ignore = ""needs R5b (merge checklist)""] until R5b's C_Sign merges; the session without CSRs runs now; template-editor answers are probed at run time (identity editor vs R10)"
 tests/integration/test_console_keys.py::test_export_refusal_and_p12_self_signed,1,R8,ported,r2-cli::e2e_console_keys softhsm::test_export_refusal_and_p12_self_signed_softhsm,"softhsm; drives the real checklist editor ('ok' answers, R10): port once R10 merges or script an accept-all editor until then | R8: template-editor answers probed at run time (identity editor vs R10)"
-tests/integration/test_console_keys.py::test_generate_honors_template_editor_cka_id,1,R10,todo,,softhsm; editor `add CKA_ID=...` + identity-row note through the real checklist editor (R10); provider identity resolution is R5a
+tests/integration/test_console_keys.py::test_generate_honors_template_editor_cka_id,1,R10,ported,r2-console tests::template_editor_softhsm::test_generate_honors_template_editor_cka_id_softhsm,softhsm; editor `add CKA_ID=...` + identity-row note through the real checklist editor (R10); provider identity resolution is R5a
 tests/integration/test_console_keys.py::test_key_template_dump_and_reseed,1,R14,todo,,softhsm; SoftHSM dump -> reseed round trip
-tests/integration/test_copy.py::TestExtractableAesCopies::test_mem_to_softhsm,1,R10,todo,,softhsm
-tests/integration/test_copy.py::TestExtractableAesCopies::test_softhsm_to_mem,1,R10,todo,,softhsm
-tests/integration/test_copy.py::TestExtractableAesCopies::test_softhsm_to_softhsm,1,R10,todo,,softhsm
-tests/integration/test_copy.py::TestExtractableAesCopies::test_all_three_routes_agree,1,R10,todo,,softhsm
-tests/integration/test_copy.py::TestNonExtractableRefusal::test_decline_offer_raises_key_not_exportable,1,R10,todo,,softhsm
-tests/integration/test_copy.py::TestNonExtractableRefusal::test_accept_offer_copies_public_part,1,R10,todo,,softhsm
+tests/integration/test_copy.py::TestExtractableAesCopies::test_mem_to_softhsm,1,R10,ported,r2-services::transfer_softhsm test_mem_to_softhsm,softhsm
+tests/integration/test_copy.py::TestExtractableAesCopies::test_softhsm_to_mem,1,R10,ported,r2-services::transfer_softhsm test_softhsm_to_mem,softhsm
+tests/integration/test_copy.py::TestExtractableAesCopies::test_softhsm_to_softhsm,1,R10,ported,r2-services::transfer_softhsm test_softhsm_to_softhsm,softhsm
+tests/integration/test_copy.py::TestExtractableAesCopies::test_all_three_routes_agree,1,R10,ported,r2-services::transfer_softhsm test_all_three_routes_agree,softhsm
+tests/integration/test_copy.py::TestNonExtractableRefusal::test_decline_offer_raises_key_not_exportable,1,R10,ported,r2-services::transfer_softhsm test_decline_offer_raises_key_not_exportable,softhsm
+tests/integration/test_copy.py::TestNonExtractableRefusal::test_accept_offer_copies_public_part,1,R10,ported,r2-services::transfer_softhsm test_accept_offer_copies_public_part,softhsm
 tests/integration/test_custom_mechanism.py::test_custom_mechanism_ops_row_and_dispatch_with_prompts,1,R13,todo,,
 tests/integration/test_custom_mechanism.py::test_custom_mechanism_hidden_without_token_support,1,R13,todo,,
 tests/integration/test_custom_mechanism.py::test_custom_ckm_passthrough_on_softhsm,1,R13,todo,,softhsm
@@ -67,9 +67,9 @@ tests/integration/test_load_kek.py::test_sensitive_key_exports_wrapped_but_not_p
 tests/integration/test_objects_softhsm.py::test_hmac_matches_stdlib_and_crosses_providers,1,R5b,ported,r2-pkcs11::softhsm_crypto softhsm_hmac_matches_openssl,"softhsm; PLAN R13 card lists this file but it holds no console e2e test: provider-level -> R5b, transfer::copy_key legs -> R10 | R5b: the MemoryProvider legs are not exchanged directly (r2-pkcs11 may not dev-depend on r2-memory, §4.1.2): the token is checked against OpenSSL HMAC both ways (sign == OpenSSL, verify accepts the OpenSSL MAC, incl. mac_len=12), and MemoryProvider == stdlib HMAC is r2-memory::memory_objects test_hmac_matches_stdlib_for_every_hash; residual gap (a direct token<->memory exchange) left to R10 transfer HMAC copy / R13 e2e"
 tests/integration/test_objects_softhsm.py::test_generate_generic_on_token_and_export,1,R5b,ported,r2-pkcs11::softhsm_crypto softhsm_generate_generic_on_token_and_export,"softhsm; PLAN R13 card lists this file but it holds no console e2e test: provider-level -> R5b, transfer::copy_key legs -> R10"
 tests/integration/test_objects_softhsm.py::test_short_key_sha512_is_a_key_size_range_error,1,R5b,ported,r2-pkcs11::softhsm_crypto softhsm_short_key_sha512_is_a_key_size_range_error,"softhsm; xfail(strict=False) in c2; PLAN R13 card lists this file but it holds no console e2e test: provider-level -> R5b, transfer::copy_key legs -> R10 | r2 asserts it outright: SoftHSM 2.6.1 and 2.7.0 both enforce the HMAC key-length rule (S0)"
-tests/integration/test_objects_softhsm.py::test_generic_secret_copy_round_trip,1,R10,todo,,"softhsm; PLAN R13 card lists this file but it holds no console e2e test: provider-level -> R5b, transfer::copy_key legs -> R10; transfer::copy_key mem<->SoftHSM"
-tests/integration/test_objects_softhsm.py::test_data_object_lifecycle_on_token,1,R10,todo,,"softhsm; PLAN R13 card lists this file but it holds no console e2e test: provider-level -> R5b, transfer::copy_key legs -> R10; provider data-object lifecycle (R5a/R5b) plus transfer::copy_key legs"
-tests/integration/test_objects_softhsm.py::test_certificate_copy_round_trip,1,R10,todo,,"softhsm; PLAN R13 card lists this file but it holds no console e2e test: provider-level -> R5b, transfer::copy_key legs -> R10; transfer::copy_key mem<->SoftHSM"
+tests/integration/test_objects_softhsm.py::test_generic_secret_copy_round_trip,1,R10,ported,r2-services::transfer_softhsm test_generic_secret_copy_round_trip,"softhsm; PLAN R13 card lists this file but it holds no console e2e test: provider-level -> R5b, transfer::copy_key legs -> R10; transfer::copy_key mem<->SoftHSM"
+tests/integration/test_objects_softhsm.py::test_data_object_lifecycle_on_token,1,R10,ported,r2-services::transfer_softhsm test_data_object_lifecycle_on_token ; r2-services::transfer_softhsm data_object_extras_travel_token_to_token_softhsm,"softhsm; PLAN R13 card lists this file but it holds no console e2e test: provider-level -> R5b, transfer::copy_key legs -> R10; provider data-object lifecycle (R5a/R5b) plus transfer::copy_key legs"
+tests/integration/test_objects_softhsm.py::test_certificate_copy_round_trip,1,R10,ported,r2-services::transfer_softhsm test_certificate_copy_round_trip,"softhsm; PLAN R13 card lists this file but it holds no console e2e test: provider-level -> R5b, transfer::copy_key legs -> R10; transfer::copy_key mem<->SoftHSM"
 tests/integration/test_pkcs11_provider.py::TestLogin::test_login_status_logout,1,R5a,ported,r2-pkcs11::softhsm_provider softhsm_login_status_logout,softhsm; R5a accept: SoftHSM login
 tests/integration/test_pkcs11_provider.py::TestLogin::test_wrong_pin,1,R5a,ported,r2-pkcs11::softhsm_provider softhsm_wrong_pin,softhsm; R5a accept: SoftHSM login
 tests/integration/test_pkcs11_provider.py::TestGenerate::test_generate_aes_applies_template,1,R5a,ported,r2-pkcs11::softhsm_provider softhsm_generate_aes_applies_template,softhsm; R5a accept: generate
@@ -141,17 +141,17 @@ tests/unit/console/test_completer.py::test_complete_refs_labels_containing_delim
 tests/unit/console/test_completer.py::test_complete_refs_selector_stage_logged_out_prefix_only,1,R7,ported,r2-console tests::completer::test_complete_refs_selector_stage_logged_out_prefix_only,
 tests/unit/console/test_completer.py::test_complete_refs_candidates_always_parse,1,R7,ported,r2-console tests::completer::test_complete_refs_candidates_always_parse,
 tests/unit/console/test_completer.py::test_selector_stage_through_console_completer,1,R7,ported,r2-console tests::completer::test_selector_stage_through_console_completer,R7: console path driven with a `delete` stand-in command (R8's keys module not merged in R7)
-tests/unit/console/test_copy_cmd.py::test_copy_is_auto_discovered,1,R10,todo,,Rust: the build.rs aggregator registers `copy`
-tests/unit/console/test_copy_cmd.py::test_copy_mem_to_pkcs11_end_to_end,1,R10,todo,,
-tests/unit/console/test_copy_cmd.py::test_copy_editor_defaults_keep_the_copy_locked_down,1,R10,todo,,
-tests/unit/console/test_copy_cmd.py::test_copy_honors_label_and_id_options,1,R10,todo,,
-tests/unit/console/test_copy_cmd.py::test_copy_id_without_prefix,1,R10,todo,,
-tests/unit/console/test_copy_cmd.py::test_copy_public_half_by_class_ref_takes_plain_route,1,R10,todo,,
-tests/unit/console/test_copy_cmd.py::test_copy_wrong_arity_raises_usage_error,3,R10,todo,,
-tests/unit/console/test_copy_cmd.py::test_copy_bad_id_hex_raises_param_error,1,R10,todo,,
-tests/unit/console/test_copy_cmd.py::test_copy_unknown_source_key_and_dest_provider,1,R10,todo,,
-tests/unit/console/test_copy_cmd.py::test_complete_offers_refs_providers_and_options,1,R10,todo,,asserts the --template option (R14 feature) in copy's completion
-tests/unit/console/test_copy_cmd.py::test_complete_source_ref_offers_key_refs_and_selectors,1,R10,todo,,
+tests/unit/console/test_copy_cmd.py::test_copy_is_auto_discovered,1,R10,ported,r2-console tests::copy_cmd::test_copy_is_auto_discovered,Rust: the build.rs aggregator registers `copy`
+tests/unit/console/test_copy_cmd.py::test_copy_mem_to_pkcs11_end_to_end,1,R10,ported,r2-console tests::copy_cmd::test_copy_mem_to_pkcs11_end_to_end,
+tests/unit/console/test_copy_cmd.py::test_copy_editor_defaults_keep_the_copy_locked_down,1,R10,ported,r2-console tests::copy_cmd::test_copy_editor_defaults_keep_the_copy_locked_down,
+tests/unit/console/test_copy_cmd.py::test_copy_honors_label_and_id_options,1,R10,ported,r2-console tests::copy_cmd::test_copy_honors_label_and_id_options,
+tests/unit/console/test_copy_cmd.py::test_copy_id_without_prefix,1,R10,ported,r2-console tests::copy_cmd::test_copy_id_without_prefix,
+tests/unit/console/test_copy_cmd.py::test_copy_public_half_by_class_ref_takes_plain_route,1,R10,ported,r2-console tests::copy_cmd::test_copy_public_half_by_class_ref_takes_plain_route,
+tests/unit/console/test_copy_cmd.py::test_copy_wrong_arity_raises_usage_error,3,R10,ported,r2-console tests::copy_cmd::test_copy_wrong_arity_raises_usage_error,
+tests/unit/console/test_copy_cmd.py::test_copy_bad_id_hex_raises_param_error,1,R10,ported,r2-console tests::copy_cmd::test_copy_bad_id_hex_raises_param_error,
+tests/unit/console/test_copy_cmd.py::test_copy_unknown_source_key_and_dest_provider,1,R10,ported,r2-console tests::copy_cmd::test_copy_unknown_source_key_and_dest_provider,
+tests/unit/console/test_copy_cmd.py::test_complete_offers_refs_providers_and_options,1,R10,ported,r2-console tests::copy_cmd::test_complete_offers_refs_providers_and_options,asserts the --template option (R14 feature) in copy's completion
+tests/unit/console/test_copy_cmd.py::test_complete_source_ref_offers_key_refs_and_selectors,1,R10,ported,r2-console tests::copy_cmd::test_complete_source_ref_offers_key_refs_and_selectors,
 tests/unit/console/test_copy_cmd.py::test_copy_template_seeds_destination_editor,1,R14,todo,,--template / key template / templatefile -> R14
 tests/unit/console/test_copy_cmd.py::test_copy_template_memory_destination_raises,1,R14,todo,,--template / key template / templatefile -> R14
 tests/unit/console/test_discovery.py::test_discovery_finds_the_l7_commands,1,R7,ported,r2-console tests::discovery::test_discovery_finds_the_l7_commands ; r2-console tests::discovery::duplicate_command_names_are_a_config_error ; r2-console tests::build_discovery::build_rs_lists_every_command_module,
@@ -307,7 +307,7 @@ tests/unit/console/test_keys_cmd_objects.py::test_load_data_into_pkcs11_opens_da
 tests/unit/console/test_keys_cmd_objects.py::test_load_completion_offers_new_hints,1,R8,ported,r2-console tests::keys_cmd_objects::test_load_completion_offers_new_hints,
 tests/unit/console/test_keys_cmd_objects.py::test_key_edit_data_prompts_label_only,1,R8,ported,r2-console tests::keys_cmd_objects::test_key_edit_data_prompts_label_only,
 tests/unit/console/test_keys_cmd_objects.py::test_export_data_raw_and_format_refusal,1,R8,ported,r2-console tests::keys_cmd_objects::test_export_data_raw_and_format_refusal,
-tests/unit/console/test_keys_cmd_objects.py::test_copy_output_uses_table_vocabulary,1,R10,todo,,copy command output (commands/copy.rs is R10's)
+tests/unit/console/test_keys_cmd_objects.py::test_copy_output_uses_table_vocabulary,1,R10,ported,r2-console tests::copy_cmd::test_copy_output_uses_table_vocabulary,copy command output (commands/copy.rs is R10's)
 tests/unit/console/test_keys_cmd_objects.py::test_delete_data_object,1,R8,ported,r2-console tests::keys_cmd_objects::test_delete_data_object,
 tests/unit/console/test_keys_cmd_objects.py::test_ops_lists_hmac_rows,1,R9,ported,r2-console tests::crypto_cmd::test_ops_lists_hmac_rows,`ops` command (commands/crypto.rs is R9's)
 tests/unit/console/test_keys_cmd_objects.py::test_sign_verify_hmac_round_trip,1,R9,ported,r2-console tests::crypto_cmd::test_sign_verify_hmac_round_trip,`verify ... hmac` command (commands/crypto.rs is R9's)
@@ -427,25 +427,25 @@ tests/unit/console/test_repl.py::test_repl_exit_is_not_a_console_error,1,R7,n/a:
 tests/unit/console/test_repl.py::test_scripted_io_drives_the_repl_fallback_read_path,1,R7,ported,r2-console tests::repl::test_scripted_io_drives_the_repl_fallback_read_path ; r2-console tests::repl::the_interrupt_flag_is_reset_before_every_dispatch,
 tests/unit/console/test_repl.py::test_scripted_io_multiline_continuation_prompt,1,R7,ported,r2-console tests::repl::test_scripted_io_multiline_continuation_prompt,
 tests/unit/console/test_repl.py::test_exit_command_raises_repl_exit_directly,1,R7,ported,r2-console tests::repl::test_exit_command_raises_repl_exit_directly,Rust: exit returns Ok(Flow::Exit)
-tests/unit/console/test_template_editor.py::test_ok_returns_copy_and_leaves_input_untouched,1,R10,todo,,
-tests/unit/console/test_template_editor.py::test_cancel_raises_user_abort,1,R10,todo,,
-tests/unit/console/test_template_editor.py::test_abort_synonym_raises_user_abort_after_edits,1,R10,todo,,
-tests/unit/console/test_template_editor.py::test_toggle_flips_boolean_rows,1,R10,todo,,
-tests/unit/console/test_template_editor.py::test_toggle_rejects_non_boolean_row,1,R10,todo,,
-tests/unit/console/test_template_editor.py::test_toggle_rejects_disabled_row,1,R10,todo,,
-tests/unit/console/test_template_editor.py::test_set_ulong_bytes_str_and_bool_values,1,R10,todo,,
-tests/unit/console/test_template_editor.py::test_set_bad_values_are_reported_and_editing_continues,1,R10,todo,,
-tests/unit/console/test_template_editor.py::test_disable_omits_attr_from_enabled_attrs,1,R10,todo,,
-tests/unit/console/test_template_editor.py::test_reenable_restores_attr,1,R10,todo,,
-tests/unit/console/test_template_editor.py::test_locked_rows_are_immutable,5,R10,todo,,
-tests/unit/console/test_template_editor.py::test_add_via_cka_catalog,1,R10,todo,,
-tests/unit/console/test_template_editor.py::test_add_via_custom_attributes,1,R10,todo,,
-tests/unit/console/test_template_editor.py::test_add_identity_attrs_kept_and_noted,1,R10,todo,,
-tests/unit/console/test_template_editor.py::test_add_unknown_name_and_duplicates_are_rejected,1,R10,todo,,
-tests/unit/console/test_template_editor.py::test_render_reflects_state_glyphs,1,R10,todo,,
-tests/unit/console/test_template_editor.py::test_create_template_editor_factory,1,R10,todo,,r2 constructs the editor directly (no lazy import)
-tests/unit/console/test_template_editor.py::test_bootstrap_picks_up_the_real_editor,1,R10,todo,,r2 constructs the editor directly: assert AppContext wires the checklist editor
-tests/unit/console/test_template_editor.py::test_editor_seeded_from_default_template_flow,1,R10,todo,,
+tests/unit/console/test_template_editor.py::test_ok_returns_copy_and_leaves_input_untouched,1,R10,ported,r2-console tests::template_editor::test_ok_returns_copy_and_leaves_input_untouched,
+tests/unit/console/test_template_editor.py::test_cancel_raises_user_abort,1,R10,ported,r2-console tests::template_editor::test_cancel_raises_user_abort,
+tests/unit/console/test_template_editor.py::test_abort_synonym_raises_user_abort_after_edits,1,R10,ported,r2-console tests::template_editor::test_abort_synonym_raises_user_abort_after_edits,
+tests/unit/console/test_template_editor.py::test_toggle_flips_boolean_rows,1,R10,ported,r2-console tests::template_editor::test_toggle_flips_boolean_rows,
+tests/unit/console/test_template_editor.py::test_toggle_rejects_non_boolean_row,1,R10,ported,r2-console tests::template_editor::test_toggle_rejects_non_boolean_row,
+tests/unit/console/test_template_editor.py::test_toggle_rejects_disabled_row,1,R10,ported,r2-console tests::template_editor::test_toggle_rejects_disabled_row,
+tests/unit/console/test_template_editor.py::test_set_ulong_bytes_str_and_bool_values,1,R10,ported,r2-console tests::template_editor::test_set_ulong_bytes_str_and_bool_values,
+tests/unit/console/test_template_editor.py::test_set_bad_values_are_reported_and_editing_continues,1,R10,ported,r2-console tests::template_editor::test_set_bad_values_are_reported_and_editing_continues,
+tests/unit/console/test_template_editor.py::test_disable_omits_attr_from_enabled_attrs,1,R10,ported,r2-console tests::template_editor::test_disable_omits_attr_from_enabled_attrs,
+tests/unit/console/test_template_editor.py::test_reenable_restores_attr,1,R10,ported,r2-console tests::template_editor::test_reenable_restores_attr,
+tests/unit/console/test_template_editor.py::test_locked_rows_are_immutable,5,R10,ported,r2-console tests::template_editor::test_locked_rows_are_immutable,
+tests/unit/console/test_template_editor.py::test_add_via_cka_catalog,1,R10,ported,r2-console tests::template_editor::test_add_via_cka_catalog,
+tests/unit/console/test_template_editor.py::test_add_via_custom_attributes,1,R10,ported,r2-console tests::template_editor::test_add_via_custom_attributes,
+tests/unit/console/test_template_editor.py::test_add_identity_attrs_kept_and_noted,1,R10,ported,r2-console tests::template_editor::test_add_identity_attrs_kept_and_noted,
+tests/unit/console/test_template_editor.py::test_add_unknown_name_and_duplicates_are_rejected,1,R10,ported,r2-console tests::template_editor::test_add_unknown_name_and_duplicates_are_rejected,
+tests/unit/console/test_template_editor.py::test_render_reflects_state_glyphs,1,R10,ported,r2-console tests::template_editor::test_render_reflects_state_glyphs,
+tests/unit/console/test_template_editor.py::test_create_template_editor_factory,1,R10,ported,r2-console tests::template_editor::test_create_template_editor_factory,r2 constructs the editor directly (no lazy import)
+tests/unit/console/test_template_editor.py::test_bootstrap_picks_up_the_real_editor,1,R10,ported,r2-console tests::template_editor::test_bootstrap_picks_up_the_real_editor,r2 constructs the editor directly: assert AppContext wires the checklist editor
+tests/unit/console/test_template_editor.py::test_editor_seeded_from_default_template_flow,1,R10,ported,r2-console tests::template_editor::test_editor_seeded_from_default_template_flow,
 tests/unit/console/test_wizard.py::TestDecline::test_decline_touches_nothing,1,R11,ported,r2-console tests::wizard::test_decline_touches_nothing ; r2-console tests::wizard::decline_works_on_a_provider_without_token_init_and_accept_refuses_it,
 tests/unit/console/test_wizard.py::TestHappyPath::test_full_flow,1,R11,ported,r2-console tests::wizard::test_full_flow ; r2-console tests::wizard::transcript_matches_c2,os.environ at init → the recorded set_env_and_reset call (the wizard never sets the env itself)
 tests/unit/console/test_wizard.py::TestHappyPath::test_report_snippet_matches_schema,1,R11,ported,r2-console tests::wizard::test_report_snippet_matches_schema ; r2-console tests::wizard::snippet_and_entry_match_c2_bytes,
@@ -823,10 +823,10 @@ tests/unit/services/test_objects_services.py::test_generic_and_data_hints_are_ve
 tests/unit/services/test_objects_services.py::test_editor_titles_and_data_import,1,R8,ported,r2-services::keyload test_editor_titles_and_data_import,
 tests/unit/services/test_objects_services.py::test_export_bytes_data_object_is_raw_only,1,R8,ported,r2-services::keyexport test_export_bytes_data_object_is_raw_only,
 tests/unit/services/test_objects_services.py::test_export_and_wrap_refuse_unmodelled_key_types,1,R15,todo,,wrapload::refuse_non_wrappable (R15); also asserts the keyexport refusal (R8)
-tests/unit/services/test_objects_services.py::test_copy_data_object_takes_the_plain_route,1,R10,todo,,transfer part
-tests/unit/services/test_objects_services.py::test_copy_seeds_data_extras_into_the_editor,1,R10,todo,,transfer part
-tests/unit/services/test_objects_services.py::test_copy_certificate_round_trip_is_plain_material,1,R10,todo,,transfer part
-tests/unit/services/test_objects_services.py::test_copy_refuses_unmodelled_key_types,1,R10,todo,,transfer part
+tests/unit/services/test_objects_services.py::test_copy_data_object_takes_the_plain_route,1,R10,ported,r2-services::transfer test_copy_data_object_takes_the_plain_route,transfer part
+tests/unit/services/test_objects_services.py::test_copy_seeds_data_extras_into_the_editor,1,R10,ported,r2-services transfer::tests::test_copy_seeds_data_extras_into_the_editor ; r2-services::transfer copy_of_a_data_object_carries_its_extras_into_the_editor_seed,transfer part
+tests/unit/services/test_objects_services.py::test_copy_certificate_round_trip_is_plain_material,1,R10,ported,r2-services::transfer test_copy_certificate_round_trip_is_plain_material,transfer part
+tests/unit/services/test_objects_services.py::test_copy_refuses_unmodelled_key_types,1,R10,ported,r2-services::transfer test_copy_refuses_unmodelled_key_types,transfer part
 tests/unit/services/test_objects_services.py::test_wrapload_generic_hint_and_data_refusal,1,R15,todo,,wrapload part
 tests/unit/services/test_templatefile.py::test_dump_load_round_trip,1,R14,todo,,
 tests/unit/services/test_templatefile.py::test_dump_writes_per_kind_yaml_scalars,1,R14,todo,,
@@ -1220,41 +1220,41 @@ tests/unit/test_smoke.py::test_version_matches_distribution_metadata,1,R0,ported
 tests/unit/test_smoke.py::test_main_version_flag,1,R0,ported,r2-cli::smoke test_main_version_flag,"R0 card: r2-cli stub --version | assert_cmd: `r2 --version` exits 0, stdout exactly ""r2 <version>\n"""
 tests/unit/test_smoke.py::test_main_help_flag_lists_cli_options,1,R7,ported,r2-cli::e2e_repl test_main_help_flag_lists_cli_options ; r2-cli::e2e_repl usage_errors_exit_2 ; r2-cli::bin/r2 args::tests::flags_parse,clap --help lists --version/--config/--debug
 tests/unit/test_smoke.py::test_main_config_flag_with_missing_file_is_a_hard_error,1,R7,ported,r2-cli::e2e_repl test_main_config_flag_with_missing_file_is_a_hard_error,
-tests/unit/test_transfer.py::TestAesTransport::test_sensitive_but_extractable_key_copies_via_wrap,1,R10,todo,,
-tests/unit/test_transfer.py::TestAesTransport::test_transport_key_destroyed_on_success,1,R10,todo,,
-tests/unit/test_transfer.py::TestAesTransport::test_transport_key_destroyed_when_unwrap_fails,1,R10,todo,,
-tests/unit/test_transfer.py::TestAesTransport::test_transport_key_destroyed_when_wrap_fails,1,R10,todo,,
-tests/unit/test_transfer.py::TestAesTransport::test_editor_runs_for_pkcs11_destination_and_template_reaches_unwrap,1,R10,todo,,
-tests/unit/test_transfer.py::TestAesTransport::test_plain_aes_key_wrap_used_for_aligned_secret_when_pad_missing,1,R10,todo,,
-tests/unit/test_transfer.py::TestAesTransport::test_label_and_id_defaults,1,R10,todo,,
-tests/unit/test_transfer.py::TestAesTransport::test_label_and_id_overrides,1,R10,todo,,
-tests/unit/test_transfer.py::TestIdInheritance::test_same_token_copy_keeps_fresh_id,1,R10,todo,,
-tests/unit/test_transfer.py::TestIdInheritance::test_memory_source_id_not_inherited,1,R10,todo,,
-tests/unit/test_transfer.py::TestIdInheritance::test_pkcs11_to_memory_id_not_inherited,1,R10,todo,,
-tests/unit/test_transfer.py::TestIdInheritance::test_repeated_cross_token_copy_refused_as_duplicate,1,R10,todo,,
-tests/unit/test_transfer.py::TestIdInheritance::test_template_id_row_outranks_inheritance,1,R10,todo,,
-tests/unit/test_transfer.py::TestIdInheritance::test_accepted_offer_inherits_public_parts_own_id,1,R10,todo,,
-tests/unit/test_transfer.py::TestFallbackLadder::test_ephemeral_rsa_oaep_route_for_secret_targets,1,R10,todo,,
-tests/unit/test_transfer.py::TestFallbackLadder::test_ephemeral_rsa_cleanup_on_failure,1,R10,todo,,
-tests/unit/test_transfer.py::TestFallbackLadder::test_single_shot_rsa_aes_key_wrap_for_private_targets,1,R10,todo,,
-tests/unit/test_transfer.py::TestFallbackLadder::test_oaep_not_used_for_private_targets,1,R10,todo,,
-tests/unit/test_transfer.py::TestFallbackLadder::test_plain_read_last_resort_with_confirmation,1,R10,todo,,
-tests/unit/test_transfer.py::TestFallbackLadder::test_plain_read_declined_aborts_before_export,1,R10,todo,,
-tests/unit/test_transfer.py::TestFallbackLadder::test_no_route_names_missing_mechanisms,1,R10,todo,,
-tests/unit/test_transfer.py::TestAuthPreProbe::test_logged_out_source_raises_auth_error_not_mechanism_error,1,R10,todo,,
-tests/unit/test_transfer.py::TestAuthPreProbe::test_logged_out_destination_raises_auth_error,1,R10,todo,,
-tests/unit/test_transfer.py::TestRefusalUx::test_non_extractable_with_no_public_part_raises_without_prompt,1,R10,todo,,
-tests/unit/test_transfer.py::TestRefusalUx::test_non_extractable_offer_declined_raises,1,R10,todo,,
-tests/unit/test_transfer.py::TestRefusalUx::test_non_extractable_offer_accepted_copies_public_part,1,R10,todo,,
-tests/unit/test_transfer.py::TestRefusalUx::test_accepted_offer_honors_label_and_id_overrides,1,R10,todo,,
-tests/unit/test_transfer.py::TestRefusalUx::test_accepted_offer_defaults_to_public_parts_own_label,1,R10,todo,,
-tests/unit/test_transfer.py::TestDecisionMatrix::test_memory_to_memory_plain_copy_without_editor,1,R10,todo,,
-tests/unit/test_transfer.py::TestDecisionMatrix::test_memory_to_pkcs11_plain_copy_with_editor,1,R10,todo,,
-tests/unit/test_transfer.py::TestDecisionMatrix::test_memory_source_never_wraps_even_when_both_sides_could,1,R10,todo,,
-tests/unit/test_transfer.py::TestDecisionMatrix::test_non_exportable_memory_key_gets_refusal_ux,1,R10,todo,,
-tests/unit/test_transfer.py::TestDecisionMatrix::test_pkcs11_to_memory_uses_wrap_route_without_editor,1,R10,todo,,
-tests/unit/test_transfer.py::TestDecisionMatrix::test_public_key_copies_plain_between_pkcs11_providers,1,R10,todo,,
-tests/unit/test_transfer.py::TestDecisionMatrix::test_certificate_copies_plain,1,R10,todo,,
+tests/unit/test_transfer.py::TestAesTransport::test_sensitive_but_extractable_key_copies_via_wrap,1,R10,ported,r2-services::transfer test_sensitive_but_extractable_key_copies_via_wrap,
+tests/unit/test_transfer.py::TestAesTransport::test_transport_key_destroyed_on_success,1,R10,ported,r2-services::transfer test_transport_key_destroyed_on_success,
+tests/unit/test_transfer.py::TestAesTransport::test_transport_key_destroyed_when_unwrap_fails,1,R10,ported,r2-services::transfer test_transport_key_destroyed_when_unwrap_fails,
+tests/unit/test_transfer.py::TestAesTransport::test_transport_key_destroyed_when_wrap_fails,1,R10,ported,r2-services::transfer test_transport_key_destroyed_when_wrap_fails,
+tests/unit/test_transfer.py::TestAesTransport::test_editor_runs_for_pkcs11_destination_and_template_reaches_unwrap,1,R10,ported,r2-services::transfer test_editor_runs_for_pkcs11_destination_and_template_reaches_unwrap,
+tests/unit/test_transfer.py::TestAesTransport::test_plain_aes_key_wrap_used_for_aligned_secret_when_pad_missing,1,R10,ported,r2-services::transfer test_plain_aes_key_wrap_used_for_aligned_secret_when_pad_missing,
+tests/unit/test_transfer.py::TestAesTransport::test_label_and_id_defaults,1,R10,ported,r2-services::transfer test_label_and_id_defaults,
+tests/unit/test_transfer.py::TestAesTransport::test_label_and_id_overrides,1,R10,ported,r2-services::transfer test_label_and_id_overrides,
+tests/unit/test_transfer.py::TestIdInheritance::test_same_token_copy_keeps_fresh_id,1,R10,ported,r2-services::transfer test_same_token_copy_keeps_fresh_id,
+tests/unit/test_transfer.py::TestIdInheritance::test_memory_source_id_not_inherited,1,R10,ported,r2-services::transfer test_memory_source_id_not_inherited,
+tests/unit/test_transfer.py::TestIdInheritance::test_pkcs11_to_memory_id_not_inherited,1,R10,ported,r2-services::transfer test_pkcs11_to_memory_id_not_inherited,
+tests/unit/test_transfer.py::TestIdInheritance::test_repeated_cross_token_copy_refused_as_duplicate,1,R10,ported,r2-services::transfer test_repeated_cross_token_copy_refused_as_duplicate,
+tests/unit/test_transfer.py::TestIdInheritance::test_template_id_row_outranks_inheritance,1,R10,ported,r2-services::transfer test_template_id_row_outranks_inheritance,
+tests/unit/test_transfer.py::TestIdInheritance::test_accepted_offer_inherits_public_parts_own_id,1,R10,ported,r2-services::transfer test_accepted_offer_inherits_public_parts_own_id,
+tests/unit/test_transfer.py::TestFallbackLadder::test_ephemeral_rsa_oaep_route_for_secret_targets,1,R10,ported,r2-services::transfer test_ephemeral_rsa_oaep_route_for_secret_targets,
+tests/unit/test_transfer.py::TestFallbackLadder::test_ephemeral_rsa_cleanup_on_failure,1,R10,ported,r2-services::transfer test_ephemeral_rsa_cleanup_on_failure,
+tests/unit/test_transfer.py::TestFallbackLadder::test_single_shot_rsa_aes_key_wrap_for_private_targets,1,R10,ported,r2-services::transfer test_single_shot_rsa_aes_key_wrap_for_private_targets,
+tests/unit/test_transfer.py::TestFallbackLadder::test_oaep_not_used_for_private_targets,1,R10,ported,r2-services::transfer test_oaep_not_used_for_private_targets,
+tests/unit/test_transfer.py::TestFallbackLadder::test_plain_read_last_resort_with_confirmation,1,R10,ported,r2-services::transfer test_plain_read_last_resort_with_confirmation,
+tests/unit/test_transfer.py::TestFallbackLadder::test_plain_read_declined_aborts_before_export,1,R10,ported,r2-services::transfer test_plain_read_declined_aborts_before_export,
+tests/unit/test_transfer.py::TestFallbackLadder::test_no_route_names_missing_mechanisms,1,R10,ported,r2-services::transfer test_no_route_names_missing_mechanisms,
+tests/unit/test_transfer.py::TestAuthPreProbe::test_logged_out_source_raises_auth_error_not_mechanism_error,1,R10,ported,r2-services::transfer test_logged_out_source_raises_auth_error_not_mechanism_error,
+tests/unit/test_transfer.py::TestAuthPreProbe::test_logged_out_destination_raises_auth_error,1,R10,ported,r2-services::transfer test_logged_out_destination_raises_auth_error,
+tests/unit/test_transfer.py::TestRefusalUx::test_non_extractable_with_no_public_part_raises_without_prompt,1,R10,ported,r2-services::transfer test_non_extractable_with_no_public_part_raises_without_prompt,
+tests/unit/test_transfer.py::TestRefusalUx::test_non_extractable_offer_declined_raises,1,R10,ported,r2-services::transfer test_non_extractable_offer_declined_raises,
+tests/unit/test_transfer.py::TestRefusalUx::test_non_extractable_offer_accepted_copies_public_part,1,R10,ported,r2-services::transfer test_non_extractable_offer_accepted_copies_public_part,
+tests/unit/test_transfer.py::TestRefusalUx::test_accepted_offer_honors_label_and_id_overrides,1,R10,ported,r2-services::transfer test_accepted_offer_honors_label_and_id_overrides,
+tests/unit/test_transfer.py::TestRefusalUx::test_accepted_offer_defaults_to_public_parts_own_label,1,R10,ported,r2-services::transfer test_accepted_offer_defaults_to_public_parts_own_label,
+tests/unit/test_transfer.py::TestDecisionMatrix::test_memory_to_memory_plain_copy_without_editor,1,R10,ported,r2-services::transfer test_memory_to_memory_plain_copy_without_editor,
+tests/unit/test_transfer.py::TestDecisionMatrix::test_memory_to_pkcs11_plain_copy_with_editor,1,R10,ported,r2-services::transfer test_memory_to_pkcs11_plain_copy_with_editor,
+tests/unit/test_transfer.py::TestDecisionMatrix::test_memory_source_never_wraps_even_when_both_sides_could,1,R10,ported,r2-services::transfer test_memory_source_never_wraps_even_when_both_sides_could,
+tests/unit/test_transfer.py::TestDecisionMatrix::test_non_exportable_memory_key_gets_refusal_ux,1,R10,ported,r2-services::transfer test_non_exportable_memory_key_gets_refusal_ux,
+tests/unit/test_transfer.py::TestDecisionMatrix::test_pkcs11_to_memory_uses_wrap_route_without_editor,1,R10,ported,r2-services::transfer test_pkcs11_to_memory_uses_wrap_route_without_editor,
+tests/unit/test_transfer.py::TestDecisionMatrix::test_public_key_copies_plain_between_pkcs11_providers,1,R10,ported,r2-services::transfer test_public_key_copies_plain_between_pkcs11_providers,
+tests/unit/test_transfer.py::TestDecisionMatrix::test_certificate_copies_plain,1,R10,ported,r2-services::transfer test_certificate_copies_plain,
 tests/unit/test_transfer.py::TestTemplateFileSeeding::test_wrap_route_editor_seeded_from_matching_section,1,R14,todo,,--template seeding (seed_templates) needs templatefile::build_seed (R14); R14 ports it into its own test file
 tests/unit/test_transfer.py::TestTemplateFileSeeding::test_wrap_route_missing_section_falls_back_to_defaults,1,R14,todo,,--template seeding (seed_templates) needs templatefile::build_seed (R14); R14 ports it into its own test file
 tests/unit/test_x509build.py::test_self_signed_rsa,1,R6,ported,r2-core::x509build self_signed_rsa,
