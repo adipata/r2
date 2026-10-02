@@ -258,7 +258,6 @@ fn config_path_and_origin_render_provenance() {
 }
 
 #[test]
-#[ignore = "needs the R4/R5a provider constructors (merge checklist: drop this ignore when R7 merges after R4/R5a)"]
 fn config_path_without_external_file_names_the_discovery_order() {
     let dir = tempfile::tempdir().unwrap();
     // no --config, no $R2_CONFIG, no ./r2.yaml, no user config: built-in defaults; keep the
@@ -396,7 +395,6 @@ fn history_file_drops_secret_lines() {
 }
 
 #[test]
-#[ignore = "needs the R4/R5a provider constructors (merge checklist: drop this ignore when R7 merges after R4/R5a)"]
 fn test_main_end_to_end_with_real_providers() {
     // c2 skipped this while L4/L5 were absent; r2 runs it unconditionally once R4/R5a are
     // merged (the built-in defaults construct MemoryProvider and probe for SoftHSM).
