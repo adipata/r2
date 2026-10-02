@@ -1387,8 +1387,9 @@ Certificates are always exportable; passing one to `decrypt`/`sign`/`derive` →
 (§5.5 exportable/wrappable, copy and `--kek` routes). A data object is DATA@NONE: opaque
 `CKA_VALUE` bytes that are listed, loaded, exported (raw), copied (plain route) and
 deleted, never used by a crypto verb or wrap (`UnsupportedOperation`). Data objects carry
-**no CKA_ID**: `key_ref.key_id` is None; every provider returns `Param` when a key id or an
-enabled template `CKA_ID` row is given for one; the §4.7 twin guard compares (class,
+**no CKA_ID**: `key_ref.key_id` is None; every provider returns `Param` when a key id is
+given for one, and the PKCS#11 provider also when an enabled template `CKA_ID` row is
+(MemoryProvider ignores template identity rows on a data import, as c2's memory did); the §4.7 twin guard compares (class,
 label); `size_bits = 8·len(value)`; optional `CKA_APPLICATION` (Str) / `CKA_OBJECT_ID`
 (Bytes) appear in `attributes` and are set through the template editor. Documented edge: a
 data object sharing a keypair's label makes the bare ref ambiguous — use `:data`. OTHER
@@ -6505,10 +6506,10 @@ DC → IA5String; everything else UTF8String).
 |---|---|---|---|
 | AES-ECB | `symm::Crypter` over `Cipher::aes_{128,192,256}_ecb()` with `pad(false)`; PKCS7 (block 16) in r2 code when `padding=pkcs7` | `Mechanism::AesEcb` (`CKM_AES_ECB`); **no** `_PAD` variant exists → **Pkcs11Provider** applies/strips PKCS7 around the token call (padding is always provider-side, symmetric with memory) | `padding=none` requires 16-B-aligned input (checked, `Param`: `padding=none requires input length to be a multiple of 16 bytes`) |
 | AES-CBC | `Crypter` over `aes_*_cbc()` with the IV and `pad(false)` + r2-owned PKCS7 | `padding=none` → `Mechanism::AesCbc(iv)` (`CKM_AES_CBC`); `padding=pkcs7` → `Mechanism::AesCbcPad(iv)` (`CKM_AES_CBC_PAD`) | memory-PKCS7 and `_PAD` must be byte-identical (KAT cross-check, §8; S0-verified); `iv` must be 16 bytes (`Param`) |
-| AES-GCM | `symm::encrypt_aead(Cipher::aes_*_gcm(), key, Some(iv), aad, pt, &mut tag[..tag_bits/8])`, output **ct‖tag**; decrypt `symm::decrypt_aead(…, ct, &tag)` (a bad tag is an error) | `Mechanism::AesGcm(GcmParams::new(&mut iv_copy, &aad, tag_bits))` [V, S0] returns ct‖tag natively (`GcmParams` needs an owned mutable IV copy) | AAD: always pass a non-NULL (possibly empty) buffer — SoftHSM builds reject NULL [V] (cryptoki passes a non-NULL pointer with length 0 for empty AAD, S0 capture). **[U]** FIPS HSMs may ignore the supplied IV and append their own — detect via output length, surface "HSM-generated IV" to the operator. Tamper on SoftHSM: `CKR_GENERAL_ERROR` (2.6.1) / `CKR_ENCRYPTED_DATA_INVALID` (2.7.0) |
+| AES-GCM | `symm::Crypter` over `Cipher::aes_*_gcm()` (the `symm::encrypt_aead` computation, with AAD and data fed in ≤ 2³⁰-byte updates, §11 D12(m)), output **ct‖tag** truncated to `tag_bits/8`; decrypt sets the tag before `finalize` (a bad tag is an error) | `Mechanism::AesGcm(GcmParams::new(&mut iv_copy, &aad, tag_bits))` [V, S0] returns ct‖tag natively (`GcmParams` needs an owned mutable IV copy) | AAD: always pass a non-NULL (possibly empty) buffer — SoftHSM builds reject NULL [V] (cryptoki passes a non-NULL pointer with length 0 for empty AAD, S0 capture). **[U]** FIPS HSMs may ignore the supplied IV and append their own — detect via output length, surface "HSM-generated IV" to the operator. Tamper on SoftHSM: `CKR_GENERAL_ERROR` (2.6.1) / `CKR_ENCRYPTED_DATA_INVALID` (2.7.0) |
 | AES-CTR | `Cipher::aes_*_ctr()` with the full 16-B counter block as IV (OpenSSL increments the whole block big-endian, = pyca) | `Mechanism::VendorDefined(VendorDefinedMechanism::new(MechanismType::AES_CTR, Some(&CK_AES_CTR_PARAMS { ulCounterBits: counter_bits, cb: counter_block })))` [V, S0] (cryptoki has no CTR variant; no `unsafe`) | default `counter_bits=128` reproduces pyca's semantics; cross-provider KAT required. Memory accepts only `counter_bits=128` and a full 16-byte `counter_block` (`Param`, c2 texts). SoftHSM refuses a counter that would wrap within `counter_bits` (`CKR_DATA_LEN_RANGE`) |
 | RSA-OAEP | `encrypt::Encrypter`/`Decrypter` with `Padding::PKCS1_OAEP`, `set_rsa_oaep_md(hash)`, `set_rsa_mgf1_md(mgf_hash)`, `set_rsa_oaep_label(label)` only when the label is non-empty | `Mechanism::RsaPkcsOaep(PkcsOaepParams::new(hash, mgf, PkcsOaepSource::empty() \| data_specified(&label)))` [V, S0]; tokens that reject non-SHA1 OAEP params (SoftHSM: SHA-1/MGF1-SHA1 with an empty label only) fall back to on-token raw RSA (`Mechanism::RsaX509`) + provider-side OAEP en/decoding (c2 L5/L13 fold-back), triggered by `CKR_ARGUMENTS_BAD` / `CKR_MECHANISM_PARAM_INVALID` | hash/MGF pair (CKM_SHAx, CKG_MGF1_SHAx); mgf_hash defaults to hash; an empty label is sent as NULL source data (c2 parity, S0 capture). Decrypt failures are detail-free (`RSA-OAEP decryption failed`) |
-| RSA-PKCS1 | `Encrypter`/`Decrypter` with `Padding::PKCS1` | `Mechanism::RsaPkcs` (`CKM_RSA_PKCS`) | decrypt failures detail-free (`RSA-PKCS1 decryption failed`) |
+| RSA-PKCS1 | `Encrypter`/`Decrypter` with `Padding::PKCS1` | `Mechanism::RsaPkcs` (`CKM_RSA_PKCS`) | decrypt failures detail-free (`RSA-PKCS1 decryption failed`). A malformed ciphertext or wrong key follows the linked OpenSSL (§11 D26): an error on OpenSSL < 3.2 (the system 3.0 of source builds), implicit rejection (pseudo-random plaintext, no error) on 3.2+ (the vendored release build, as pyca/c2) |
 | RSA-RAW | **hand-rolled** modexp: `BigNum::from_slice` + `mod_exp` + `to_vec_padded(k)` with `m ≥ n` refused (`r2-provider::rsa_raw_modexp`, shared) [S] — never OpenSSL `Padding::NONE`, which requires input length == k | `Mechanism::RsaX509` (`CKM_RSA_X_509`); decrypt with a PUBLIC ref (`…:pub`, §4.3) = software public-exponent modexp from CKA_MODULUS/CKA_PUBLIC_EXPONENT (signature recovery — tokens don't C_Decrypt with public handles: SoftHSM answers `CKR_KEY_FUNCTION_NOT_PERMITTED`, S0) | diagnostic feature; NOT constant-time in the memory provider (documented); input left-padded to modulus length (byte-identical to c2 for d and e, S0) |
 
 Ciphertext convention: GCM output/input is `ct‖tag` — **providers** emit and consume that
@@ -7579,6 +7580,24 @@ merges).**
     `except ValueError`) once the password was given; r2 treats the count as pyca's
     ValueError → KeyParse `incorrect password for encrypted private key (or corrupt
     encrypted data)` after the prompt.
+  - (l) memory `derive … ECDH kdf=<hash> out_len=<n>` with a huge `<n>` (`out_len` has no
+    upper bound, §4.6.6): c2's `_x963_kdf` looped `out += digest` until `MemoryError` (or,
+    past 2³² − 1 blocks, `counter.to_bytes(4, "big")` raised `OverflowError`). r2 raises
+    Param (`out_len`) `out_len <n> exceeds the X9.63 KDF limit of <hashlen·(2³²−1)> bytes for
+    <hash>` before allocating, and Param (`out_len`) `out_len <n> is too large: cannot
+    allocate the KDF output` when the allocator refuses the buffer (never a
+    capacity-overflow panic or an allocation-failure abort). A length that is allocatable
+    but exceeds physical memory still exhausts it, as in c2.
+  - (m) memory AES payloads of 2 GiB or more: rust-openssl panics when one cipher update
+    exceeds `c_int::MAX` bytes, so the memory engine feeds AES-ECB/CBC/CTR/GCM data and
+    GCM AAD to OpenSSL in chunks of 2³⁰ bytes (as pyca chunks its updates). AES
+    encrypt/decrypt therefore succeeds as in c2, and AES-GMAC / AES-GCM over an AAD of
+    2³¹ bytes or more, where c2 raised a pyo3 `PanicException` from
+    `authenticate_additional_data`, returns the tag. Key wrap cannot be chunked: an
+    AES-KEY-WRAP(-PAD) unwrap blob over 2³¹ − 1 bytes is pyca's message-less
+    `InvalidUnwrap` (the integrity failure c2 reached), and a wrap payload over 2³¹ − 1
+    bytes is the ValueError `The key to wrap must be at most 2147483647 bytes (OpenSSL key
+    wrap limit)` where c2's pure-Python RFC 3394/5649 loop would have wrapped it.
 - *Reason*: every expected failure must be a `ConsoleError`; OpenSSL would reject the CN
   with a different text anyway.
 - *Verified by*: R8 certops test (a), R6 keyparse/x509info/formats fixtures (b, h, i, j:
@@ -7591,7 +7610,10 @@ merges).**
   `pkcs12_with_a_key_pyca_does_not_support_is_d12i`,
   `invalid_rsa_private_keys_are_pycas_value_errors`,
   `passwords_over_1023_bytes_are_refused_as_pyca`, k:
-  `pbkdf2_iteration_counts_above_c_int_are_the_wrong_password_text`), R7 repl test (c), R1
+  `pbkdf2_iteration_counts_above_c_int_are_the_wrong_password_text`), R4 memory test (l:
+  `ecdh_kdf_out_len_above_the_x963_limit_is_a_param_error`; m: engine
+  `chunked_crypt_matches_a_single_update`, `chunked_gcm_matches_one_shot_aead`, and the
+  opt-in `test_aes_payloads_past_2_gib_are_chunked_not_a_panic`), R7 repl test (c), R1
   codec differential vectors (e), R2 loader tests (d, f: `invalid_utf8_is_a_read_error`,
   `deleted_working_directory_skips_the_cwd_candidate`, the `LOAD` vectors; g:
   `discovery::expand_user_is_python_expanduser`,
@@ -7811,6 +7833,30 @@ one OpenSSL's `X509` decoder accepts). Verified by R6 x509build tests
   exports the same objects with the same output, without the warning text.
 - *Reason*: library diagnostics with source paths, not c2 output; nothing is refused.
 - *Verified by*: R6 differential runs (identical results, c2's stderr warnings ignored).
+
+**D26 — RSA PKCS#1 v1.5 decrypt failures follow the linked OpenSSL.**
+- *Description*: c2's pyca bundles OpenSSL ≥ 3.2, whose PKCS#1 v1.5 decryption uses
+  implicit rejection: a malformed ciphertext or a wrong key yields pseudo-random plaintext
+  and no exception (memory `decrypt … pkcs1`; the RSA-PKCS1 unwrap then goes on with the
+  pseudo-random payload and fails, if at all, in the material checks). r2's MemoryProvider uses the linked OpenSSL: the
+  vendored release build (3.6.3, §9) behaves as c2; a source build against OpenSSL < 3.2
+  (e.g. the system 3.0.13) raises Crypto `RSA-PKCS1 decryption failed` resp. `RSA-PKCS1
+  unwrap failed` instead. Valid ciphertexts decrypt identically everywhere.
+- *Reason*: the failure semantics are OpenSSL's, not r2's; implementing implicit rejection
+  in r2 code would duplicate a constant-time OpenSSL routine.
+- *Verified by*: R4 `memory_wrap_kek::test_pkcs1_unwrap_of_a_bogus_blob_leaks_no_padding_detail`
+  (accepts both outcomes, as c2's test does).
+
+**D27 — Memory: NONE (outside DATA) and OTHER material is a `Param` error.**
+- *Description*: c2's MemoryProvider raised KeyParseError for material whose algorithm is
+  NONE outside a data object, OTHER, or declared NONE/OTHER but parsing as something else
+  (`unsupported secret key algorithm 'other'`, `material declares algorithm 'none' but data
+  parses as 'ec'`, `data objects carry no algorithm (got 'other')`), on import and unwrap.
+  r2 follows the §4.3/§4.5.2 contract (which c2's own spec also stated): kind `Param`
+  (`material`), with c2's messages, hints and check order unchanged. Unreachable from the
+  console (hints never produce NONE/OTHER material); visible only to API callers.
+- *Reason*: c2 internal inconsistency (spec vs memory code) resolved in favour of the spec.
+- *Verified by*: R4 `memory_parity::none_and_other_material_is_a_param_error_with_c2_text`.
 
 **Resolved without deviation** (recorded so they are not mistaken for gaps):
 
