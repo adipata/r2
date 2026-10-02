@@ -1,5 +1,6 @@
 // Ctrl-C flag, spinner flag, panic report (spec §4.9.8; owner R1) — the only process-global
-// mutable state (two atomics), plus one thread-local panic-report slot.
+// mutable state (two atomics), plus thread-local slots: the panic report and the in-process
+// test emulation of Ctrl-C (R13).
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -12,19 +13,32 @@ thread_local! {
     /// The panic report of this thread (a `Cell`, so the panic hook can never hit a
     /// borrow conflict).
     static PANIC_REPORT: Cell<Option<String>> = const { Cell::new(None) };
+    /// Ctrl-C requested for this thread only (`request_interrupt_on_this_thread`).
+    static INTERRUPTED_HERE: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Called by the ctrlc handler (r2-cli): one atomic store, nothing else.
 pub fn request_interrupt() {
     INTERRUPTED.store(true, Ordering::SeqCst);
 }
+/// In-process tests' Ctrl-C (R13, §4.11): a flag only the calling thread observes, so a
+/// test emulating Ctrl-C can never abort another test running concurrently in the same
+/// process (the `cargo test` fallback runs tests as threads of one process; nextest runs
+/// one process per test). Production code never calls it; the ctrlc handler uses
+/// `request_interrupt`.
+pub fn request_interrupt_on_this_thread() {
+    let _ = INTERRUPTED_HERE.try_with(|flag| flag.set(true));
+}
 /// Called by run_repl immediately before every dispatch (a stale flag would abort the next
-/// command — rpassword itself raise()s SIGINT).
+/// command — rpassword itself raise()s SIGINT). Also clears the calling thread's
+/// `request_interrupt_on_this_thread` flag.
 pub fn reset_interrupt() {
     INTERRUPTED.store(false, Ordering::SeqCst);
+    let _ = INTERRUPTED_HERE.try_with(|flag| flag.set(false));
 }
+/// The process-wide flag OR the calling thread's own flag.
 pub fn interrupted() -> bool {
-    INTERRUPTED.load(Ordering::SeqCst)
+    INTERRUPTED.load(Ordering::SeqCst) || INTERRUPTED_HERE.try_with(Cell::get).unwrap_or(false)
 }
 /// Step-boundary check for commands and services (e.g. between copy-ladder rungs, between
 /// sibling renames): Err(UserAbort "interrupted") when the flag is set (not reset).

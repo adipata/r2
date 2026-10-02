@@ -4706,12 +4706,17 @@ pub fn install_line_assist(assist: Rc<dyn LineAssist>) -> AssistGuard { .. }
 
 ```rust
 // crates/r2-core/src/runtime.rs — the only process-global mutable state (two atomics),
-// plus one thread-local panic-report slot
+// plus thread-local slots (panic report; the in-process test Ctrl-C flag)
 /// Called by the ctrlc handler (r2-cli): one atomic store, nothing else.
 pub fn request_interrupt() { .. }
+/// In-process tests' Ctrl-C (R13, §4.11): a flag only the calling thread observes, so a
+/// test emulating Ctrl-C never aborts a concurrently running test of the same process (the
+/// `cargo test` fallback). Production code never calls it.
+pub fn request_interrupt_on_this_thread() { .. }
 /// Called by run_repl immediately before every dispatch (a stale flag would abort the next
-/// command — rpassword itself raise()s SIGINT).
+/// command — rpassword itself raise()s SIGINT). Also clears the calling thread's flag.
 pub fn reset_interrupt() { .. }
+/// The process-wide flag OR the calling thread's own flag.
 pub fn interrupted() -> bool { .. }
 /// Step-boundary check for commands and services (e.g. between copy-ladder rungs, between
 /// sibling renames): Err(UserAbort "interrupted") when the flag is set (not reset).

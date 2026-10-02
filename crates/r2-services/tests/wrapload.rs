@@ -768,7 +768,7 @@ fn load_wrapped_checks_interrupt_between_the_editor_and_unwrap() {
     let provider = hsm();
     let kek = import_aes(provider.as_ref(), "aeskek");
     let editor = RecordingEditor::with(|template| {
-        r2_core::runtime::request_interrupt();
+        r2_core::runtime::request_interrupt_on_this_thread();
         Ok(template)
     });
     let templates = make_templates();

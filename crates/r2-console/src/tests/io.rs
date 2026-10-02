@@ -730,7 +730,7 @@ fn plain_reader_on_a_terminal_ignores_a_stale_interrupt() {
     // before the next command read; that read must still return the typed command
     let _lock = r2_testkit::global_state_lock();
     let mut reader = crate::io::PlainReader::new(true, None);
-    r2_core::runtime::request_interrupt();
+    r2_core::runtime::request_interrupt_on_this_thread();
     let mut input = io::Cursor::new(b"help\n".to_vec());
     let outcome = reader.read_command_from("r2> ", &mut input).unwrap();
     assert!(
@@ -752,7 +752,7 @@ impl io::Read for InterruptedRead {
 }
 impl io::BufRead for InterruptedRead {
     fn fill_buf(&mut self) -> io::Result<&[u8]> {
-        r2_core::runtime::request_interrupt();
+        r2_core::runtime::request_interrupt_on_this_thread();
         self.0.fill_buf()
     }
     fn consume(&mut self, amount: usize) {
@@ -790,7 +790,7 @@ fn piped_sigint_before_a_read_aborts_it_without_consuming_input() {
     let _lock = r2_testkit::global_state_lock();
     let mut reader = crate::io::PlainReader::new(false, None);
     let mut input = io::Cursor::new(b"answer\n".to_vec());
-    r2_core::runtime::request_interrupt();
+    r2_core::runtime::request_interrupt_on_this_thread();
     let first = reader.read_command_from("r2> ", &mut input).unwrap();
     assert!(matches!(first, ReadOutcome::Interrupted), "{first:?}");
     let second = reader.read_command_from("r2> ", &mut input).unwrap();

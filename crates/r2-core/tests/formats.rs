@@ -304,3 +304,43 @@ fn private_key_structures_pyca_refuses_are_not_exported() {
         }
     }
 }
+
+/// R13 (R4/R6/R10 hand-off): a private key DER followed by trailing bytes — e.g. the
+/// zero padding a token's KW-PAD unwrap leaves on a PKCS#8 (`copy softhsm:<priv> mem` on
+/// SoftHSM 2.6.1) — fails like pyca's `load_der_private_key`: rust-asn1 parses the value's
+/// content before it reports data after it, so the LAST attempt (EncryptedPrivateKeyInfo)
+/// names the INTEGER where it wanted the AlgorithmIdentifier SEQUENCE. Texts from pyca in
+/// c2's venv (c2@408d6f2), verbatim.
+#[test]
+fn private_key_der_with_trailing_bytes_reports_pycas_unexpected_tag() {
+    const PYCA: &str = "Could not deserialize key data. The data may be in an incorrect format, it may be encrypted with an unsupported algorithm, or it may be an unsupported key type (e.g. EC curves with explicit parameters). Details: ASN.1 parsing error: unexpected tag (got Tag { value: 2, constructed: false, class: Universal })";
+    let rsa = rsa_key(2048);
+    let ec = p256();
+    let ed = PKey::generate_ed25519().unwrap();
+    let ders = [
+        ("rsa pkcs8", pkcs8_der(&rsa)),
+        ("rsa pkcs1", rsa.private_key_to_der().unwrap()),
+        ("ec pkcs8", pkcs8_der(&ec)),
+        ("ec sec1", ec.private_key_to_der().unwrap()),
+        ("ed25519 pkcs8", pkcs8_der(&ed)),
+    ];
+    for (name, der) in ders {
+        for suffix in [
+            &[0x00][..],
+            &[0x00, 0x00],
+            &[0x05, 0x00],
+            &[0x02, 0x01, 0x00],
+            &[0x00; 7],
+        ] {
+            let mut data = der.clone();
+            data.extend_from_slice(suffix);
+            let err = private_key_bytes(&data, Encoding::Der, None).unwrap_err();
+            assert_eq!(err.kind, ErrorKind::KeyParse, "{name}");
+            assert_eq!(
+                err.message,
+                format!("exported private key is not valid unencrypted PKCS#8 DER: {PYCA}"),
+                "{name} + {suffix:02x?}"
+            );
+        }
+    }
+}

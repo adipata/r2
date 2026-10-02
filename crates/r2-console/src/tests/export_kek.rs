@@ -893,7 +893,7 @@ fn interrupt_flag_stops_before_the_wrap() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("wrapped.bin");
     r2_core::runtime::reset_interrupt();
-    r2_core::runtime::request_interrupt();
+    r2_core::runtime::request_interrupt_on_this_thread();
     let result = run_line(
         &p.ctx,
         &format!("export mem:target {} --kek kek --mech kwp", out.display()),

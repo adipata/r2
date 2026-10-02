@@ -519,7 +519,7 @@ impl r2_testkit::FakeHooks for InterruptAfterFirstImport {
         key_id: Option<&[u8]>,
     ) -> Option<r2_core::Result<r2_core::keys::KeyInfo>> {
         let result = next.import_key(material, label, template, key_id);
-        r2_core::runtime::request_interrupt();
+        r2_core::runtime::request_interrupt_on_this_thread();
         Some(result)
     }
 }

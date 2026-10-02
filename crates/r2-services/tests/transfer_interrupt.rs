@@ -100,13 +100,13 @@ impl FakeHooks for InterruptOn {
         _options: &WrapOptions,
     ) -> Option<Result<Vec<u8>>> {
         if self.0 == "wrap_key" {
-            r2_core::runtime::request_interrupt();
+            r2_core::runtime::request_interrupt_on_this_thread();
         }
         None
     }
     fn export_key(&self, _next: &dyn Provider, _key: &KeyInfo) -> Option<Result<KeyMaterial>> {
         if self.0 == "export_key" {
-            r2_core::runtime::request_interrupt();
+            r2_core::runtime::request_interrupt_on_this_thread();
         }
         None
     }
@@ -148,7 +148,7 @@ fn ctrl_c_before_the_ladder_creates_nothing() {
     r2_core::runtime::reset_interrupt();
     let (src, dst) = (make_hsm("srchsm"), make_hsm("dsthsm"));
     let key = import_aes(&src, "aeskey", true, true);
-    r2_core::runtime::request_interrupt();
+    r2_core::runtime::request_interrupt_on_this_thread();
     let result = do_copy(&src, &key, &dst);
     r2_core::runtime::reset_interrupt();
     assert_eq!(result.unwrap_err().kind, ErrorKind::UserAbort);

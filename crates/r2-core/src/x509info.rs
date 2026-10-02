@@ -532,12 +532,25 @@ impl<'a> Der<'a> {
     }
 }
 
-/// `parse_single` of a value with tag `tag`.
+/// `parse_single` of a value with tag `tag` whose content needs no further parsing (or
+/// whose content errors may be reported after trailing data — prefer `der_head`).
 pub(crate) fn der_single(data: &[u8], tag: u8) -> Asn1Result<Tlv<'_>> {
     let mut der = Der::new(data);
     let tlv = der.tagged(tag)?;
     der.finish()?;
     Ok(tlv)
+}
+
+/// The first half of rust-asn1's `parse_single`: the TLV with tag `tag` plus the parser
+/// positioned after it. rust-asn1 parses (and validates) the whole value's content BEFORE
+/// it reports data after the value (`ExtraData`), so callers parse the content first and
+/// call `rest.finish()` afterwards — e.g. a PKCS#8 key followed by a 0x00 fails pyca's last
+/// attempt (EncryptedPrivateKeyInfo) with "unexpected tag (got Tag { value: 2, … })", not
+/// "extra data".
+pub(crate) fn der_head(data: &[u8], tag: u8) -> Asn1Result<(Tlv<'_>, Der<'_>)> {
+    let mut der = Der::new(data);
+    let tlv = der.tagged(tag)?;
+    Ok((tlv, der))
 }
 
 /// rust-asn1 `validate_integer`.
@@ -1040,18 +1053,20 @@ fn specified_domain(content: &[u8]) -> Asn1Result<()> {
 fn pss_params(content: &[u8]) -> Asn1Result<()> {
     let mut der = Der::new(content);
     if let Some(hash) = der.opt(0xa0)? {
-        let inner = der_single(hash.content, 0x30)?;
+        let (inner, after) = der_head(hash.content, 0x30)?;
         alg_id(&inner)?;
+        after.finish()?;
         if inner.raw == PSS_DEFAULT_HASH {
             return Err(Asn1Error::EncodedDefault);
         }
     }
     if let Some(mgf) = der.opt(0xa1)? {
-        let inner = der_single(mgf.content, 0x30)?;
+        let (inner, after) = der_head(mgf.content, 0x30)?;
         let mut fields = Der::new(inner.content);
         der_oid(&fields.tagged(0x06)?)?;
         alg_id(&fields.tagged(0x30)?)?;
         fields.finish()?;
+        after.finish()?;
         if inner.raw == PSS_DEFAULT_MGF {
             return Err(Asn1Error::EncodedDefault);
         }
@@ -1145,7 +1160,7 @@ fn der_time(tlv: Tlv<'_>) -> std::result::Result<DerTime, String> {
 /// load too.
 pub(crate) fn load_certificate(der: &[u8]) -> std::result::Result<CertParts<'_>, String> {
     let asn1 = |e: Asn1Error| e.text();
-    let cert = der_single(der, 0x30).map_err(asn1)?;
+    let (cert, rest) = der_head(der, 0x30).map_err(asn1)?;
     let mut outer = Der::new(cert.content);
     let tbs = outer.tagged(0x30).map_err(asn1)?;
     let mut fields = Der::new(tbs.content);
@@ -1181,7 +1196,7 @@ pub(crate) fn load_certificate(der: &[u8]) -> std::result::Result<CertParts<'_>,
         }
     }
     if let Some(explicit) = fields.opt(0xa3).map_err(asn1)? {
-        let extensions = der_single(explicit.content, 0x30).map_err(asn1)?;
+        let (extensions, after) = der_head(explicit.content, 0x30).map_err(asn1)?;
         der_sequence_of(extensions.content, |der| {
             let extension = der.tagged(0x30)?;
             let mut inner = Der::new(extension.content);
@@ -1195,11 +1210,13 @@ pub(crate) fn load_certificate(der: &[u8]) -> std::result::Result<CertParts<'_>,
             inner.finish()
         })
         .map_err(asn1)?;
+        after.finish().map_err(asn1)?;
     }
     fields.finish().map_err(asn1)?;
     alg_id(&outer.any().map_err(asn1)?).map_err(asn1)?;
     der_bits(&outer.tagged(0x03).map_err(asn1)?).map_err(asn1)?;
     outer.finish().map_err(asn1)?;
+    rest.finish().map_err(asn1)?;
     if version != 2 && version != 0 {
         return Err(invalid_cert_version(version));
     }
@@ -1225,7 +1242,7 @@ pub(crate) struct CsrParts<'a> {
 /// then a version other than 0 is pyca's InvalidVersion ("{n} is not a valid CSR version").
 pub(crate) fn load_csr(der: &[u8]) -> std::result::Result<CsrParts<'_>, String> {
     let asn1 = |e: Asn1Error| e.text();
-    let req = der_single(der, 0x30).map_err(asn1)?;
+    let (req, rest) = der_head(der, 0x30).map_err(asn1)?;
     let mut outer = Der::new(req.content);
     let info = outer.tagged(0x30).map_err(asn1)?;
     let mut fields = Der::new(info.content);
@@ -1240,6 +1257,7 @@ pub(crate) fn load_csr(der: &[u8]) -> std::result::Result<CsrParts<'_>, String> 
     alg_id(&outer.any().map_err(asn1)?).map_err(asn1)?;
     der_bits(&outer.tagged(0x03).map_err(asn1)?).map_err(asn1)?;
     outer.finish().map_err(asn1)?;
+    rest.finish().map_err(asn1)?;
     if version != 0 {
         return Err(format!("{version} is not a valid CSR version"));
     }

@@ -1354,3 +1354,28 @@ fn unsupported_key_types_are_c2s_classifier_texts() {
     );
     assert_eq!(err.message, "unsupported key algorithm: DSAPublicKey");
 }
+
+/// R13 (the R4/R6/R10 hand-off): a PKCS#8 with trailing zero bytes — what a token's
+/// KW-PAD unwrap leaves when `copy softhsm:<private key> mem` crosses SoftHSM 2.6.1 —
+/// fails to import with c2 memory's exact text (pyca's last attempt names the INTEGER).
+#[test]
+fn private_key_with_trailing_bytes_reports_c2s_unexpected_tag_text() {
+    let provider = MemoryProvider::new("mem");
+    let key = PKey::from_rsa(openssl::rsa::Rsa::generate(2048).unwrap()).unwrap();
+    let mut data = key.private_key_to_pkcs8().unwrap();
+    data.extend_from_slice(&[0; 8]);
+    let err = provider
+        .import_key(
+            &KeyMaterial::new(KeyAlgorithm::Rsa, KeyClass::Private, data),
+            "x",
+            None,
+            None,
+        )
+        .unwrap_err();
+    assert_eq!(err.kind, r2_core::error::ErrorKind::KeyParse);
+    assert_eq!(
+        err.message,
+        "cannot parse private key material: Could not deserialize key data. The data may be in an incorrect format, it may be encrypted with an unsupported algorithm, or it may be an unsupported key type (e.g. EC curves with explicit parameters). Details: ASN.1 parsing error: unexpected tag (got Tag { value: 2, constructed: false, class: Universal })"
+    );
+    assert_eq!(err.hint, None);
+}

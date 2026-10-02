@@ -843,7 +843,7 @@ fn interrupt_flag_stops_before_the_unwrap() {
         Params::new(),
     );
     r2_core::runtime::reset_interrupt();
-    r2_core::runtime::request_interrupt();
+    r2_core::runtime::request_interrupt_on_this_thread();
     let result = run_line(
         &p.ctx,
         &format!("load mem aes {blob} --kek kek --mech kwp --label restored"),

@@ -198,7 +198,8 @@ impl Command for KeysCommand {
 // key info / edit / template
 // ---------------------------------------------------------------------------------------
 
-const KEY_USAGE: &str = "key info <provider>:<label>[#<id-hex>][:<class>]  |  key edit \
+/// The `key` command's usage line (also quoted by `key template`, key_template.rs).
+pub(crate) const KEY_USAGE: &str = "key info <provider>:<label>[#<id-hex>][:<class>]  |  key edit \
                          <provider>:<label>[#<id-hex>][:<class>] [--label <l>] [--id <hex>]  \
                          |  key template <provider>:<label>[#<id-hex>][:<class>] <path>";
 

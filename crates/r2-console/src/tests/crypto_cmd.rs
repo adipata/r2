@@ -1671,7 +1671,7 @@ fn interrupt_flag_stops_before_the_output_is_written() {
             mech: &MechanismInvocation,
             data: &[u8],
         ) -> Option<Result<Vec<u8>>> {
-            r2_core::runtime::request_interrupt();
+            r2_core::runtime::request_interrupt_on_this_thread();
             Some(next.encrypt(key, mech, data))
         }
     }
@@ -1745,7 +1745,7 @@ fn interrupt_flag_stops_the_verify_verdict() {
             data: &[u8],
             signature: &[u8],
         ) -> Option<Result<bool>> {
-            r2_core::runtime::request_interrupt();
+            r2_core::runtime::request_interrupt_on_this_thread();
             Some(next.verify(key, mech, data, signature))
         }
     }
@@ -1783,7 +1783,7 @@ fn interrupt_flag_stops_the_resident_derive_line() {
             key: &KeyInfo,
             _mech: &MechanismInvocation,
         ) -> Option<Result<DeriveResult>> {
-            r2_core::runtime::request_interrupt();
+            r2_core::runtime::request_interrupt_on_this_thread();
             Some(Ok(DeriveResult {
                 key: Some(key.clone()),
                 raw: None,
@@ -1817,7 +1817,7 @@ fn interrupt_flag_during_resolution_never_issues_the_verb() {
             _next: &dyn Provider,
             _selector: &KeySelector,
         ) -> Option<Result<KeyInfo>> {
-            r2_core::runtime::request_interrupt();
+            r2_core::runtime::request_interrupt_on_this_thread();
             None
         }
         fn encrypt(

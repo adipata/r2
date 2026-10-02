@@ -13,12 +13,9 @@ use crate::cmdutil::{positional, require_usable};
 use crate::context::AppContext;
 use crate::parser::BoundArgs;
 
-/// The `key` command's usage line (c2 `self.usage` of KeyCommand; `key template`'s missing
-/// argument hints quote it).
-pub(crate) const KEY_USAGE: &str = "key info <provider>:<label>[#<id-hex>][:<class>]  |  key \
-                                    edit <provider>:<label>[#<id-hex>][:<class>] [--label \
-                                    <l>] [--id <hex>]  |  key template \
-                                    <provider>:<label>[#<id-hex>][:<class>] <path>";
+/// The `key` command's usage line (keys.rs; `key template`'s missing-argument hints quote
+/// it — R14's private copy deduplicated by R13).
+pub(crate) use crate::commands::keys::KEY_USAGE;
 
 /// `key template <ref> <path>` (§5.16). `args` = the `key` command's BoundArgs:
 /// positionals[0] == "template", [1] = ref, [2] = path. Non-pkcs11 provider →

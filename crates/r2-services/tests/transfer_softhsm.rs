@@ -611,3 +611,117 @@ fn test_certificate_copy_round_trip() {
     let back = copy(hsm, &on_token, &mem, &io, &editor, Some(&back_label)).unwrap();
     assert_eq!(mem.export_key(&back).unwrap().data.to_vec(), cert_der); // DER identical
 }
+
+/// R13 (R5b hand-off): SoftHSM's C_Initialize (its failed `rdrand` engine load) and its
+/// internal operations can leave errors on the process's shared libcrypto queue. After a
+/// login and on-token work, MemoryProvider and the r2-core parsers must still report their
+/// OWN first OpenSSL/pyca reason — e.g. the trailing-zero PKCS#8 of a 2.6.1
+/// `copy softhsm:<priv> mem` gives c2's exact text.
+#[test]
+fn memory_reasons_are_not_polluted_by_softhsm_errors() {
+    let _lock = global_state_lock();
+    let hsm = make_hsm("hsm");
+    let label = unique_label();
+    let mut request = GenerateRequest::new(KeyAlgorithm::Rsa, label.as_str());
+    request.size_bits = Some(2048);
+    request.template = Some(KeyTemplate::new(vec![boolean("CKA_TOKEN", false)]));
+    request.public_template = Some(KeyTemplate::new(vec![boolean("CKA_TOKEN", false)]));
+    let private = hsm.generate_key(&request).unwrap();
+    let mem = MemoryProvider::new("mem");
+    // an OpenSSL-reported reason (§11 D11)
+    let public = mem
+        .import_key(
+            &KeyMaterial::new(
+                KeyAlgorithm::Rsa,
+                KeyClass::Public,
+                r2_core::formats::pkcs8_public_spki(&fixtures::rsa2048_pkcs8()).unwrap(),
+            ),
+            "pub",
+            None,
+            None,
+        )
+        .unwrap();
+    let mut params = Params::new();
+    params.insert("hash".into(), ParamValue::Enum("sha256".into()));
+    let err = mem
+        .encrypt(
+            &public,
+            &MechanismInvocation::new("RSA-OAEP", params),
+            &[1; 250],
+        )
+        .unwrap_err();
+    assert_eq!(
+        err.message,
+        "RSA-OAEP encryption failed: data too large for key size"
+    );
+    // a pyca-structured parse failure
+    let mut data = fixtures::rsa2048_pkcs8();
+    data.extend_from_slice(&[0; 8]);
+    let err = mem
+        .import_key(
+            &KeyMaterial::new(KeyAlgorithm::Rsa, KeyClass::Private, data),
+            "x",
+            None,
+            None,
+        )
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::KeyParse);
+    assert_eq!(
+        err.message,
+        "cannot parse private key material: Could not deserialize key data. The data may be in an incorrect format, it may be encrypted with an unsupported algorithm, or it may be an unsupported key type (e.g. EC curves with explicit parameters). Details: ASN.1 parsing error: unexpected tag (got Tag { value: 2, constructed: false, class: Universal })"
+    );
+    hsm.delete_key(&private).unwrap();
+}
+
+/// R13 (R5b ledger hand-off, c2 test_hmac_matches_stdlib_and_crosses_providers): the direct
+/// token ⇄ memory HMAC exchange — the same generic secret on SoftHSM (copied from memory)
+/// and in MemoryProvider: every hash's MAC is equal, and each side verifies the other's
+/// MAC (full width and a truncated mac_len=12).
+#[test]
+fn hmac_crosses_token_and_memory_both_ways() {
+    let _lock = global_state_lock();
+    let hsms = Hsms(vec![make_hsm("softhsm")]);
+    let hsm = &hsms.0[0];
+    let mem = MemoryProvider::new("mem");
+    let unique = unique_label();
+    let source = mem
+        .import_key(
+            &KeyMaterial::new(
+                KeyAlgorithm::Generic,
+                KeyClass::Secret,
+                (0..GENERIC_KEY_LEN).collect(),
+            ),
+            &format!("{}-hsrc", unique.as_str()),
+            None,
+            None,
+        )
+        .unwrap();
+    let io = ScriptedIo::empty();
+    let editor = SessionEditor::mac();
+    let on_token = copy(
+        &mem,
+        &source,
+        hsm,
+        &io,
+        &editor,
+        Some(&format!("{}-hcopy", unique.as_str())),
+    )
+    .unwrap();
+    for hash in ["sha1", "sha224", "sha256", "sha384", "sha512"] {
+        let mech = hmac(hash);
+        let token_mac = hsm.sign(&on_token, &mech, MESSAGE).unwrap();
+        let mem_mac = mem.sign(&source, &mech, MESSAGE).unwrap();
+        assert_eq!(token_mac, mem_mac, "{hash}");
+        assert!(mem.verify(&source, &mech, MESSAGE, &token_mac).unwrap());
+        assert!(hsm.verify(&on_token, &mech, MESSAGE, &mem_mac).unwrap());
+        let mut short = mech.clone();
+        short.params.insert("mac_len".into(), ParamValue::Int(12));
+        let token_short = hsm.sign(&on_token, &short, MESSAGE).unwrap();
+        assert_eq!(token_short, mem_mac[..12].to_vec(), "{hash}");
+        assert!(mem.verify(&source, &short, MESSAGE, &token_short).unwrap());
+        assert!(
+            hsm.verify(&on_token, &short, MESSAGE, &mem_mac[..12])
+                .unwrap()
+        );
+    }
+}

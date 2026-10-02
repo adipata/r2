@@ -34,11 +34,11 @@ use crate::error::{ConsoleError, Result};
 use crate::keys::{Curve, KeyAlgorithm, KeyClass, KeyMaterial};
 use crate::text::py_repr;
 use crate::x509info::{
-    self, AlgParams, Asn1Error, Classifier, Der, EcParams, EcParamsKind, O_AES128_CBC,
+    self, AlgParams, Asn1Error, Asn1Result, Classifier, Der, EcParams, EcParamsKind, O_AES128_CBC,
     O_AES192_CBC, O_AES256_CBC, O_DES_EDE3_CBC, O_ED448, O_ED25519, O_HMACS, O_PBE_MD5_DES,
     O_PBE_SHA_3DES, O_PBE_SHA_RC2_40, O_PBE_SHA_RC4_128, O_RSA, O_RSA_PSS, O_X448, O_X25519,
-    alg_id, der_attributes, der_biguint, der_bits, der_nonempty_sequences, der_single, der_uint,
-    ec_params, spki_fields,
+    alg_id, der_attributes, der_biguint, der_bits, der_head, der_nonempty_sequences, der_single,
+    der_uint, ec_params, spki_fields,
 };
 
 /// Type hint of `parse_key_material` (c2's frozen hint set). Token: "auto" | "aes" | "rsa" |
@@ -401,10 +401,26 @@ fn ec_group(params: &EcParams<'_>) -> Pyca<EcGroup> {
         .map_err(|_| PycaError::Unsupported(EXPLICIT_CURVE_TEXT.to_owned()))
 }
 
+/// `parse_single::<BigUint>`: content validated before trailing data is reported.
+fn single_biguint(data: &[u8]) -> Asn1Result<&[u8]> {
+    let (tlv, rest) = der_head(data, 0x02)?;
+    let value = der_biguint(&tlv)?;
+    rest.finish()?;
+    Ok(value)
+}
+
+/// `parse_single::<BitString>`: content validated before trailing data is reported.
+fn single_bits(data: &[u8]) -> Asn1Result<&[u8]> {
+    let (tlv, rest) = der_head(data, 0x03)?;
+    let value = der_bits(&tlv)?;
+    rest.finish()?;
+    Ok(value)
+}
+
 /// pyca `pkcs8::parse_private_key` (PrivateKeyInfo { version u8, AlgorithmIdentifier,
 /// OCTET STRING, [0] IMPLICIT Attributes OPTIONAL }; version 0 only).
 fn pkcs8_private(data: &[u8]) -> Pyca<PKey<Private>> {
-    let top = der_single(data, 0x30)?;
+    let (top, rest) = der_head(data, 0x30)?;
     let mut der = Der::new(top.content);
     let version = der_uint(&der.any()?, 1)?;
     let alg = alg_id(&der.any()?)?;
@@ -413,6 +429,7 @@ fn pkcs8_private(data: &[u8]) -> Pyca<PKey<Private>> {
         der_attributes(attributes.content)?;
     }
     der.finish()?;
+    rest.finish()?;
     if version != 0 {
         return Err(invalid_key());
     }
@@ -424,7 +441,7 @@ fn pkcs8_private(data: &[u8]) -> Pyca<PKey<Private>> {
         _ if alg.oid == O_RSA || alg.oid == O_RSA_PSS => rsa_private(private),
         AlgParams::Ec(params) => sec1_private(private, Some(*params)),
         AlgParams::Dss { p, q, g } => {
-            let x = der_biguint(&der_single(private, 0x02)?)?;
+            let x = single_biguint(private)?;
             let (p, q, g, x) = (bn(p)?, bn(q)?, bn(g)?, bn(x)?);
             let mut ctx = BigNumContext::new()?;
             let mut y = BigNum::new()?;
@@ -433,7 +450,7 @@ fn pkcs8_private(data: &[u8]) -> Pyca<PKey<Private>> {
             Ok(PKey::from_dsa(dsa)?)
         }
         AlgParams::Dh { p, g, q } => {
-            let x = der_biguint(&der_single(private, 0x02)?)?;
+            let x = single_biguint(private)?;
             let p = bn(p)?;
             if p.num_bits() < 512 {
                 return Err(invalid_key());
@@ -459,7 +476,7 @@ fn pkcs8_private(data: &[u8]) -> Pyca<PKey<Private>> {
 /// pyca `ec::parse_pkcs1_private_key` (SEC1 ECPrivateKey { version 1, OCTET STRING,
 /// [0] EcParameters OPTIONAL, [1] BIT STRING OPTIONAL }), with the PKCS#8 parameters.
 fn sec1_private(data: &[u8], outer: Option<EcParams<'_>>) -> Pyca<PKey<Private>> {
-    let top = der_single(data, 0x30)?;
+    let (top, rest) = der_head(data, 0x30)?;
     let mut der = Der::new(top.content);
     let version = der_uint(&der.any()?, 1)?;
     let private = der.tagged(0x04)?.content;
@@ -473,10 +490,11 @@ fn sec1_private(data: &[u8], outer: Option<EcParams<'_>>) -> Pyca<PKey<Private>>
         None => None,
     };
     let public = match der.opt(0xa1)? {
-        Some(explicit) => Some(der_bits(&der_single(explicit.content, 0x03)?)?),
+        Some(explicit) => Some(single_bits(explicit.content)?),
         None => None,
     };
     der.finish()?;
+    rest.finish()?;
     if version != 1 {
         return Err(invalid_key());
     }
@@ -518,7 +536,7 @@ fn sec1_private_alone(data: &[u8]) -> Pyca<PKey<Private>> {
 /// pyca `rsa::parse_pkcs1_private_key` (version 0, the eight BigUints, no
 /// otherPrimeInfos).
 fn rsa_private(data: &[u8]) -> Pyca<PKey<Private>> {
-    let top = der_single(data, 0x30)?;
+    let (top, rest) = der_head(data, 0x30)?;
     let mut der = Der::new(top.content);
     let version = der_uint(&der.any()?, 1)?;
     let mut parts = Vec::with_capacity(8);
@@ -530,6 +548,7 @@ fn rsa_private(data: &[u8]) -> Pyca<PKey<Private>> {
         der_nonempty_sequences(other.content)?;
     }
     der.finish()?;
+    rest.finish()?;
     if version != 0 || other_primes.is_some() {
         return Err(invalid_key());
     }
@@ -548,7 +567,7 @@ fn rsa_private(data: &[u8]) -> Pyca<PKey<Private>> {
 
 /// pyca `dsa::parse_pkcs1_private_key` (version 0, p, q, g, y, x).
 fn dsa_private(data: &[u8]) -> Pyca<PKey<Private>> {
-    let top = der_single(data, 0x30)?;
+    let (top, rest) = der_head(data, 0x30)?;
     let mut der = Der::new(top.content);
     let version = der_uint(&der.any()?, 1)?;
     let mut parts = Vec::with_capacity(5);
@@ -556,6 +575,7 @@ fn dsa_private(data: &[u8]) -> Pyca<PKey<Private>> {
         parts.push(der_biguint(&der.any()?)?);
     }
     der.finish()?;
+    rest.finish()?;
     if version != 0 {
         return Err(invalid_key());
     }
@@ -571,11 +591,12 @@ fn dsa_private(data: &[u8]) -> Pyca<PKey<Private>> {
 
 /// pyca `rsa::parse_pkcs1_public_key` (RSAPublicKey { n, e } as BigUints).
 fn rsa_public(data: &[u8]) -> Pyca<PKey<Public>> {
-    let top = der_single(data, 0x30)?;
+    let (top, rest) = der_head(data, 0x30)?;
     let mut der = Der::new(top.content);
     let n = der_biguint(&der.any()?)?;
     let e = der_biguint(&der.any()?)?;
     der.finish()?;
+    rest.finish()?;
     Ok(PKey::from_rsa(Rsa::from_public_components(
         bn(n)?,
         bn(e)?,
@@ -584,8 +605,9 @@ fn rsa_public(data: &[u8]) -> Pyca<PKey<Public>> {
 
 /// pyca `spki::parse_public_key`.
 fn spki_public(data: &[u8]) -> Pyca<PKey<Public>> {
-    let top = der_single(data, 0x30)?;
+    let (top, rest) = der_head(data, 0x30)?;
     let spki = spki_fields(&top)?;
+    rest.finish()?;
     let raw = |id: Id| -> Pyca<PKey<Public>> {
         PKey::public_key_from_raw_bytes(spki.key, id).map_err(|_| invalid_key())
     };
@@ -604,7 +626,7 @@ fn spki_public(data: &[u8]) -> Pyca<PKey<Public>> {
         _ if spki.alg.oid == O_X448 => raw(Id::X448),
         _ if spki.alg.oid == O_RSA || spki.alg.oid == O_RSA_PSS => rsa_public(spki.key),
         AlgParams::Dss { p, q, g } => {
-            let y = der_biguint(&der_single(spki.key, 0x02)?)?;
+            let y = single_biguint(spki.key)?;
             let dsa = Dsa::from_public_components(bn(p)?, bn(q)?, bn(g)?, bn(y)?)?;
             Ok(PKey::from_dsa(dsa)?)
         }
@@ -614,7 +636,7 @@ fn spki_public(data: &[u8]) -> Pyca<PKey<Public>> {
                 None => None,
             };
             let dh = Dh::from_pqg(bn(p)?, q, bn(g)?)?;
-            let y = der_biguint(&der_single(spki.key, 0x02)?)?;
+            let y = single_biguint(spki.key)?;
             Ok(PKey::from_dh(dh.set_public_key(bn(y)?)?)?)
         }
         _ => Err(PycaError::Unsupported(format!(
@@ -805,11 +827,12 @@ fn pbe_decrypt(cipher: Cipher, key: &[u8], iv: &[u8], data: &[u8]) -> Pyca<Zeroi
 /// SHA1-RC2-40, SHA1-RC4-128) or PBES2 (PBKDF2 over HMAC-SHA1..512 or scrypt; AES-*-CBC,
 /// DES-EDE3-CBC, RC2-CBC version 58); anything else → "Unknown key encryption algorithm".
 fn encrypted_pkcs8_private(data: &[u8], password: Option<&[u8]>) -> Pyca<PKey<Private>> {
-    let top = der_single(data, 0x30)?;
+    let (top, rest) = der_head(data, 0x30)?;
     let mut der = Der::new(top.content);
     let alg = alg_id(&der.any()?)?;
     let encrypted = der.tagged(0x04)?.content;
     der.finish()?;
+    rest.finish()?;
     let password = match password {
         None | Some([]) => return Err(PycaError::Encrypted),
         Some(password) => password,

@@ -331,7 +331,7 @@ fn reader_errors_are_rendered_and_end_the_repl() {
 #[test]
 fn the_interrupt_flag_is_reset_before_every_dispatch() {
     let _lock = global_state_lock();
-    r2_core::runtime::request_interrupt(); // stale flag (e.g. rpassword's raise(SIGINT))
+    r2_core::runtime::request_interrupt_on_this_thread(); // stale flag (e.g. rpassword's raise(SIGINT))
     let out = run_session("step\nexit\n", false);
     assert_eq!(out, "step done\n");
     r2_core::runtime::reset_interrupt();

@@ -1768,7 +1768,7 @@ fn sibling_rename_stops_at_the_interrupt_flag() {
     let _lock = r2_testkit::global_state_lock();
     let p = make_pair(&["y"]);
     generate(p.hsm.as_ref(), KeyAlgorithm::Rsa, "pair");
-    r2_core::runtime::request_interrupt();
+    r2_core::runtime::request_interrupt_on_this_thread();
     let err = run_line(&p.ctx, "key edit hsm:pair:priv --label pair2");
     r2_core::runtime::reset_interrupt();
     let err = err.unwrap_err();

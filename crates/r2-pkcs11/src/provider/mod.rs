@@ -324,7 +324,17 @@ impl Pkcs11Provider {
     /// Run a session operation through the choke point with §5.2 auto-recovery: on
     /// CKR_SESSION_HANDLE_INVALID / CKR_DEVICE_REMOVED the session is recovered (keep-pin
     /// only) and `f` retried exactly once.
+    ///
+    /// The thread's OpenSSL error queue is drained afterwards: the module may share the
+    /// process's libcrypto and leave failed internal operations queued, which would else
+    /// become the reported reason of the next memory/keyparse failure (§11 D11; R13).
     pub(crate) fn op<T>(&self, context: &str, f: impl Fn() -> OResult<T>) -> Result<T> {
+        let result = self.op_inner(context, f);
+        crate::mechanisms::clear_openssl_errors();
+        result
+    }
+
+    fn op_inner<T>(&self, context: &str, f: impl Fn() -> OResult<T>) -> Result<T> {
         self.require_session()?;
         match f() {
             Ok(value) => Ok(value),

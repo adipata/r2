@@ -396,6 +396,9 @@ fn test_config_unknown_subcommand() {
 
 #[test]
 fn test_config_bare_defaults_to_show() {
+    // both configs resolve their default paths from the environment: hold the lock so a
+    // concurrent `set_env` test (the `cargo test` fallback) cannot change it in between
+    let _lock = r2_testkit::global_state_lock();
     let io = scripted();
     run_line(&ctx_for(&io), "config").unwrap();
     assert!(!yaml::parse(&io.output()[0]).unwrap().is_null());

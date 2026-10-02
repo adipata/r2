@@ -10,8 +10,9 @@
 
 use r2_core::error::ErrorKind;
 use r2_core::runtime::{
-    check_interrupt, interrupted, record_panic_report, request_interrupt, reset_interrupt,
-    set_spinner_active, spinner_active, take_panic_report,
+    check_interrupt, interrupted, record_panic_report, request_interrupt,
+    request_interrupt_on_this_thread, reset_interrupt, set_spinner_active, spinner_active,
+    take_panic_report,
 };
 use r2_testkit::global_state_lock;
 
@@ -34,6 +35,22 @@ fn interrupt_flag_request_check_reset() {
     reset_interrupt();
     assert!(!interrupted());
     assert!(check_interrupt().is_ok());
+}
+
+/// R13: the in-process test Ctrl-C is seen only by the thread that requested it (the
+/// `cargo test` fallback runs other tests concurrently on other threads), and
+/// reset_interrupt clears it.
+#[test]
+fn thread_local_interrupt_is_invisible_to_other_threads() {
+    let _lock = global_state_lock();
+    reset_interrupt();
+    request_interrupt_on_this_thread();
+    assert!(interrupted());
+    assert!(check_interrupt().is_err());
+    let elsewhere = std::thread::scope(|scope| scope.spawn(interrupted).join().unwrap());
+    assert!(!elsewhere);
+    reset_interrupt();
+    assert!(!interrupted());
 }
 
 #[test]
