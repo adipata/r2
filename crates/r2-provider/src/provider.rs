@@ -1,4 +1,4 @@
-// R0 skeleton — owner R3 (generated from spec §4)
+// The Provider trait (spec §4.5.2, owner R3; c2 providers/base.py).
 use std::any::Any;
 use std::collections::BTreeSet;
 
