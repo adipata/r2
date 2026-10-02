@@ -134,6 +134,9 @@ pub fn run_load(
         templates: &ctx.cfg().templates,
         seeds: seeds.as_ref(),
     };
+    // §11 D13: a Ctrl-C during the KEK lookup / mechanisms() probe / blob read never
+    // issues C_UnwrapKey (c2's KeyboardInterrupt surfaced right after the find_key call).
+    check_interrupt()?;
     let info = wrapload::load_wrapped(
         provider,
         UnwrapJob {
@@ -148,6 +151,7 @@ pub fn run_load(
         },
         &seeding,
     )?;
+    check_interrupt()?; // §11 D13: step boundary after the provider verb
     ctx.io.print(table(
         Some(&format!(
             "unwrapped into {} ({})",
@@ -227,6 +231,7 @@ pub fn run_export(ctx: &AppContext, args: &BoundArgs) -> r2_core::Result<()> {
     let params =
         ParamResolver::new(ctx.io.as_ref(), &ctx.providers).resolve(&entry.spec, &args.named)?;
 
+    check_interrupt()?; // §11 D13: never issue C_WrapKey after a Ctrl-C
     let blob = wrapload::wrap_for_export(provider, &kek, &entry, params, &key)?;
     check_interrupt()?; // §11 D13: step boundary before writing output
     DataOutput::file(path.clone(), fmt).write(&blob, ctx.io.as_ref())?;

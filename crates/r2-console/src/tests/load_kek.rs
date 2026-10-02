@@ -827,3 +827,34 @@ fn usage_constants_match_the_commands() {
     assert_eq!(commands["load"].usage(), kek::LOAD_USAGE);
     assert_eq!(commands["export"].usage(), kek::EXPORT_USAGE);
 }
+
+/// §11 D13: a Ctrl-C that arrived during the non-interactive resolution steps (KEK lookup,
+/// mechanisms() probe, blob read) is honored before C_UnwrapKey — no object is created.
+#[test]
+fn interrupt_flag_stops_before_the_unwrap() {
+    let _lock = r2_testkit::global_state_lock();
+    let p = make_pair(&[]);
+    let kek = import_aes(p.mem.as_ref(), "kek");
+    let blob = wrapped_blob(
+        p.mem.as_ref(),
+        &kek,
+        "AES-KEY-WRAP-PAD",
+        &TARGET,
+        Params::new(),
+    );
+    r2_core::runtime::reset_interrupt();
+    r2_core::runtime::request_interrupt();
+    let result = run_line(
+        &p.ctx,
+        &format!("load mem aes {blob} --kek kek --mech kwp --label restored"),
+    );
+    r2_core::runtime::reset_interrupt();
+    let err = result.unwrap_err();
+    assert_eq!(err.kind, ErrorKind::UserAbort);
+    assert!(calls_of(&p.mem, "unwrap_key").is_empty());
+    assert!(
+        p.mem.find_key(&KeySelector::label("restored")).is_err(),
+        "no object was created"
+    );
+    assert!(p.io.output().is_empty());
+}

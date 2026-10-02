@@ -882,3 +882,26 @@ fn export_then_load_round_trips_on_the_memory_provider() {
         }
     }
 }
+
+/// §11 D13: a Ctrl-C pending before the wrap never issues C_WrapKey nor writes the file.
+#[test]
+fn interrupt_flag_stops_before_the_wrap() {
+    let _lock = r2_testkit::global_state_lock();
+    let p = make_pair(&[]);
+    import_aes(p.mem.as_ref(), "kek", &aes_32(), None);
+    import_aes(p.mem.as_ref(), "target", &TARGET, None);
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("wrapped.bin");
+    r2_core::runtime::reset_interrupt();
+    r2_core::runtime::request_interrupt();
+    let result = run_line(
+        &p.ctx,
+        &format!("export mem:target {} --kek kek --mech kwp", out.display()),
+    );
+    r2_core::runtime::reset_interrupt();
+    let err = result.unwrap_err();
+    assert_eq!(err.kind, ErrorKind::UserAbort);
+    assert!(calls_of(&p.mem, "wrap_key").is_empty());
+    assert!(!out.exists());
+    assert!(p.io.output().is_empty());
+}

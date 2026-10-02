@@ -12,7 +12,8 @@ rsa_kek_pub.pem) and the EC target (ec_target.pem), then writes `export --kek` b
 same bytes; oaep/pkcs1 are randomized, so r2 must load them.
 
 Part 2 (when the files exist) loads the r2-produced randomized blobs `r2_oaep.b64` /
-`r2_pkcs1.bin` (written by the ignored r2 test `kek_interop::write_r2_blobs`) back into
+`r2_pkcs1.bin` (written by the ignored r2 test `kek_interop::write_r2_blobs`, which only
+writes when R2_REGEN_KEK_INTEROP=1 is set) back into
 c2 and checks that the unwrapped key equals the AES target — the "vice versa" direction.
 """
 
@@ -45,7 +46,9 @@ def run_c2(lines: list[str]) -> str:
             text=True,
             check=True,
         ).stdout
-    if "error:" in out:
+    # c2 renders errors as a rich panel (`╭─ error ───╮`, no colon) and aborts as
+    # `Aborted.`, exiting rc=0 either way — so look for those, not for "error:".
+    if "╭─ error" in out or "Aborted." in out:
         sys.exit(f"c2 reported an error:\n{out}")
     return out
 
@@ -59,7 +62,21 @@ SETUP = [
 ]
 
 
+PART1_OUTPUTS = [
+    "c2_kw.bin",
+    "c2_kwp.hex",
+    "c2_cbc.b64",
+    "c2_gcm.bin",
+    "c2_ec_kwp.bin",
+    "c2_oaep.bin",
+    "c2_pkcs1.b64",
+]
+
+
 def part1() -> None:
+    # delete the previous vectors first so a failed export cannot leave a stale one behind
+    for name in PART1_OUTPUTS:
+        (HERE / name).unlink(missing_ok=True)
     lines = [
         *SETUP,
         f"export mem:target {HERE / 'c2_kw.bin'} --kek kek --mech kw",
@@ -73,12 +90,18 @@ def part1() -> None:
         "--outformat b64",
     ]
     print(run_c2(lines))
+    missing = [name for name in PART1_OUTPUTS if not (HERE / name).exists()]
+    if missing:
+        sys.exit(f"c2 did not write: {', '.join(missing)}")
 
 
 def part2() -> None:
     oaep, pkcs1 = HERE / "r2_oaep.b64", HERE / "r2_pkcs1.bin"
     if not (oaep.exists() and pkcs1.exists()):
-        print("part 2 skipped: run the r2 test kek_interop::write_r2_blobs first")
+        print(
+            "part 2 skipped: run the r2 test kek_interop::write_r2_blobs "
+            "with R2_REGEN_KEK_INTEROP=1 first"
+        )
         return
     with tempfile.TemporaryDirectory() as tmp:
         lines = [

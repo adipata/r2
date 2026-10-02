@@ -157,6 +157,10 @@ struct Session {
 }
 
 fn session_with(aes_override: Option<(String, Section)>) -> Session {
+    session_with_editor(Rc::new(SectionEditor { aes_override }))
+}
+
+fn session_with_editor(editor: Rc<dyn TemplateEditor>) -> Session {
     let lock = global_state_lock();
     let token = softhsm_token();
     let mut config = Pkcs11InstanceConfig::new("hsm", token.module_path.clone());
@@ -175,7 +179,7 @@ fn session_with(aes_override: Option<(String, Section)>) -> Session {
     let ctx = CtxBuilder::new(Rc::clone(&io) as Rc<dyn ConsoleIo>)
         .providers(registry)
         .config(make_config(Some("ui:\n  confirm_delete: false\n")))
-        .editor(Rc::new(SectionEditor { aes_override }))
+        .editor(editor)
         .build();
     let session = Session {
         ctx,
@@ -188,6 +192,49 @@ fn session_with(aes_override: Option<(String, Section)>) -> Session {
         token.token_label, token.user_pin
     ));
     session
+}
+
+/// The editor of c2's literal `--template <file>` lines: it accepts the §5.16 seed
+/// unchanged ("ok"), so only the file sets attributes.
+struct Identity;
+
+impl TemplateEditor for Identity {
+    fn edit(&self, template: KeyTemplate, _title: &str) -> Result<KeyTemplate> {
+        Ok(template)
+    }
+}
+
+/// A session for c2's literal `--template <file>` form (§5.16 seeding, R14).
+fn literal_session() -> Session {
+    session_with_editor(Rc::new(Identity))
+}
+
+/// Writes a §5.16 template file holding the given c2 sections.
+fn template_file(dir: &Path, name: &str, sections: &[(&str, Section)]) -> std::path::PathBuf {
+    let mut text = String::new();
+    for (class, entries) in sections {
+        text.push_str(&format!("{class}:\n"));
+        for (attr, value) in *entries {
+            text.push_str(&format!("  {attr}: {value}\n"));
+        }
+    }
+    let path = dir.join(name);
+    std::fs::write(&path, text).unwrap();
+    path
+}
+
+/// c2 `_template_file`: every section of `wrapload.yaml`.
+fn c2_template_file(dir: &Path) -> std::path::PathBuf {
+    template_file(
+        dir,
+        "wrapload.yaml",
+        &[
+            ("aes", AES),
+            ("rsa_private", RSA_PRIVATE),
+            ("rsa_public", RSA_PUBLIC),
+            ("ec_private", EC_PRIVATE),
+        ],
+    )
 }
 
 fn session() -> Session {
@@ -675,43 +722,11 @@ fn rsa_public_kek_wraps_on_the_token_softhsm() {
 fn test_load_wrapped_aes_under_an_aes_kek_with_template_file_softhsm() {
     // c2's literal form: the §5.16 template file gives the KEK CKA_WRAP/CKA_UNWRAP. Runs
     // with the editor that accepts the seed unchanged, so only the file sets attributes.
-    struct Identity;
-    impl TemplateEditor for Identity {
-        fn edit(&self, template: KeyTemplate, _title: &str) -> Result<KeyTemplate> {
-            Ok(template)
-        }
-    }
     let label_guard = unique_label();
     let label = label_guard.as_str();
-    let lock = global_state_lock();
-    let token = softhsm_token();
-    let mut config = Pkcs11InstanceConfig::new("hsm", token.module_path.clone());
-    config.slot = Some(token.slot);
-    let hsm = Rc::new(Pkcs11Provider::new(
-        "hsm",
-        config,
-        BTreeMap::new(),
-        IndexMap::new(),
-    ));
-    let registry = ProviderRegistry::new();
-    registry
-        .register(Rc::clone(&hsm) as Rc<dyn Provider>)
-        .unwrap();
-    let io = Rc::new(ScriptedIo::empty());
-    let ctx = CtxBuilder::new(Rc::clone(&io) as Rc<dyn ConsoleIo>)
-        .providers(registry)
-        .config(make_config(Some("ui:\n  confirm_delete: false\n")))
-        .editor(Rc::new(Identity))
-        .build();
+    let s = literal_session();
     let dir = tempfile::tempdir().unwrap();
-    let template = dir.path().join("wrapload.yaml");
-    let section = |entries: Section| -> String {
-        entries
-            .iter()
-            .map(|(name, value)| format!("  {name}: {value}\n"))
-            .collect()
-    };
-    std::fs::write(&template, format!("aes:\n{}", section(AES))).unwrap();
+    let template = c2_template_file(dir.path());
     let out = dir.path().join("kwp.bin");
     let blob = software_wrap(
         &aes(&KEK_BYTES),
@@ -720,22 +735,107 @@ fn test_load_wrapped_aes_under_an_aes_kek_with_template_file_softhsm() {
         aes(&TARGET_BYTES),
     );
     let t = template.display();
-    for line in [
-        format!("login hsm {} --pin {}", token.token_label, token.user_pin),
-        format!(
-            "load hsm aes {} --label {label}-kek --template {t}",
-            hex(&KEK_BYTES)
-        ),
-        format!(
-            "load hsm aes {blob} --kek {label}-kek --mech kwp --label {label}-kwp --template {t}"
-        ),
-        format!("export hsm:{label}-kwp {}", out.display()),
-        format!("delete hsm:{label}-kwp"),
-        format!("delete hsm:{label}-kek"),
-    ] {
-        run_line(&ctx, &line).unwrap();
-    }
+    s.ok(&format!(
+        "load hsm aes {} --label {label}-kek --template {t}",
+        hex(&KEK_BYTES)
+    ));
+    s.ok(&format!(
+        "load hsm aes {blob} --kek {label}-kek --mech kwp --label {label}-kwp --template {t}"
+    ));
+    s.ok(&format!("export hsm:{label}-kwp {}", out.display()));
+    s.ok(&format!("delete hsm:{label}-kwp"));
+    s.ok(&format!("delete hsm:{label}-kek"));
     assert_eq!(read(&out), TARGET_BYTES);
-    let _ = hsm.shutdown();
-    drop(lock);
+}
+
+#[test]
+#[ignore = "needs R14 (merge checklist): --template seeding (templatefile::build_seed)"]
+fn test_load_wrapped_aes_under_an_rsa_kek_with_template_file_softhsm() {
+    // c2's literal form of the RSA rung: the rsa_private/rsa_public sections of the
+    // template file give the pair CKA_UNWRAP/CKA_WRAP; the aes section keeps the
+    // unwrapped results readable.
+    let label_guard = unique_label();
+    let label = label_guard.as_str();
+    let s = literal_session();
+    let dir = tempfile::tempdir().unwrap();
+    let template = c2_template_file(dir.path());
+    let t = template.display();
+    let pair = format!("{label}-pair");
+    let pub_path = dir.path().join("kek-pub.pem");
+    s.ok(&format!(
+        "generate hsm rsa size=2048 --label {pair} --template {t}"
+    ));
+    s.ok(&format!(
+        "export hsm:{pair} {} --public",
+        pub_path.display()
+    ));
+    let public = parse_key_material(&read(&pub_path), KeyHint::Auto, None)
+        .unwrap()
+        .remove(0);
+    let pkcs1_blob = software_wrap(&public, "RSA-PKCS1", Params::new(), aes(&TARGET_BYTES));
+    let mut oaep = Params::new();
+    oaep.insert("hash".into(), ParamValue::Enum("sha1".into()));
+    oaep.insert("mgf_hash".into(), ParamValue::Enum("sha1".into()));
+    oaep.insert("label".into(), ParamValue::Bytes(Vec::new()));
+    let oaep_blob = software_wrap(&public, "RSA-OAEP", oaep, aes(&TARGET_BYTES));
+    let (p1, oa) = (format!("{label}-p1"), format!("{label}-oaep"));
+    let pkcs1_out = dir.path().join("pkcs1.bin");
+    let oaep_out = dir.path().join("oaep.bin");
+    s.ok(&format!(
+        "load hsm aes {pkcs1_blob} --kek {pair} --mech pkcs1 --label {p1} --template {t}"
+    ));
+    s.ok(&format!(
+        "load hsm aes {oaep_blob} --kek {pair} --mech oaep hash=sha1 --label {oa} --template {t}"
+    ));
+    s.ok(&format!("export hsm:{p1} {}", pkcs1_out.display()));
+    s.ok(&format!("export hsm:{oa} {}", oaep_out.display()));
+    s.ok(&format!("delete hsm:{p1}"));
+    s.ok(&format!("delete hsm:{oa}"));
+    s.ok(&format!("delete hsm:{pair}:priv"));
+    s.ok(&format!("delete hsm:{pair}:pub"));
+    assert_eq!(read(&pkcs1_out), TARGET_BYTES);
+    assert_eq!(read(&oaep_out), TARGET_BYTES);
+}
+
+#[test]
+#[ignore = "needs R14 (merge checklist): --template seeding (templatefile::build_seed)"]
+fn test_sensitive_key_exports_wrapped_but_not_plain_with_template_file_softhsm() {
+    // c2's literal form: `sensitive.yaml` replaces the default aes rows, so the generated
+    // key is SENSITIVE+EXTRACTABLE with nothing else from the §7 defaults.
+    let label_guard = unique_label();
+    let label = label_guard.as_str();
+    let s = literal_session();
+    let dir = tempfile::tempdir().unwrap();
+    let template = c2_template_file(dir.path());
+    let sensitive = template_file(dir.path(), "sensitive.yaml", &[("aes", AES_SENSITIVE)]);
+    let kek_label = format!("{label}-senskek");
+    let key_label = format!("{label}-sens");
+    let plain_out = dir.path().join("plain.bin");
+    let wrapped_out = dir.path().join("wrapped.bin");
+    s.ok(&format!(
+        "load hsm aes {} --label {kek_label} --template {}",
+        hex(&KEK_BYTES),
+        template.display()
+    ));
+    s.ok(&format!(
+        "generate hsm aes size=256 --label {key_label} --template {}",
+        sensitive.display()
+    ));
+    let err = s
+        .run(&format!("export hsm:{key_label} {}", plain_out.display()))
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::KeyNotExportable);
+    assert!(
+        err.message.contains("Refusing to export"),
+        "{}",
+        err.message
+    );
+    s.ok(&format!(
+        "export hsm:{key_label} {} --kek {kek_label} --mech kwp",
+        wrapped_out.display()
+    ));
+    s.ok(&format!("delete hsm:{key_label}"));
+    s.ok(&format!("delete hsm:{kek_label}"));
+    assert!(!plain_out.exists());
+    assert!(!read(&wrapped_out).is_empty());
 }

@@ -7,7 +7,7 @@
 //   payload) loads through r2's `load --kek --file` and yields the original key.
 // - r2 → c2: the deterministic mechanisms (KW, KWP, CBC and GCM with fixed IVs) produce
 //   byte-identical blobs in r2, so c2 loads them exactly as its own; the randomized RSA
-//   blobs r2 wrote (`r2_oaep.b64`, `r2_pkcs1.bin`, from the ignored `write_r2_blobs`) were
+//   blobs r2 wrote (`r2_oaep.b64`, `r2_pkcs1.bin`, from the ignored, env-gated `write_r2_blobs`) were
 //   loaded by c2 in the generator's part 2, and stay loadable in r2.
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -184,8 +184,14 @@ fn r2_rsa_blobs_checked_by_c2_still_load_in_r2() {
 }
 
 #[test]
-#[ignore = "fixture writer: regenerates r2_oaep.b64 / r2_pkcs1.bin for gen_kek_interop.py part 2"]
+#[ignore = "fixture writer (needs R2_REGEN_KEK_INTEROP=1): regenerates r2_oaep.b64 / r2_pkcs1.bin for gen_kek_interop.py part 2"]
 fn write_r2_blobs() {
+    // OAEP / PKCS#1 v1.5 are randomized: rewriting the tracked blobs on every
+    // `--run-ignored all` would silently invalidate the c2-checked r2→c2 evidence, so the
+    // writer only runs on explicit request (then rerun gen_kek_interop.py part 2).
+    if std::env::var_os("R2_REGEN_KEK_INTEROP").is_none() {
+        return;
+    }
     let (ctx, _mem) = session();
     let dir = fixtures();
     run_line(
