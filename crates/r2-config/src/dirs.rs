@@ -121,26 +121,51 @@ mod platform {
         }
     }
 
-    #[cfg(target_os = "macos")]
-    pub(super) fn user_config_dir() -> Option<PathBuf> {
-        let home = current_home()?;
-        Some(join_home(
-            home,
-            format!("/Library/Application Support/{APP_DIR}").as_bytes(),
-        ))
+    /// Python `str.strip()` on a POSIX environment value, as `os.environ` sees it
+    /// (surrogateescape): only valid UTF-8 can be whitespace (`text::is_py_space`), an
+    /// undecodable byte never is, so non-UTF-8 values are trimmed byte for byte.
+    pub(super) fn py_strip_bytes(bytes: &[u8]) -> &[u8] {
+        use r2_core::text::is_py_space;
+        let mut chunks = bytes.utf8_chunks();
+        let start = chunks.next().map_or(0, |first| {
+            let valid = first.valid();
+            valid.len() - valid.trim_start_matches(is_py_space).len()
+        });
+        let end = match bytes.utf8_chunks().last() {
+            Some(last) if last.invalid().is_empty() => {
+                let valid = last.valid();
+                bytes.len() - (valid.len() - valid.trim_end_matches(is_py_space).len())
+            }
+            _ => bytes.len(),
+        };
+        if start >= end {
+            &[]
+        } else {
+            &bytes[start..end]
+        }
     }
 
-    /// platformdirs `Unix.user_config_dir`: $XDG_CONFIG_HOME when set and not blank
-    /// (`path.strip()`), else `os.path.expanduser("~/.config")`; then `/r2`.
-    #[cfg(not(target_os = "macos"))]
-    pub(super) fn user_config_dir() -> Option<PathBuf> {
-        use r2_core::text::py_strip;
-        let xdg = std::env::var_os("XDG_CONFIG_HOME").unwrap_or_default();
-        let mut base = if py_strip(&xdg.to_string_lossy()).is_empty() {
-            let home = join_home(current_home()?, b"/.config");
-            home.into_os_string().into_vec()
+    /// The platform default base when $XDG_CONFIG_HOME is unset or blank: macOS
+    /// `~/Library/Application Support`, elsewhere `os.path.expanduser("~/.config")`.
+    fn default_config_base() -> Option<Vec<u8>> {
+        let rest: &[u8] = if cfg!(target_os = "macos") {
+            b"/Library/Application Support"
         } else {
-            xdg.into_vec()
+            b"/.config"
+        };
+        Some(join_home(current_home()?, rest).into_os_string().into_vec())
+    }
+
+    /// platformdirs 4.10.1 `XDGMixin.user_config_dir` (Unix and MacOS alike): the
+    /// STRIPPED $XDG_CONFIG_HOME when that is not blank, else the platform default
+    /// (`default_config_base`); then `/r2`.
+    pub(super) fn user_config_dir() -> Option<PathBuf> {
+        let xdg = std::env::var_os("XDG_CONFIG_HOME").unwrap_or_default();
+        let stripped = py_strip_bytes(xdg.as_bytes());
+        let mut base = if stripped.is_empty() {
+            default_config_base()?
+        } else {
+            stripped.to_vec()
         };
         base.push(b'/');
         base.extend_from_slice(OsStr::new(APP_DIR).as_bytes());
@@ -190,5 +215,23 @@ mod platform {
             }
             _ => normalized,
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::platform::py_strip_bytes;
+
+    #[test]
+    pub(super) fn py_strip_bytes_is_surrogateescape_str_strip() {
+        assert_eq!(py_strip_bytes(b"  /tmp/abc \n"), b"/tmp/abc");
+        assert_eq!(py_strip_bytes(b" \t\x0b\x0c\r\x1c\x1f"), b"");
+        assert_eq!(py_strip_bytes(b""), b"");
+        // U+00A0 / U+2003 are str whitespace; an undecodable byte (a surrogate) is not.
+        assert_eq!(py_strip_bytes(b"\xc2\xa0/a\xe2\x80\x83"), b"/a");
+        assert_eq!(py_strip_bytes(b" /\xff/x \n"), b"/\xff/x");
+        assert_eq!(py_strip_bytes(b"\xff "), b"\xff");
+        assert_eq!(py_strip_bytes(b" \xa0/x"), b"\xa0/x");
+        assert_eq!(py_strip_bytes(b"/x\xc2"), b"/x\xc2");
     }
 }

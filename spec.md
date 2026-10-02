@@ -3378,10 +3378,13 @@ hard error (never a silent fallthrough):
    show; a `current_dir` failure (deleted working directory) skips this step (c2 crashed,
    §11 D12)
 4. `<user config dir>/r2.yaml`, where the user config dir follows platformdirs
-   `user_config_dir("r2")` (appauthor defaulting to appname): Linux/BSD
-   `$XDG_CONFIG_HOME/r2` (when set and non-blank) else `~/.config/r2`; macOS
-   `~/Library/Application Support/r2`; Windows `%LOCALAPPDATA%\r2\r2` (Local, not
-   Roaming). So the file is e.g. `~/.config/r2/r2.yaml`.
+   `user_config_dir("r2")` (appauthor defaulting to appname; platformdirs 4.10.1, whose
+   `XDGMixin` serves both Unix and MacOS): Linux/BSD and macOS `$XDG_CONFIG_HOME/r2`
+   when the variable is set and non-blank, using the value STRIPPED of Python whitespace
+   (`str.strip()`; on POSIX an undecodable byte is not whitespace), else Linux/BSD
+   `~/.config/r2`, macOS `~/Library/Application Support/r2`; Windows
+   `%LOCALAPPDATA%\r2\r2` (Local, not Roaming). So the file is e.g.
+   `~/.config/r2/r2.yaml`.
 
 Merge (deliberately boring): mappings merge recursively, scalars from the external file
 replace defaults, **lists replace wholesale** (an external `providers.pkcs11` fully

@@ -53,6 +53,8 @@ impl Isolated {
         if cfg!(windows) {
             env.push(set_env("LOCALAPPDATA", Some(base.to_str().unwrap())));
         } else if cfg!(target_os = "macos") {
+            // platformdirs MacOS honors $XDG_CONFIG_HOME first (XDGMixin): clear it.
+            env.push(set_env("XDG_CONFIG_HOME", None));
             env.push(set_env("HOME", Some(base.to_str().unwrap())));
         } else {
             env.push(set_env("XDG_CONFIG_HOME", Some(base.to_str().unwrap())));
@@ -588,22 +590,45 @@ mod discovery {
     #[test]
     fn user_config_dir_follows_platformdirs() {
         let mut iso = Isolated::new();
-        if cfg!(windows) || cfg!(target_os = "macos") {
+        if cfg!(windows) {
             return;
         }
+        // platformdirs 4.10.1 XDGMixin (Unix and MacOS): the STRIPPED $XDG_CONFIG_HOME.
         iso.env("XDG_CONFIG_HOME", Some("/xdg/base/"));
         assert_eq!(user_config_dir(), Some(PathBuf::from("/xdg/base/r2")));
+        iso.env("XDG_CONFIG_HOME", Some("  /tmp/abc  "));
+        assert_eq!(user_config_dir(), Some(PathBuf::from("/tmp/abc/r2")));
+        iso.env("XDG_CONFIG_HOME", Some("/tmp/abc\n"));
+        assert_eq!(user_config_dir(), Some(PathBuf::from("/tmp/abc/r2")));
+        iso.env("XDG_CONFIG_HOME", Some("\u{1f}\u{a0}/tmp/a b\u{2003}\x0b"));
+        assert_eq!(user_config_dir(), Some(PathBuf::from("/tmp/a b/r2")));
+        let default = if cfg!(target_os = "macos") {
+            "/home/tester/Library/Application Support/r2"
+        } else {
+            "/home/tester/.config/r2"
+        };
         iso.env("XDG_CONFIG_HOME", Some("   "));
         iso.env("HOME", Some("/home/tester"));
-        assert_eq!(
-            user_config_dir(),
-            Some(PathBuf::from("/home/tester/.config/r2"))
-        );
+        assert_eq!(user_config_dir(), Some(PathBuf::from(default)));
         iso.env("XDG_CONFIG_HOME", None);
-        assert_eq!(
-            user_config_dir(),
-            Some(PathBuf::from("/home/tester/.config/r2"))
+        assert_eq!(user_config_dir(), Some(PathBuf::from(default)));
+    }
+
+    #[test]
+    fn user_dir_discovery_uses_stripped_xdg_config_home() {
+        let mut iso = Isolated::new();
+        if cfg!(windows) {
+            return;
+        }
+        let base = iso.path().join("xdg");
+        let user_file = write(&base.join("r2").join(FILE_NAME), "ui: {hex_group: 9}\n");
+        iso.env(
+            "XDG_CONFIG_HOME",
+            Some(&format!("  {}\n", base.to_str().unwrap())),
         );
+        let loaded = load_config(None).unwrap();
+        assert_eq!(loaded.source_path, Some(user_file));
+        assert_eq!(loaded.config.ui.hex_group, 9);
     }
 
     #[test]
