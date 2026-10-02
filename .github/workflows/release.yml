@@ -1,0 +1,207 @@
+# r2 release (spec §9, §11 D5; owner R12). The Rust equivalent of c2's release workflow:
+# tag push or manual dispatch → per-target matrix → release build (vendored, statically
+# linked OpenSSL 3 with the legacy provider compiled in; `[profile.release]`) → static
+# checks + smoke test on every OS → archives + SHA256SUMS. A manual dispatch is always a
+# dry run: it builds, checks and uploads workflow artifacts but never creates a GitHub
+# release; only a pushed `v<version>` tag (matching `[workspace.package] version`)
+# publishes one. Vendor PKCS#11 libraries and SoftHSM2 are not bundled (§9, §10); code
+# signing and notarization are out of scope, as in c2.
+#
+# Every step's logic lives in scripts/release/*.sh, so it runs the same way locally:
+#   bin="$(scripts/release/build.sh x86_64-unknown-linux-gnu)"
+#   scripts/release/check-binary.sh "$bin" x86_64-unknown-linux-gnu
+#   scripts/release/smoke.sh "$bin"
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+  # cargo-zigbuild and zig for the Linux glibc-2.28 baseline builds.
+  CARGO_ZIGBUILD_VERSION: "0.23.4"
+  ZIGLANG_VERSION: "0.15.1"
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Release version (a tag must be v<workspace version>)
+        id: version
+        env:
+          TAG: ${{ github.event_name == 'push' && github.ref_type == 'tag' && github.ref_name || '' }}
+        run: scripts/release/version.sh --github-output "$TAG"
+
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # glibc, never musl-static (a static musl binary cannot dlopen vendor PKCS#11
+          # libraries); linked against glibc 2.28 (RHEL/Rocky 8) with cargo zigbuild.
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          # both macOS architectures (§11 D5); the universal binary is the job below.
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+          - target: aarch64-apple-darwin
+            os: macos-15
+          # vendored OpenSSL needs a native Perl: the runner's Strawberry Perl, not
+          # Git Bash's msys perl (openssl-src honours OPENSSL_SRC_PERL).
+          - target: x86_64-pc-windows-msvc
+            os: windows-2025
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      TARGET: ${{ matrix.target }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustup target add "$TARGET" && cargo --version
+      - name: Install zig + cargo-zigbuild (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zig"
+          "$RUNNER_TEMP/zig/bin/pip" install --quiet "ziglang==$ZIGLANG_VERSION"
+          echo "$RUNNER_TEMP/zig/bin" >> "$GITHUB_PATH"
+      - uses: taiki-e/install-action@v2
+        if: runner.os == 'Linux'
+        with:
+          tool: cargo-zigbuild@${{ env.CARGO_ZIGBUILD_VERSION }}
+      - name: Native Perl for openssl-src (Windows)
+        if: runner.os == 'Windows'
+        run: printf '%s\n' 'OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe' >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - name: Build (release profile, vendored OpenSSL)
+        run: |
+          bin="$(scripts/release/build.sh "$TARGET" | tail -n 1)"
+          echo "BIN=$bin" >> "$GITHUB_ENV"
+      - name: Check the binary (OpenSSL static >= 3.2; Linux glibc <= 2.28)
+        run: scripts/release/check-binary.sh "$BIN" "$TARGET"
+      - name: Smoke test (--version, piped help/providers/exit, legacy PKCS#12)
+        run: scripts/release/smoke.sh "$BIN" "$VERSION"
+      - name: Package
+        run: scripts/release/package.sh "$BIN" "$TARGET" "$VERSION" dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r2-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  # The Linux binaries on a RHEL/Rocky 8-class host (glibc 2.28), from the shipped archive.
+  rocky8:
+    needs: [prepare, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      TARGET: ${{ matrix.target }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: r2-${{ matrix.target }}
+          path: dist
+      - name: Unpack
+        run: tar -xzf "dist/r2-$VERSION-$TARGET.tar.gz" -C dist
+      - name: Smoke test inside rockylinux:8
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/work" -w /work rockylinux:8 \
+            bash -c 'ldd --version | head -n 1 && scripts/release/smoke.sh "$1" "$2"' smoke \
+            "dist/r2-$VERSION-$TARGET/r2" "$VERSION"
+
+  # Optional universal macOS binary (spec §9): lipo of the two smoke-tested builds.
+  universal-macos:
+    needs: [prepare, build]
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: r2-*-apple-darwin
+          path: dist
+          merge-multiple: true
+      - name: lipo
+        run: |
+          for arch in x86_64 aarch64; do
+            tar -xzf "dist/r2-$VERSION-$arch-apple-darwin.tar.gz" -C dist
+          done
+          mkdir -p universal
+          lipo -create -output universal/r2 \
+            "dist/r2-$VERSION-x86_64-apple-darwin/r2" "dist/r2-$VERSION-aarch64-apple-darwin/r2"
+      - name: Check the binary
+        run: scripts/release/check-binary.sh universal/r2 universal-apple-darwin
+      - name: Smoke test
+        run: scripts/release/smoke.sh universal/r2 "$VERSION"
+      - name: Package
+        run: scripts/release/package.sh universal/r2 universal-apple-darwin "$VERSION" out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r2-universal-apple-darwin
+          path: out/*
+          if-no-files-found: error
+
+  publish:
+    needs: [prepare, build, rocky8, universal-macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: r2-*
+          path: dist
+          merge-multiple: true
+      - name: SHA256SUMS
+        run: scripts/release/sha256sums.sh dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r2-${{ needs.prepare.outputs.version }}-release
+          path: dist/*
+          if-no-files-found: error
+      - name: Publish the GitHub release (tag pushes only; a dispatch is a dry run)
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "r2 $VERSION" --generate-notes
