@@ -1,7 +1,14 @@
-// R0 skeleton — owner R6 (generated from spec §4)
-use crate::error::Result;
-use secrecy::SecretString;
+//! Re-serialization of canonical bytes for keyexport (spec §4.4.6, §5.6; owner R6): ports
+//! of c2 keyexport's pyca serializers (`_serialize_private`, `_serialize_spki`,
+//! `_load_certificate`, `_cert_spki`).
+use openssl::symm::Cipher;
+use openssl::x509::X509;
+use secrecy::{ExposeSecret, SecretString};
 use zeroize::Zeroizing;
+
+use crate::error::{ConsoleError, Result};
+use crate::keyparse::{PrivateLoadError, load_private_der, load_public_der, ossl_detail};
+use crate::x509info;
 
 /// Token (`as_str()` only; no Display/FromStr): "pem" | "der".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -11,7 +18,10 @@ pub enum Encoding {
 }
 impl Encoding {
     pub fn as_str(self) -> &'static str {
-        unimplemented!("R6")
+        match self {
+            Encoding::Pem => "pem",
+            Encoding::Der => "der",
+        }
     }
 }
 
@@ -28,31 +38,119 @@ pub fn private_key_bytes(
     encoding: Encoding,
     password: Option<&SecretString>,
 ) -> Result<Zeroizing<Vec<u8>>> {
-    let _ = (pkcs8_der, encoding, password);
-    Err(crate::error::ConsoleError::not_implemented("R6"))
+    let key = load_private_der(pkcs8_der).map_err(|err| {
+        let detail = match err {
+            PrivateLoadError::Encrypted => {
+                "Password was not given but private key is encrypted".to_owned()
+            }
+            PrivateLoadError::Invalid(detail) => detail,
+        };
+        ConsoleError::key_parse(format!(
+            "exported private key is not valid unencrypted PKCS#8 DER: {detail}"
+        ))
+    })?;
+    let password = match password {
+        Some(secret) => {
+            let pw = secret.expose_secret();
+            if pw.is_empty() {
+                return Err(ConsoleError::param(
+                    "password must not be empty",
+                    "password",
+                ));
+            }
+            if pw.contains('\0') {
+                return Err(ConsoleError::param(
+                    "password must not contain NUL characters",
+                    "password",
+                ));
+            }
+            Some(pw.as_bytes())
+        }
+        None => None,
+    };
+    let out = match (encoding, password) {
+        (Encoding::Pem, None) => key.private_key_to_pem_pkcs8(),
+        (Encoding::Der, None) => key.private_key_to_pkcs8(),
+        (Encoding::Pem, Some(pw)) => {
+            key.private_key_to_pem_pkcs8_passphrase(Cipher::aes_256_cbc(), pw)
+        }
+        (Encoding::Der, Some(pw)) => key.private_key_to_pkcs8_passphrase(Cipher::aes_256_cbc(), pw),
+    };
+    out.map(Zeroizing::new).map_err(|err| {
+        ConsoleError::crypto(format!(
+            "private key serialization failed: {}",
+            ossl_detail(&err)
+        ))
+    })
 }
 /// SPKI DER → PEM ("PUBLIC KEY") or DER. DER is returned verbatim WITHOUT validation (c2
 /// `_serialize_spki`); only the PEM path parses: invalid → KeyParse "exported public key is
 /// not valid DER SubjectPublicKeyInfo: {detail}".
 pub fn public_key_bytes(spki_der: &[u8], encoding: Encoding) -> Result<Vec<u8>> {
-    let _ = (spki_der, encoding);
-    Err(crate::error::ConsoleError::not_implemented("R6"))
+    if encoding == Encoding::Der {
+        return Ok(spki_der.to_vec());
+    }
+    let invalid = |detail: &str| {
+        ConsoleError::key_parse(format!(
+            "exported public key is not valid DER SubjectPublicKeyInfo: {detail}"
+        ))
+    };
+    let key = load_public_der(spki_der).map_err(|detail| invalid(&detail))?;
+    key.public_key_to_pem()
+        .map_err(|err| invalid(&ossl_detail(&err)))
 }
 /// Certificate DER → PEM or DER. DER is returned verbatim WITHOUT validation; only the PEM
 /// path parses: invalid → KeyParse "exported certificate is not valid DER X.509: {detail}".
 pub fn certificate_bytes(cert_der: &[u8], encoding: Encoding) -> Result<Vec<u8>> {
-    let _ = (cert_der, encoding);
-    Err(crate::error::ConsoleError::not_implemented("R6"))
+    if encoding == Encoding::Der {
+        return Ok(cert_der.to_vec());
+    }
+    let cert = load_exported_certificate(cert_der)?;
+    cert.to_pem()
+        .map_err(|err| invalid_exported_cert(&ossl_detail(&err)))
 }
 /// SPKI of a DER certificate (c2 keyexport `_cert_spki`). Errors → KeyParse "exported
 /// certificate is not valid DER X.509: {detail}" / "certificate contains an invalid public
 /// key: {detail}".
 pub fn cert_spki(cert_der: &[u8]) -> Result<Vec<u8>> {
-    let _ = cert_der;
-    Err(crate::error::ConsoleError::not_implemented("R6"))
+    let cert = x509info::load_certificate(cert_der).map_err(|d| invalid_exported_cert(&d))?;
+    let key = x509info::cert_public_key(cert.spki, "certificate")?;
+    key.public_key_to_der().map_err(|err| {
+        ConsoleError::key_parse(format!(
+            "certificate contains an invalid public key: {}",
+            ossl_detail(&err)
+        ))
+    })
 }
 /// SPKI derived in software from an unencrypted PKCS#8 (errors as private_key_bytes).
 pub fn pkcs8_public_spki(pkcs8_der: &[u8]) -> Result<Vec<u8>> {
-    let _ = pkcs8_der;
-    Err(crate::error::ConsoleError::not_implemented("R6"))
+    let key = load_private_der(pkcs8_der).map_err(|err| {
+        let detail = match err {
+            PrivateLoadError::Encrypted => {
+                "Password was not given but private key is encrypted".to_owned()
+            }
+            PrivateLoadError::Invalid(detail) => detail,
+        };
+        ConsoleError::key_parse(format!(
+            "exported private key is not valid unencrypted PKCS#8 DER: {detail}"
+        ))
+    })?;
+    key.public_key_to_der().map_err(|err| {
+        ConsoleError::key_parse(format!(
+            "exported private key is not valid unencrypted PKCS#8 DER: {}",
+            ossl_detail(&err)
+        ))
+    })
+}
+
+fn invalid_exported_cert(detail: &str) -> ConsoleError {
+    ConsoleError::key_parse(format!(
+        "exported certificate is not valid DER X.509: {detail}"
+    ))
+}
+
+/// c2 `_load_certificate`: pyca's strict load, as an OpenSSL certificate.
+fn load_exported_certificate(cert_der: &[u8]) -> Result<X509> {
+    x509info::load_certificate(cert_der).map_err(|d| invalid_exported_cert(&d))?;
+    X509::from_der(cert_der).map_err(|err| invalid_exported_cert(&ossl_detail(&err)))
 }

@@ -1,4 +1,5 @@
-// R0 skeleton — owner R6 (generated from spec §4)
+//! `ct_eq`, `random_bytes`, `ensure_legacy_provider` (spec §4.4.8; owner R6). The three bodies
+//! are the R0 mandated working bodies, kept as documented.
 use crate::error::Result;
 use zeroize::Zeroizing;
 

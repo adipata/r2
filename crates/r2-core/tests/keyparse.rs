@@ -1,0 +1,1221 @@
+//! Key material parsing (spec §4.4.3, §5.4) — port of c2 `tests/unit/test_keyparse.py`, the
+//! R6 cases of `tests/unit/test_l13_hardening.py`, plus the §4.4.3 R6 fixtures (pyca's
+//! curve set, explicit parameters, RSA-PSS, DSA, encrypted-input scheme sets). All fixtures
+//! are generated at test time with OpenSSL.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::print_stdout,
+    clippy::print_stderr
+)]
+
+#[path = "support/keygen.rs"]
+mod keygen;
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use keygen::*;
+use openssl::ec::{Asn1Flag, EcGroup, EcKey, PointConversionForm};
+use openssl::nid::Nid;
+use openssl::pkcs12::Pkcs12;
+use openssl::pkey::{PKey, Private};
+use openssl::stack::Stack;
+use openssl::symm::Cipher;
+use r2_core::codec::{InputFormat, decode_data};
+use r2_core::error::{ConsoleError, ErrorKind};
+use r2_core::keyparse::{KeyHint, PasswordCallback, parse_key_material};
+use r2_core::keys::{Curve, KeyAlgorithm, KeyClass, KeyMaterial};
+use secrecy::SecretString;
+
+// ---------------------------------------------------------------------------- helpers
+
+fn parse_one(data: &[u8]) -> KeyMaterial {
+    let mut materials = parse_key_material(data, KeyHint::Auto, None).unwrap();
+    assert_eq!(materials.len(), 1);
+    materials.remove(0)
+}
+
+fn parse_one_hint(data: &[u8], hint: KeyHint) -> KeyMaterial {
+    let mut materials = parse_key_material(data, hint, None).unwrap();
+    assert_eq!(materials.len(), 1);
+    materials.remove(0)
+}
+
+fn parse_with(
+    data: &[u8],
+    cb: &mut dyn FnMut(&str) -> r2_core::Result<SecretString>,
+) -> r2_core::Result<Vec<KeyMaterial>> {
+    let cb: PasswordCallback<'_> = cb;
+    parse_key_material(data, KeyHint::Auto, Some(cb))
+}
+
+fn err(data: &[u8]) -> ConsoleError {
+    let err = parse_key_material(data, KeyHint::Auto, None).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::KeyParse, "{err:?}");
+    err
+}
+
+fn err_hint(data: &[u8], hint: KeyHint) -> ConsoleError {
+    let err = parse_key_material(data, hint, None).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::KeyParse, "{err:?}");
+    err
+}
+
+/// c2 KEY_CASES: (key, algorithm, curve, size_bits).
+type KeyCase = (PKey<Private>, KeyAlgorithm, Option<Curve>, Option<u32>);
+
+fn key_cases() -> Vec<KeyCase> {
+    vec![
+        (rsa_key(2048), KeyAlgorithm::Rsa, None, Some(2048)),
+        (p256(), KeyAlgorithm::Ec, Some(Curve::P256), None),
+        (
+            ed25519(),
+            KeyAlgorithm::EcEdwards,
+            Some(Curve::Ed25519),
+            None,
+        ),
+        (
+            x25519(),
+            KeyAlgorithm::EcMontgomery,
+            Some(Curve::X25519),
+            None,
+        ),
+    ]
+}
+
+const PASSWORD_HINT: &str =
+    "provide --password or run interactively so the password can be prompted";
+const WRONG_PW: &str = "incorrect password for encrypted private key (or corrupt encrypted data)";
+
+// ------------------------------------------------------------- private-key round-trips
+
+#[test]
+fn pkcs8_pem_private_roundtrip() {
+    for (key, algorithm, curve, size_bits) in key_cases() {
+        let material = parse_one(&pkcs8_pem(&key));
+        assert_eq!(material.key_class, KeyClass::Private);
+        assert_eq!(material.algorithm, algorithm);
+        assert_eq!(material.curve, curve);
+        assert_eq!(material.size_bits, size_bits);
+        assert_eq!(*material.data, pkcs8_der(&key)); // canonical: unencrypted PKCS#8 DER
+        assert_eq!(material.label_hint, None);
+    }
+}
+
+#[test]
+fn pkcs8_der_private_roundtrip() {
+    for (key, algorithm, curve, size_bits) in key_cases() {
+        let material = parse_one(&pkcs8_der(&key));
+        assert_eq!(material.key_class, KeyClass::Private);
+        assert_eq!(material.algorithm, algorithm);
+        assert_eq!(material.curve, curve);
+        assert_eq!(material.size_bits, size_bits);
+        assert_eq!(*material.data, pkcs8_der(&key));
+    }
+}
+
+#[test]
+fn traditional_pkcs1_rsa_roundtrip() {
+    let key = rsa_key(2048);
+    let rsa = key.rsa().unwrap();
+    for data in [
+        rsa.private_key_to_pem().unwrap(),
+        rsa.private_key_to_der().unwrap(),
+    ] {
+        let material = parse_one(&data);
+        assert_eq!(material.key_class, KeyClass::Private);
+        assert_eq!(material.algorithm, KeyAlgorithm::Rsa);
+        assert_eq!(*material.data, pkcs8_der(&key));
+    }
+}
+
+#[test]
+fn sec1_ec_roundtrip() {
+    let key = p256();
+    let ec = key.ec_key().unwrap();
+    for data in [
+        ec.private_key_to_pem().unwrap(),
+        ec.private_key_to_der().unwrap(),
+    ] {
+        let material = parse_one(&data);
+        assert_eq!(material.key_class, KeyClass::Private);
+        assert_eq!(material.algorithm, KeyAlgorithm::Ec);
+        assert_eq!(material.curve, Some(Curve::P256));
+        assert_eq!(*material.data, pkcs8_der(&key));
+    }
+}
+
+// -------------------------------------------------------------- public-key round-trips
+
+#[test]
+fn spki_pem_and_der_roundtrip() {
+    for (key, algorithm, curve, size_bits) in key_cases() {
+        for data in [spki_pem(&key), spki_der(&key)] {
+            let material = parse_one(&data);
+            assert_eq!(material.key_class, KeyClass::Public);
+            assert_eq!(material.algorithm, algorithm);
+            assert_eq!(material.curve, curve);
+            assert_eq!(material.size_bits, size_bits);
+            assert_eq!(*material.data, spki_der(&key));
+        }
+    }
+}
+
+#[test]
+fn pkcs1_rsa_public_key_der_loads_as_spki() {
+    // pyca's load_der_public_key accepts a PKCS#1 RSAPublicKey (DER try-chain step 4).
+    let key = rsa_key(1024);
+    let pkcs1 = key.rsa().unwrap().public_key_to_der_pkcs1().unwrap();
+    let material = parse_one(&pkcs1);
+    assert_eq!(material.key_class, KeyClass::Public);
+    assert_eq!(material.algorithm, KeyAlgorithm::Rsa);
+    assert_eq!(material.size_bits, Some(1024));
+    assert_eq!(*material.data, spki_der(&key));
+}
+
+// ------------------------------------------------------------------ certificates & CSR
+
+#[test]
+fn certificate_pem_and_der() {
+    let key = p256();
+    let cert = cn_cert(&key, "My Test Cert");
+    let der = cert.to_der().unwrap();
+    let pem = cert.to_pem().unwrap();
+    for data in [pem, der.clone()] {
+        let material = parse_one(&data);
+        assert_eq!(material.key_class, KeyClass::Certificate);
+        assert_eq!(material.algorithm, KeyAlgorithm::Ec); // embedded public key's algorithm
+        assert_eq!(material.curve, Some(Curve::P256));
+        assert_eq!(*material.data, der); // cert retained as DER X.509
+        assert_eq!(material.label_hint.as_deref(), Some("My Test Cert"));
+    }
+}
+
+#[test]
+fn certificate_without_cn_has_no_label_hint() {
+    let key = rsa_key(2048);
+    let cert = make_cert(&key, &[(Nid::ORGANIZATIONNAME, "ACME")]);
+    let material = parse_one(&cert.to_der().unwrap());
+    assert_eq!(material.key_class, KeyClass::Certificate);
+    assert_eq!(material.algorithm, KeyAlgorithm::Rsa);
+    assert_eq!(material.size_bits, Some(2048));
+    assert_eq!(material.label_hint, None);
+}
+
+#[test]
+fn csr_pem_and_der() {
+    let key = p256();
+    let csr = make_csr(&key, "csr-cn");
+    for data in [csr.to_pem().unwrap(), csr.to_der().unwrap()] {
+        let material = parse_one(&data);
+        assert_eq!(material.key_class, KeyClass::Public); // CSR yields its public key
+        assert_eq!(material.algorithm, KeyAlgorithm::Ec);
+        assert_eq!(*material.data, spki_der(&key));
+        assert_eq!(material.label_hint.as_deref(), Some("csr-cn"));
+    }
+}
+
+// ------------------------------------------------------------------- encrypted inputs
+
+#[test]
+fn encrypted_pkcs8_with_password() {
+    let key = p256();
+    for data in [
+        key.private_key_to_pem_pkcs8_passphrase(Cipher::aes_256_cbc(), b"hunter2")
+            .unwrap(),
+        key.private_key_to_pkcs8_passphrase(Cipher::aes_256_cbc(), b"hunter2")
+            .unwrap(),
+    ] {
+        let prompts = Rc::new(RefCell::new(Vec::new()));
+        let mut cb = recording_cb("hunter2", prompts.clone());
+        let materials = parse_with(&data, &mut cb).unwrap();
+        assert_eq!(materials.len(), 1);
+        assert_eq!(materials[0].key_class, KeyClass::Private);
+        assert_eq!(*materials[0].data, pkcs8_der(&key));
+        assert_eq!(prompts.borrow().len(), 1);
+        assert!(!prompts.borrow()[0].is_empty()); // prompt text is non-empty
+    }
+}
+
+#[test]
+fn encrypted_input_prompt_texts() {
+    let key = p256();
+    let cases = [
+        (
+            key.private_key_to_pem_pkcs8_passphrase(Cipher::aes_256_cbc(), b"pw")
+                .unwrap(),
+            "Password for encrypted ENCRYPTED PRIVATE KEY",
+        ),
+        (
+            key.private_key_to_pkcs8_passphrase(Cipher::aes_256_cbc(), b"pw")
+                .unwrap(),
+            "Password for encrypted private key",
+        ),
+        (
+            key.ec_key()
+                .unwrap()
+                .private_key_to_pem_passphrase(Cipher::aes_128_cbc(), b"pw")
+                .unwrap(),
+            "Password for encrypted EC PRIVATE KEY",
+        ),
+    ];
+    for (data, prompt) in cases {
+        let prompts = Rc::new(RefCell::new(Vec::new()));
+        let mut cb = recording_cb("pw", prompts.clone());
+        parse_with(&data, &mut cb).unwrap();
+        assert_eq!(*prompts.borrow(), vec![prompt.to_owned()]);
+    }
+}
+
+#[test]
+fn encrypted_traditional_pem_with_password() {
+    // RFC-1421 headers (Proc-Type/DEK-Info), file path.
+    let key = p256();
+    let data = key
+        .ec_key()
+        .unwrap()
+        .private_key_to_pem_passphrase(Cipher::aes_256_cbc(), b"hunter2")
+        .unwrap();
+    assert!(String::from_utf8_lossy(&data).contains("Proc-Type: 4,ENCRYPTED"));
+    let prompts = Rc::new(RefCell::new(Vec::new()));
+    let mut cb = recording_cb("hunter2", prompts.clone());
+    let materials = parse_with(&data, &mut cb).unwrap();
+    assert_eq!(*materials[0].data, pkcs8_der(&key));
+    assert_eq!(prompts.borrow().len(), 1);
+}
+
+#[test]
+fn encrypted_pkcs8_wrong_password() {
+    let key = p256();
+    for data in [
+        key.private_key_to_pem_pkcs8_passphrase(Cipher::aes_256_cbc(), b"hunter2")
+            .unwrap(),
+        key.private_key_to_pkcs8_passphrase(Cipher::aes_256_cbc(), b"hunter2")
+            .unwrap(),
+    ] {
+        let err = parse_with(&data, &mut answer("wrong")).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::KeyParse);
+        assert!(err.message.contains("password"));
+        assert_eq!(err.message, WRONG_PW);
+        assert_eq!(err.hint, None);
+    }
+}
+
+#[test]
+fn encrypted_pkcs8_without_callback() {
+    let key = p256();
+    let data = key
+        .private_key_to_pem_pkcs8_passphrase(Cipher::aes_256_cbc(), b"hunter2")
+        .unwrap();
+    let err = err(&data);
+    assert!(err.message.contains("password"));
+    assert_eq!(err.message, "encrypted key material requires a password");
+    assert_eq!(err.hint.as_deref(), Some(PASSWORD_HINT));
+}
+
+#[test]
+fn encrypted_with_empty_password_still_requires_a_password() {
+    // pyca TypeError parity: "asked" counts, even when the empty password would decrypt.
+    let key = p256();
+    for data in [
+        key.private_key_to_pkcs8_passphrase(Cipher::aes_256_cbc(), b"")
+            .unwrap(),
+        key.private_key_to_pem_pkcs8_passphrase(Cipher::aes_256_cbc(), b"")
+            .unwrap(),
+    ] {
+        assert_eq!(
+            err(&data).message,
+            "encrypted key material requires a password"
+        );
+        let materials = parse_with(&data, &mut answer("")).unwrap();
+        assert_eq!(*materials[0].data, pkcs8_der(&key));
+    }
+}
+
+#[test]
+fn password_callback_errors_propagate_unchanged() {
+    let key = p256();
+    let data = key
+        .private_key_to_pkcs8_passphrase(Cipher::aes_256_cbc(), b"pw")
+        .unwrap();
+    let mut abort =
+        |_: &str| -> r2_core::Result<SecretString> { Err(ConsoleError::user_abort("aborted")) };
+    let err = parse_with(&data, &mut abort).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::UserAbort);
+}
+
+#[test]
+fn traditional_pem_cipher_set_is_pycas() {
+    // pyca 49 decrypts AES-128-CBC, AES-256-CBC and DES-EDE3-CBC; every other DEK-Info
+    // cipher (AES-192-CBC, DES-CBC, CAMELLIA, AES-128-CFB…) is refused AFTER the prompt
+    // with the wrong-password text (§5.4, §11 "resolved without deviation").
+    r2_core::ensure_legacy_provider();
+    let key = p256();
+    let ec = key.ec_key().unwrap();
+    let ok = [
+        Cipher::aes_128_cbc(),
+        Cipher::aes_256_cbc(),
+        Cipher::des_ede3_cbc(),
+    ];
+    for cipher in ok {
+        let data = ec.private_key_to_pem_passphrase(cipher, b"pw").unwrap();
+        let materials = parse_with(&data, &mut answer("pw")).unwrap();
+        assert_eq!(*materials[0].data, pkcs8_der(&key));
+        let err = parse_with(&data, &mut answer("bad")).unwrap_err();
+        assert_eq!(err.message, WRONG_PW);
+    }
+    let refused = [
+        Cipher::aes_192_cbc(),
+        Cipher::des_cbc(),
+        Cipher::camellia_128_cbc(),
+        Cipher::aes_128_cfb128(),
+    ];
+    for cipher in refused {
+        let data = ec.private_key_to_pem_passphrase(cipher, b"pw").unwrap();
+        let text = String::from_utf8_lossy(&data).into_owned();
+        assert!(text.contains("DEK-Info"), "{text}");
+        assert_eq!(
+            err(&data).message,
+            "encrypted key material requires a password"
+        );
+        let prompts = Rc::new(RefCell::new(Vec::new()));
+        let mut cb = recording_cb("pw", prompts.clone());
+        let err = parse_with(&data, &mut cb).unwrap_err();
+        assert_eq!(err.message, WRONG_PW, "{text}");
+        assert_eq!(prompts.borrow().len(), 1);
+    }
+}
+
+#[test]
+fn encrypted_pkcs8_scheme_set_is_pycas() {
+    // PBES2 with AES-*-CBC / DES-EDE3-CBC decrypts; CAMELLIA / DES-CBC are "Unknown key
+    // encryption algorithm" in pyca → c2's wrong-password text after the prompt.
+    r2_core::ensure_legacy_provider();
+    let key = p256();
+    for cipher in [
+        Cipher::aes_128_cbc(),
+        Cipher::aes_192_cbc(),
+        Cipher::aes_256_cbc(),
+        Cipher::des_ede3_cbc(),
+    ] {
+        let data = key.private_key_to_pkcs8_passphrase(cipher, b"pw").unwrap();
+        let materials = parse_with(&data, &mut answer("pw")).unwrap();
+        assert_eq!(*materials[0].data, pkcs8_der(&key));
+    }
+    for cipher in [Cipher::camellia_128_cbc(), Cipher::des_cbc()] {
+        let data = key.private_key_to_pkcs8_passphrase(cipher, b"pw").unwrap();
+        let err = parse_with(&data, &mut answer("pw")).unwrap_err();
+        assert_eq!(err.message, WRONG_PW);
+        let pem = key
+            .private_key_to_pem_pkcs8_passphrase(cipher, b"pw")
+            .unwrap();
+        let err = parse_with(&pem, &mut answer("pw")).unwrap_err();
+        assert_eq!(err.message, WRONG_PW);
+    }
+}
+
+// --------------------------------------------------------------------------- PKCS#12
+
+/// (pkcs12-DER, cert-DER, chain-cert-DER) with friendly name 'bundle', pw 'secret'.
+fn p12_bundle(rsa: &PKey<Private>, ec: &PKey<Private>) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let cert = cn_cert(rsa, "p12-subject");
+    let chain = cn_cert(ec, "Chain CA");
+    let mut stack = Stack::new().unwrap();
+    stack.push(chain.clone()).unwrap();
+    let mut builder = Pkcs12::builder();
+    builder.name("bundle").pkey(rsa).cert(&cert).ca(stack);
+    let p12 = builder.build2("secret").unwrap().to_der().unwrap();
+    (p12, cert.to_der().unwrap(), chain.to_der().unwrap())
+}
+
+#[test]
+fn pkcs12_multi_material_shared_label_hint() {
+    let (rsa, ec) = (rsa_key(2048), p256());
+    let (p12, cert_der, chain_der) = p12_bundle(&rsa, &ec);
+    let prompts = Rc::new(RefCell::new(Vec::new()));
+    let mut cb = recording_cb("secret", prompts.clone());
+    let materials = parse_with(&p12, &mut cb).unwrap();
+    let classes: Vec<KeyClass> = materials.iter().map(|m| m.key_class).collect();
+    assert_eq!(
+        classes,
+        [
+            KeyClass::Private,
+            KeyClass::Certificate,
+            KeyClass::Certificate
+        ]
+    );
+    assert_eq!(*materials[0].data, pkcs8_der(&rsa));
+    assert_eq!(materials[0].algorithm, KeyAlgorithm::Rsa);
+    assert_eq!(*materials[1].data, cert_der);
+    assert_eq!(*materials[2].data, chain_der);
+    // PKCS12 friendly name, shared
+    assert!(
+        materials
+            .iter()
+            .all(|m| m.label_hint.as_deref() == Some("bundle"))
+    );
+    assert_eq!(*prompts.borrow(), vec!["Password for PKCS#12".to_owned()]);
+}
+
+#[test]
+fn pkcs12_wrong_password() {
+    let (p12, _, _) = p12_bundle(&rsa_key(2048), &p256());
+    let err = parse_with(&p12, &mut answer("wrong")).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::KeyParse);
+    assert!(err.message.contains("password"));
+    assert_eq!(
+        err.message,
+        "incorrect password for PKCS#12 (or corrupt PKCS#12 data)"
+    );
+}
+
+#[test]
+fn pkcs12_password_with_nul_is_the_wrong_password_text() {
+    // §11 D16: parse2 would panic on an interior NUL; c2's answer is "wrong password".
+    let (p12, _, _) = p12_bundle(&rsa_key(1024), &p256());
+    let err = parse_with(&p12, &mut answer("sec\0ret")).unwrap_err();
+    assert_eq!(
+        err.message,
+        "incorrect password for PKCS#12 (or corrupt PKCS#12 data)"
+    );
+}
+
+#[test]
+fn pkcs12_without_callback() {
+    let (p12, _, _) = p12_bundle(&rsa_key(2048), &p256());
+    let err = err(&p12);
+    assert!(err.message.contains("password"));
+    assert_eq!(
+        err.message,
+        "PKCS#12 requires a password (or the PKCS#12 data is corrupt)"
+    );
+    assert_eq!(err.hint.as_deref(), Some(PASSWORD_HINT));
+}
+
+#[test]
+fn pkcs12_unencrypted_needs_no_callback() {
+    // pyca NoEncryption: an empty-password PKCS#12 loads with parse2("").
+    let key = p256();
+    let cert = cn_cert(&key, "plain");
+    let mut builder = Pkcs12::builder();
+    builder.name("plain").pkey(&key).cert(&cert);
+    let p12 = builder.build2("").unwrap().to_der().unwrap();
+    let materials = parse_key_material(&p12, KeyHint::Auto, None).unwrap();
+    let classes: Vec<KeyClass> = materials.iter().map(|m| m.key_class).collect();
+    assert_eq!(classes, [KeyClass::Private, KeyClass::Certificate]);
+    assert!(
+        materials
+            .iter()
+            .all(|m| m.label_hint.as_deref() == Some("plain"))
+    );
+}
+
+#[test]
+fn pkcs12_without_friendly_name_uses_subject_cn() {
+    let key = p256();
+    let cert = cn_cert(&key, "cn-label");
+    let mut builder = Pkcs12::builder();
+    builder.pkey(&key).cert(&cert);
+    let p12 = builder.build2("pw").unwrap().to_der().unwrap();
+    let materials = parse_with(&p12, &mut answer("pw")).unwrap();
+    assert!(
+        materials
+            .iter()
+            .all(|m| m.label_hint.as_deref() == Some("cn-label"))
+    );
+}
+
+#[test]
+fn legacy_pkcs12_rc2_3des_sha1_loads() {
+    // `openssl pkcs12 -export -legacy`: RC2-40 certificate bag, 3DES key bag, SHA-1 MAC.
+    r2_core::ensure_legacy_provider();
+    let key = rsa_key(1024);
+    let cert = cn_cert(&key, "legacy");
+    let mut builder = Pkcs12::builder();
+    builder
+        .name("legacy")
+        .pkey(&key)
+        .cert(&cert)
+        .key_algorithm(Nid::PBE_WITHSHA1AND3_KEY_TRIPLEDES_CBC)
+        .cert_algorithm(Nid::PBE_WITHSHA1AND40BITRC2_CBC)
+        .mac_md(openssl::hash::MessageDigest::sha1());
+    let p12 = builder.build2("pw").unwrap().to_der().unwrap();
+    let materials = parse_with(&p12, &mut answer("pw")).unwrap();
+    assert_eq!(*materials[0].data, pkcs8_der(&key));
+    assert_eq!(*materials[1].data, cert.to_der().unwrap());
+}
+
+// ---------------------------------------------------------------------------- raw AES
+
+#[test]
+fn raw_aes() {
+    for length in [16usize, 24, 32] {
+        for hint in [KeyHint::Auto, KeyHint::Aes] {
+            let data: Vec<u8> = (0..length as u8).collect();
+            let material = parse_one_hint(&data, hint);
+            assert_eq!(material.key_class, KeyClass::Secret);
+            assert_eq!(material.algorithm, KeyAlgorithm::Aes);
+            assert_eq!(material.size_bits, Some(length as u32 * 8));
+            assert_eq!(*material.data, data);
+        }
+    }
+}
+
+#[test]
+fn raw_aes_bad_length() {
+    let err = err_hint(&[0xaa; 20], KeyHint::Aes);
+    assert!(err.message.contains("attempted"));
+}
+
+#[test]
+fn raw_bytes_not_allowed_for_non_aes_hint() {
+    err_hint(&[0xaa; 32], KeyHint::Rsa);
+}
+
+// ------------------------------------------------------------------- hex-wrapped PEM
+
+#[test]
+fn hex_wrapped_pem_through_codec() {
+    let key = p256();
+    let pem = pkcs8_pem(&key);
+    let (data, fmt) = decode_data(&hex(&pem)).unwrap();
+    assert_eq!(fmt, InputFormat::Pem); // codec unwraps hex → re-wrapped PEM text bytes
+    let material = parse_one(&data);
+    assert_eq!(material.key_class, KeyClass::Private);
+    assert_eq!(*material.data, pkcs8_der(&key));
+}
+
+#[test]
+fn mangled_pasted_pem_through_codec() {
+    // single-line paste: newlines collapsed to spaces; codec re-wraps, keyparse parses
+    let key = rsa_key(2048);
+    let pem = String::from_utf8(pkcs8_pem(&key))
+        .unwrap()
+        .replace('\n', " ");
+    let (data, fmt) = decode_data(&pem).unwrap();
+    assert_eq!(fmt, InputFormat::Pem);
+    assert_eq!(*parse_one(&data).data, pkcs8_der(&key));
+}
+
+// ---------------------------------------------------------------------- hint handling
+
+#[test]
+fn hint_mismatch_cases() {
+    let (rsa, ec, ed) = (rsa_key(2048), p256(), ed25519());
+    let cert_der = cn_cert(&rsa, "c").to_der().unwrap();
+    let cases: Vec<(Vec<u8>, KeyHint)> = vec![
+        (pkcs8_pem(&rsa), KeyHint::Aes), // spec's example: hint=aes, data is PEM RSA
+        (pkcs8_der(&ec), KeyHint::Rsa),
+        (spki_der(&rsa), KeyHint::Ec),
+        (pkcs8_der(&rsa), KeyHint::Cert),
+        (cert_der, KeyHint::Aes),
+        (pkcs8_der(&ed), KeyHint::Rsa),
+    ];
+    for (data, hint) in cases {
+        let err = err_hint(&data, hint);
+        assert!(err.message.contains("hint"));
+        assert_eq!(
+            err.hint.as_deref(),
+            Some("use hint='auto' or the hint matching the pasted material")
+        );
+    }
+    assert_eq!(
+        err_hint(&pkcs8_pem(&rsa), KeyHint::Aes).message,
+        "parsed rsa private material but hint is 'aes'"
+    );
+    assert_eq!(
+        err_hint(&cn_cert(&ec, "c").to_der().unwrap(), KeyHint::Rsa).message,
+        "parsed ec certificate material but hint is 'rsa'"
+    );
+}
+
+#[test]
+fn hint_matches() {
+    let (rsa, ec, ed, x) = (rsa_key(2048), p256(), ed25519(), x25519());
+    let cert_der = cn_cert(&rsa, "c").to_der().unwrap();
+    assert_eq!(
+        parse_one_hint(&pkcs8_der(&rsa), KeyHint::Rsa).algorithm,
+        KeyAlgorithm::Rsa
+    );
+    assert_eq!(
+        parse_one_hint(&pkcs8_der(&ec), KeyHint::Ec).algorithm,
+        KeyAlgorithm::Ec
+    );
+    // the whole EC family counts as "ec"
+    assert_eq!(
+        parse_one_hint(&pkcs8_der(&ed), KeyHint::Ec).algorithm,
+        KeyAlgorithm::EcEdwards
+    );
+    assert_eq!(
+        parse_one_hint(&pkcs8_der(&x), KeyHint::Ec).algorithm,
+        KeyAlgorithm::EcMontgomery
+    );
+    assert_eq!(
+        parse_one_hint(&cert_der, KeyHint::Cert).key_class,
+        KeyClass::Certificate
+    );
+    // certificates satisfy the algorithm hint of their embedded public key
+    assert_eq!(
+        parse_one_hint(&cert_der, KeyHint::Rsa).key_class,
+        KeyClass::Certificate
+    );
+}
+
+#[test]
+fn unknown_hint_value() {
+    let err = "bogus".parse::<KeyHint>().unwrap_err();
+    assert_eq!(err.kind, ErrorKind::KeyParse);
+    assert!(err.message.contains("hint"));
+    assert_eq!(err.message, "unknown key material hint 'bogus'");
+    assert_eq!(
+        err.hint.as_deref(),
+        Some("valid hints: auto, aes, rsa, ec, cert")
+    );
+    for hint in [
+        KeyHint::Auto,
+        KeyHint::Aes,
+        KeyHint::Rsa,
+        KeyHint::Ec,
+        KeyHint::Cert,
+    ] {
+        assert_eq!(hint.as_str().parse::<KeyHint>().unwrap(), hint);
+    }
+    assert_eq!(KeyHint::default(), KeyHint::Auto);
+    assert!("AES".parse::<KeyHint>().is_err());
+}
+
+// --------------------------------------------------------------------- garbage inputs
+
+#[test]
+fn garbage_input_lists_attempted_formats() {
+    let err = err(b"\x01\x02\x03 definitely not a key \xff\xfe");
+    assert!(err.message.contains("attempted"));
+    assert_eq!(
+        err.message,
+        "could not parse key material (attempted: PEM, DER (PKCS#8, SPKI, PKCS#1, SEC1, X.509, CSR, PKCS#12), raw AES (16/24/32 bytes))"
+    );
+    assert_eq!(
+        err.hint.as_deref(),
+        Some(
+            "supported inputs: PEM/DER keys, certificates, CSRs, PKCS#12, raw AES keys of 16/24/32 bytes"
+        )
+    );
+}
+
+#[test]
+fn empty_input() {
+    let err = err(b"");
+    assert!(err.message.contains("empty"));
+    assert_eq!(err.message, "empty key material");
+}
+
+#[test]
+fn garbage_der_prefix() {
+    let mut data = vec![0x30];
+    data.extend([0xa5; 40]);
+    assert!(err(&data).message.contains("attempted"));
+}
+
+#[test]
+fn truncated_pem_block() {
+    let err = err(b"-----BEGIN CERTIFICATE-----\nAAAA\n");
+    assert!(err.message.contains("PEM"));
+    assert_eq!(err.message, "no complete PEM block found");
+    assert_eq!(
+        err.hint.as_deref(),
+        Some("a PEM block is '-----BEGIN <LABEL>----- … -----END <LABEL>-----'")
+    );
+}
+
+#[test]
+fn mismatched_pem_labels() {
+    let err = err(b"-----BEGIN CERTIFICATE-----\nAAAA\n-----END PUBLIC KEY-----\n");
+    assert!(err.message.contains("closed by"));
+    assert_eq!(
+        err.message,
+        "PEM block 'BEGIN CERTIFICATE' is closed by 'END PUBLIC KEY'"
+    );
+}
+
+#[test]
+fn unsupported_pem_label() {
+    let data = b"-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----\n";
+    let err = err(data);
+    assert!(err.message.contains("unsupported PEM block"));
+    assert_eq!(
+        err.message,
+        "unsupported PEM block type 'OPENSSH PRIVATE KEY'"
+    );
+    assert_eq!(
+        err.hint.as_deref(),
+        Some(
+            "supported PEM blocks: PRIVATE KEY, ENCRYPTED PRIVATE KEY, RSA/EC PRIVATE KEY, PUBLIC KEY, CERTIFICATE, CERTIFICATE REQUEST"
+        )
+    );
+}
+
+#[test]
+fn corrupt_pem_body() {
+    let data = b"-----BEGIN CERTIFICATE-----\nnot!base64@@\n-----END CERTIFICATE-----\n";
+    let err = err(data);
+    assert!(err.message.contains("CERTIFICATE"));
+    assert!(
+        err.message.starts_with("malformed CERTIFICATE PEM block: "),
+        "{}",
+        err.message
+    );
+}
+
+#[test]
+fn pem_marker_in_non_utf8_data() {
+    let mut data = b"-----BEGIN X-----".to_vec();
+    data.push(0xff);
+    assert_eq!(
+        err(&data).message,
+        "data contains a PEM marker but is not valid text"
+    );
+}
+
+#[test]
+fn pem_labels_strip_spaces_before_comparing() {
+    let key = p256();
+    let pem = String::from_utf8(spki_pem(&key))
+        .unwrap()
+        .replace("-----END PUBLIC KEY-----", "-----END PUBLIC KEY -----");
+    assert_eq!(*parse_one(pem.as_bytes()).data, spki_der(&key));
+}
+
+// ------------------------------------------------------------------- multi-block PEM
+
+#[test]
+fn multiblock_pem_bundle() {
+    let (rsa, ec) = (rsa_key(2048), p256());
+    let cert = cn_cert(&ec, "bundle-cert");
+    let mut data = pkcs8_pem(&rsa);
+    data.extend(cert.to_pem().unwrap());
+    let materials = parse_key_material(&data, KeyHint::Auto, None).unwrap();
+    let classes: Vec<KeyClass> = materials.iter().map(|m| m.key_class).collect();
+    assert_eq!(classes, [KeyClass::Private, KeyClass::Certificate]);
+    assert_eq!(*materials[0].data, pkcs8_der(&rsa));
+    assert_eq!(*materials[1].data, cert.to_der().unwrap());
+    assert_eq!(materials[1].label_hint.as_deref(), Some("bundle-cert"));
+}
+
+// ----------------------------------------------- lazily-parsed corrupt embedded SPKIs
+
+/// Zero the X‖Y bytes of the EC point inside `der` (keeps the 0x04 prefix).
+fn corrupt_spki(der: &[u8], key: &PKey<Private>) -> Vec<u8> {
+    let ec = key.ec_key().unwrap();
+    let mut ctx = openssl::bn::BigNumContext::new().unwrap();
+    let point = ec
+        .public_key()
+        .to_bytes(ec.group(), PointConversionForm::UNCOMPRESSED, &mut ctx)
+        .unwrap();
+    let pos = der
+        .windows(point.len())
+        .position(|w| w == point.as_slice())
+        .expect("the point must actually occur");
+    let mut out = der.to_vec();
+    for byte in &mut out[pos + 1..pos + point.len()] {
+        *byte = 0;
+    }
+    out
+}
+
+#[test]
+fn certificate_with_corrupt_spki() {
+    let key = p256();
+    let bad_der = corrupt_spki(&cn_cert(&key, "bad-spki").to_der().unwrap(), &key);
+    // sanity: the certificate itself still parses — the failure is lazy
+    openssl::x509::X509::from_der(&bad_der).unwrap();
+    for data in [bad_der.clone(), pem_wrap(&bad_der, "CERTIFICATE")] {
+        let err = err(&data);
+        assert!(
+            err.message.contains("invalid public key"),
+            "{}",
+            err.message
+        );
+        assert!(
+            err.message
+                .starts_with("certificate contains an invalid public key: ")
+        );
+    }
+}
+
+#[test]
+fn csr_with_corrupt_spki() {
+    let key = p256();
+    let bad_der = corrupt_spki(&make_csr(&key, "bad-spki").to_der().unwrap(), &key);
+    openssl::x509::X509Req::from_der(&bad_der).unwrap(); // sanity: loads fine, fails lazily
+    for data in [bad_der.clone(), pem_wrap(&bad_der, "CERTIFICATE REQUEST")] {
+        let err = err(&data);
+        assert!(
+            err.message.contains("invalid public key"),
+            "{}",
+            err.message
+        );
+        assert!(
+            err.message
+                .starts_with("certificate request contains an invalid public key: ")
+        );
+    }
+}
+
+#[test]
+fn pkcs12_with_corrupt_chain_cert_spki() {
+    let key = p256();
+    let cert = cn_cert(&key, "good");
+    let bad_chain =
+        openssl::x509::X509::from_der(&corrupt_spki(&cert.to_der().unwrap(), &key)).unwrap();
+    let mut stack = Stack::new().unwrap();
+    stack.push(bad_chain).unwrap();
+    let mut builder = Pkcs12::builder();
+    builder.name("bad-chain").pkey(&key).cert(&cert).ca(stack);
+    let p12 = builder.build2("").unwrap().to_der().unwrap();
+    let err = err(&p12);
+    assert!(
+        err.message.contains("invalid public key"),
+        "{}",
+        err.message
+    );
+}
+
+#[test]
+fn p12_shaped_garbage_without_callback_hedges_corruption() {
+    // valid PFX version marker (SEQUENCE { INTEGER 3 …) but otherwise garbage: without a
+    // callback the error must not claim with certainty that a password is missing
+    let mut data = b"\x30\x82\x01\x00\x02\x01\x03".to_vec();
+    data.extend([0xaa; 200]);
+    let err = err(&data);
+    assert!(err.message.contains("corrupt"));
+    // with a callback: prompted, then the hedged wrong-password text
+    let err = parse_with(&data, &mut answer("x")).unwrap_err();
+    assert_eq!(
+        err.message,
+        "incorrect password for PKCS#12 (or corrupt PKCS#12 data)"
+    );
+}
+
+// ----------------------------------- §4.4.3 R6 fixtures: curves, explicit params, PSS, DSA
+
+#[test]
+fn other_pyca_curves_load_with_pycas_lowercase_names() {
+    let cases = [
+        (Nid::X9_62_PRIME192V1, "secp192r1"),
+        (Nid::SECP224R1, "secp224r1"),
+        (Nid::SECP256K1, "secp256k1"),
+        (Nid::BRAINPOOL_P256R1, "brainpoolp256r1"),
+        (Nid::BRAINPOOL_P384R1, "brainpoolp384r1"),
+        (Nid::BRAINPOOL_P512R1, "brainpoolp512r1"),
+    ];
+    for (nid, name) in cases {
+        let key = ec_key(nid);
+        for data in [pkcs8_der(&key), pkcs8_pem(&key), spki_der(&key)] {
+            let material = parse_one(&data);
+            assert_eq!(material.algorithm, KeyAlgorithm::Ec);
+            assert_eq!(material.curve, Some(Curve::Other(name.to_owned())));
+            assert_eq!(material.size_bits, None);
+        }
+        let cert = parse_one(&cn_cert(&key, "c").to_der().unwrap());
+        assert_eq!(cert.curve, Some(Curve::Other(name.to_owned())));
+    }
+    for (nid, curve) in [(Nid::SECP384R1, Curve::P384), (Nid::SECP521R1, Curve::P521)] {
+        let key = ec_key(nid);
+        let material = parse_one(&pkcs8_der(&key));
+        assert_eq!(material.curve, Some(curve));
+        assert_eq!(*material.data, pkcs8_der(&key));
+    }
+}
+
+#[test]
+fn unsupported_curves_are_rejected_with_pycas_text() {
+    let cases = [
+        (Nid::X9_62_PRIME239V1, "1.2.840.10045.3.1.4"),
+        (Nid::SECP112R1, "1.3.132.0.6"),
+        (Nid::SECT163K1, "1.3.132.0.1"),
+    ];
+    for (nid, oid) in cases {
+        let key = ec_key(nid);
+        let detail = format!("Curve {oid} is not supported");
+        // PEM → malformed {label} PEM block
+        assert_eq!(
+            err(&pkcs8_pem(&key)).message,
+            format!("malformed PRIVATE KEY PEM block: {detail}")
+        );
+        let sec1 = key.ec_key().unwrap().private_key_to_pem().unwrap();
+        assert_eq!(
+            err(&sec1).message,
+            format!("malformed EC PRIVATE KEY PEM block: {detail}")
+        );
+        assert_eq!(
+            err(&spki_pem(&key)).message,
+            format!("malformed PUBLIC KEY PEM block: {detail}")
+        );
+        // DER → the try-chain step fails and the chain continues
+        assert!(
+            err(&pkcs8_der(&key))
+                .message
+                .starts_with("could not parse key material")
+        );
+        assert!(
+            err(&spki_der(&key))
+                .message
+                .starts_with("could not parse key material")
+        );
+        // certificate / CSR → invalid public key (c2 crashed: §11 D12 b)
+        let ecdsa_signer = p256();
+        let mut cert = cn_cert(&ecdsa_signer, "x");
+        let mut builder = openssl::x509::X509::builder().unwrap();
+        builder.set_version(2).unwrap();
+        builder.set_subject_name(cert.subject_name()).unwrap();
+        builder.set_issuer_name(cert.subject_name()).unwrap();
+        builder.set_not_before(cert.not_before()).unwrap();
+        builder.set_not_after(cert.not_after()).unwrap();
+        builder.set_pubkey(&key).unwrap();
+        builder
+            .sign(&ecdsa_signer, openssl::hash::MessageDigest::sha256())
+            .unwrap();
+        cert = builder.build();
+        let der = cert.to_der().unwrap();
+        for data in [der.clone(), pem_wrap(&der, "CERTIFICATE")] {
+            assert_eq!(
+                err(&data).message,
+                format!("certificate contains an invalid public key: {detail}")
+            );
+        }
+        let mut req = openssl::x509::X509Req::builder().unwrap();
+        req.set_pubkey(&key).unwrap();
+        req.sign(&ecdsa_signer, openssl::hash::MessageDigest::sha256())
+            .unwrap();
+        let req = req.build().to_der().unwrap();
+        assert_eq!(
+            err(&req).message,
+            format!("certificate request contains an invalid public key: {detail}")
+        );
+    }
+}
+
+fn explicit(key: &PKey<Private>) -> PKey<Private> {
+    let ec = key.ec_key().unwrap();
+    let nid = ec.group().curve_name().unwrap();
+    let mut group = EcGroup::from_curve_name(nid).unwrap();
+    group.set_asn1_flag(Asn1Flag::EXPLICIT_CURVE);
+    let key = EcKey::from_private_components(&group, ec.private_key(), ec.public_key()).unwrap();
+    PKey::from_ec_key(key).unwrap()
+}
+
+#[test]
+fn explicit_parameter_p256_key_is_reencoded_on_the_named_curve() {
+    let key = p256();
+    let explicit_key = explicit(&key);
+    let explicit_der = pkcs8_der(&explicit_key);
+    assert_ne!(explicit_der, pkcs8_der(&key)); // the fixture really is explicit
+    for data in [explicit_der, pkcs8_pem(&explicit_key)] {
+        let material = parse_one(&data);
+        assert_eq!(material.curve, Some(Curve::P256));
+        assert_eq!(*material.data, pkcs8_der(&key));
+    }
+    let material = parse_one(&spki_der(&explicit_key));
+    assert_eq!(material.curve, Some(Curve::P256));
+    assert_eq!(*material.data, spki_der(&key));
+    // P-384 / P-521 too
+    for nid in [Nid::SECP384R1, Nid::SECP521R1] {
+        let key = ec_key(nid);
+        assert_eq!(
+            *parse_one(&pkcs8_der(&explicit(&key))).data,
+            pkcs8_der(&key)
+        );
+    }
+}
+
+#[test]
+fn explicit_parameters_of_other_curves_are_refused() {
+    // pyca maps explicit parameters only to secp256r1/secp384r1/secp521r1.
+    let text = "ECDSA keys with explicit parameters are only supported when they map to secp256r1, secp384r1, or secp521r1. No custom curves are supported.";
+    for nid in [Nid::SECP224R1, Nid::BRAINPOOL_P256R1] {
+        let key = explicit(&ec_key(nid));
+        assert_eq!(
+            err(&pkcs8_pem(&key)).message,
+            format!("malformed PRIVATE KEY PEM block: {text}")
+        );
+        assert!(err(&pkcs8_der(&key)).message.starts_with("could not parse"));
+    }
+}
+
+#[test]
+fn compressed_points_are_reencoded_uncompressed() {
+    let key = p256();
+    let ec = key.ec_key().unwrap();
+    let mut ctx = openssl::bn::BigNumContext::new().unwrap();
+    let compressed = ec
+        .public_key()
+        .to_bytes(ec.group(), PointConversionForm::COMPRESSED, &mut ctx)
+        .unwrap();
+    let spki = spki_der(&key);
+    let uncompressed = ec
+        .public_key()
+        .to_bytes(ec.group(), PointConversionForm::UNCOMPRESSED, &mut ctx)
+        .unwrap();
+    // SPKI with the compressed point: rebuild the header around it
+    let header_len = spki.len() - uncompressed.len();
+    let mut body = spki[2..header_len].to_vec();
+    let bitstring_len_pos = body.len() - 2;
+    body[bitstring_len_pos] = (compressed.len() + 1) as u8;
+    body.extend(&compressed);
+    let mut compressed_spki = vec![0x30, body.len() as u8];
+    compressed_spki.extend(body);
+    let material = parse_one(&compressed_spki);
+    assert_eq!(*material.data, spki);
+}
+
+/// An rsassaPss PKCS#8: the rsaEncryption AlgorithmIdentifier swapped for id-RSASSA-PSS
+/// (no parameters), the RSAPrivateKey unchanged.
+fn rsa_pss_pkcs8(rsa_pkcs8: &[u8]) -> Vec<u8> {
+    let rsa_alg = unhex("300d06092a864886f70d0101010500");
+    let pss_alg = unhex("300b06092a864886f70d01010a");
+    let pos = rsa_pkcs8
+        .windows(rsa_alg.len())
+        .position(|w| w == rsa_alg.as_slice())
+        .unwrap();
+    let mut inner = rsa_pkcs8[4..pos].to_vec(); // after the outer 30 82 xx xx
+    inner.extend(&pss_alg);
+    inner.extend(&rsa_pkcs8[pos + rsa_alg.len()..]);
+    let mut out = vec![0x30, 0x82, (inner.len() >> 8) as u8, inner.len() as u8];
+    out.extend(inner);
+    out
+}
+
+#[test]
+fn rsa_pss_keys_load_as_plain_rsa() {
+    let key = rsa_key(2048);
+    let pss = rsa_pss_pkcs8(&pkcs8_der(&key));
+    let pss_key = PKey::private_key_from_der(&pss).unwrap();
+    assert_eq!(pss_key.id(), openssl::pkey::Id::RSA_PSS); // the fixture really is PSS
+    let material = parse_one(&pss);
+    assert_eq!(material.algorithm, KeyAlgorithm::Rsa);
+    assert_eq!(material.size_bits, Some(2048));
+    assert_eq!(*material.data, pkcs8_der(&key)); // rebuilt as rsaEncryption
+    let material = parse_one(&pem_wrap(&pss, "PRIVATE KEY"));
+    assert_eq!(*material.data, pkcs8_der(&key));
+    let pss_spki = pss_key.public_key_to_der().unwrap();
+    assert_ne!(pss_spki, spki_der(&key));
+    assert_eq!(*parse_one(&pss_spki).data, spki_der(&key));
+}
+
+#[test]
+fn rsa_size_bits_is_the_modulus_bit_length() {
+    let key = rsa_key(1023);
+    assert_eq!(parse_one(&pkcs8_der(&key)).size_bits, Some(1023));
+}
+
+#[test]
+fn dsa_keys_are_unsupported_algorithms() {
+    let dsa = openssl::dsa::Dsa::generate(1024).unwrap();
+    let key = PKey::from_dsa(dsa).unwrap();
+    for (data, class) in [
+        (pkcs8_der(&key), "DSAPrivateKey"),
+        (pkcs8_pem(&key), "DSAPrivateKey"),
+        (spki_der(&key), "DSAPublicKey"),
+    ] {
+        let err = err(&data);
+        assert_eq!(err.message, format!("unsupported key algorithm: {class}"));
+        assert_eq!(
+            err.hint.as_deref(),
+            Some("supported: AES, RSA, EC, Ed25519/Ed448, X25519/X448")
+        );
+    }
+}
+
+#[test]
+fn ed448_and_x448_classify() {
+    let material = parse_one(&pkcs8_der(&ed448()));
+    assert_eq!(
+        (material.algorithm, material.curve, material.size_bits),
+        (KeyAlgorithm::EcEdwards, Some(Curve::Ed448), None)
+    );
+    let material = parse_one(&spki_pem(&x448()));
+    assert_eq!(
+        (material.algorithm, material.curve, material.size_bits),
+        (KeyAlgorithm::EcMontgomery, Some(Curve::X448), None)
+    );
+}
+
+// ------------------------------------------------- test_l13_hardening (R6 cases)
+
+fn encrypted_traditional_pem() -> (String, PKey<Private>) {
+    let key = p256();
+    let pem = key
+        .ec_key()
+        .unwrap()
+        .private_key_to_pem_passphrase(Cipher::aes_256_cbc(), b"s3cret")
+        .unwrap();
+    let pem = String::from_utf8(pem).unwrap();
+    assert!(pem.contains("Proc-Type: 4,ENCRYPTED")); // RFC-1421 headers
+    (pem, key)
+}
+
+#[test]
+fn encrypted_traditional_pem_paste_keeps_headers() {
+    let (pem, key) = encrypted_traditional_pem();
+    let (data, fmt) = decode_data(&pem).unwrap();
+    assert_eq!(fmt, InputFormat::Pem);
+    let text = String::from_utf8(data.to_vec()).unwrap();
+    assert!(text.contains("Proc-Type: 4,ENCRYPTED"));
+    assert!(text.contains("DEK-Info: "));
+    let header_end = text.find("DEK-Info").unwrap();
+    assert!(text[header_end..].contains("\n\n")); // RFC 1421: blank line closes headers
+    let materials = parse_with(&data, &mut answer("s3cret")).unwrap();
+    let classes: Vec<KeyClass> = materials.iter().map(|m| m.key_class).collect();
+    assert_eq!(classes, [KeyClass::Private]);
+    let reloaded = PKey::private_key_from_der(&materials[0].data).unwrap();
+    assert_eq!(
+        reloaded.ec_key().unwrap().private_key().to_vec(),
+        key.ec_key().unwrap().private_key().to_vec()
+    );
+}
+
+#[test]
+fn encrypted_traditional_pem_survives_indented_paste() {
+    let (pem, _key) = encrypted_traditional_pem();
+    let indented: Vec<String> = pem.lines().map(|line| format!("   {line}")).collect();
+    let (data, fmt) = decode_data(&indented.join("\n")).unwrap();
+    assert_eq!(fmt, InputFormat::Pem);
+    assert!(String::from_utf8_lossy(&data).contains("DEK-Info: "));
+    let materials = parse_with(&data, &mut answer("s3cret")).unwrap();
+    assert_eq!(materials[0].algorithm, KeyAlgorithm::Ec);
+}
+
+#[test]
+fn key_material_debug_never_shows_bytes() {
+    let material = parse_one(&[7u8; 16]);
+    let debug = format!("{material:?}");
+    assert!(debug.contains("<16 bytes>"), "{debug}");
+}
+
+#[test]
+fn encrypted_label_with_a_non_encrypted_body_is_malformed_without_prompting() {
+    let key = p256();
+    let data = pem_wrap(&spki_der(&key), "ENCRYPTED PRIVATE KEY");
+    let prompts = Rc::new(RefCell::new(Vec::new()));
+    let mut cb = recording_cb("pw", prompts.clone());
+    let err = parse_with(&data, &mut cb).unwrap_err();
+    assert!(
+        err.message
+            .starts_with("malformed ENCRYPTED PRIVATE KEY PEM block: "),
+        "{}",
+        err.message
+    );
+    assert!(prompts.borrow().is_empty());
+}
+
+#[test]
+fn a_refused_key_inside_an_encrypted_container_is_the_wrong_password_text() {
+    // c2: the decrypt-and-load step catches pyca's UnsupportedAlgorithm as "incorrect password".
+    let key = ec_key(Nid::SECP112R1);
+    let data = key
+        .private_key_to_pkcs8_passphrase(Cipher::aes_256_cbc(), b"pw")
+        .unwrap();
+    let err = parse_with(&data, &mut answer("pw")).unwrap_err();
+    assert_eq!(err.message, WRONG_PW);
+}
