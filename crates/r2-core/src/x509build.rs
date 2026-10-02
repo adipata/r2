@@ -246,19 +246,6 @@ pub fn build_pkcs12(
             ))
         })?;
     }
-    // r2 guards (§11 D16): kept from the OpenSSL builder, whose CString conversion panicked.
-    if password.contains('\0') {
-        return Err(ConsoleError::param(
-            "PKCS#12 password must not contain NUL characters",
-            "password",
-        ));
-    }
-    if friendly_name.contains('\0') {
-        return Err(ConsoleError::param(
-            "PKCS#12 friendly name must not contain NUL characters",
-            "friendly_name",
-        ));
-    }
     // pyca `serialize_key_and_certificates`: the certificate's key must be the private key
     // (its ValueErrors became c2's "PKCS#12 assembly failed: …").
     let spki = x509info::load_certificate(cert_der)

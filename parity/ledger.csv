@@ -1279,7 +1279,7 @@ tests/unit/test_x509build.py::test_pkcs12_roundtrip_with_pyca,1,R6,ported,r2-cor
 tests/unit/test_x509build.py::test_pkcs12_wrong_password_fails_reload,1,R6,ported,r2-core::x509build pkcs12_wrong_password_fails_reload,
 tests/unit/test_x509build.py::test_pkcs12_ed25519,1,R6,ported,r2-core::x509build pkcs12_ed25519,
 tests/unit/test_x509build.py::test_pkcs12_output_reparses_via_parse_key_material,1,R6,ported,r2-core::x509build pkcs12_output_reparses_via_parse_key_material,
-tests/unit/test_x509build.py::test_pkcs12_empty_password,1,R6,ported,r2-core::x509build pkcs12_empty_password ; r2-core::x509build pkcs12_nul_guards,
+tests/unit/test_x509build.py::test_pkcs12_empty_password,1,R6,ported,r2-core::x509build pkcs12_empty_password ; r2-core::x509build pkcs12_nul_bytes_are_ordinary_characters,
 tests/unit/test_x509build.py::test_pkcs12_bad_cert_der,1,R6,ported,r2-core::x509build pkcs12_bad_cert_der,
 tests/unit/test_x509build.py::test_pkcs12_bad_extra_cert,1,R6,ported,r2-core::x509build pkcs12_bad_extra_cert,
 tests/unit/test_x509build.py::test_pkcs12_rejects_x25519,1,R6,ported,r2-core::x509build pkcs12_rejects_x25519,

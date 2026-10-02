@@ -30,9 +30,9 @@ impl Encoding {
 /// AES-256-CBC — pyca BestAvailableEncryption; salt length is OpenSSL's and not
 /// normative). Errors: invalid input → KeyParse "exported private key is not valid
 /// unencrypted PKCS#8 DER: {detail}"; empty password → Param "password must not be empty"
-/// (param_name "password"); NUL in password → Param "password must not contain NUL
-/// characters"; a password over 1023 UTF-8 bytes → Param "Passwords longer than 1023 bytes are
-/// not supported by this backend" (pyca's limit; c2 crashed, §11 D12(h)).
+/// (param_name "password"); a password over 1023 UTF-8 bytes → Param "Passwords longer
+/// than 1023 bytes are not supported by this backend" (pyca's limit; c2 crashed, §11
+/// D12(h)). A NUL byte is an ordinary password byte (pointer + length, no C string).
 pub fn private_key_bytes(
     pkcs8_der: &[u8],
     encoding: Encoding,
@@ -55,12 +55,6 @@ pub fn private_key_bytes(
             if pw.is_empty() {
                 return Err(ConsoleError::param(
                     "password must not be empty",
-                    "password",
-                ));
-            }
-            if pw.contains('\0') {
-                return Err(ConsoleError::param(
-                    "password must not contain NUL characters",
                     "password",
                 ));
             }

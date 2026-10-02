@@ -165,13 +165,26 @@ fn password_guards() {
     let err = private_key_bytes(&pkcs8, Encoding::Pem, Some(&secret(""))).unwrap_err();
     assert_eq!(err.param_name(), Some("password"));
     assert_eq!(err.message, "password must not be empty");
-    // §11 D16
-    let err = private_key_bytes(&pkcs8, Encoding::Der, Some(&secret("a\0b"))).unwrap_err();
-    assert_eq!(err.param_name(), Some("password"));
-    assert_eq!(err.message, "password must not contain NUL characters");
     // invalid input is reported before the password (c2 loads the key first)
     let err = private_key_bytes(b"junk", Encoding::Pem, Some(&secret(""))).unwrap_err();
     assert_eq!(err.kind, ErrorKind::KeyParse);
+}
+
+#[test]
+fn nul_in_the_password_is_an_ordinary_byte() {
+    // c2 (pyca BestAvailableEncryption) encrypts under b"a\x00b"; so does r2, and the key
+    // reloads with that password only.
+    let pkcs8 = pkcs8_der(&p256());
+    for encoding in [Encoding::Pem, Encoding::Der] {
+        let out = private_key_bytes(&pkcs8, encoding, Some(&secret("a\0b"))).unwrap();
+        let mut cb = answer("a\0b");
+        let materials = parse_key_material(&out, KeyHint::Auto, Some(&mut cb)).unwrap();
+        assert_eq!(*materials[0].data, pkcs8);
+        for wrong in ["a", "ab"] {
+            let mut cb = answer(wrong);
+            assert!(parse_key_material(&out, KeyHint::Auto, Some(&mut cb)).is_err());
+        }
+    }
 }
 
 #[test]

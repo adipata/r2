@@ -879,10 +879,13 @@ fn encrypted_pkcs8_private(data: &[u8], password: Option<&[u8]>) -> Pyca<PKey<Pr
                         .position(|oid| oid == prf)
                         .map(|i| digests[i])
                         .ok_or_else(|| unknown(x509info::oid_dotted(prf).unwrap_or_default()))?;
-                    let iterations = usize::try_from(*iterations).map_err(|_| invalid_key())?;
-                    if iterations < 1 {
-                        return Err(invalid_key());
-                    }
+                    // OpenSSL takes a C int: rust-openssl's `try_into().unwrap()` panics above
+                    // i32::MAX (so did pyca — c2 crashed, §11 D12(i)); r2 reports it as a
+                    // ValueError (wrong password or corrupt data).
+                    let iterations = usize::try_from(*iterations)
+                        .ok()
+                        .filter(|n| *n >= 1 && i32::try_from(*n).is_ok())
+                        .ok_or_else(invalid_key)?;
                     openssl::pkcs5::pbkdf2_hmac(password, salt, iterations, md, &mut key)?;
                 }
                 AlgParams::Scrypt { salt, n, r, p } => {
@@ -1545,8 +1548,8 @@ fn parse_pkcs12(
             let secret = callback("Password for PKCS#12")?;
             let wrong = || ConsoleError::key_parse(WRONG_P12_PASSWORD);
             let secret = secret.expose_secret();
-            // Pkcs12::parse2 would panic on an interior NUL (CString); c2's answer is the
-            // wrong-password text (§11 D16).
+            // Pkcs12::parse2 would panic on an interior NUL (CString; so did pyca, c2
+            // crashed): r2 answers with the wrong-password text (§11 D16).
             if secret.contains('\0') {
                 return Err(wrong());
             }

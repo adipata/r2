@@ -126,9 +126,15 @@ pub fn rfc4514_string(name_der: &[u8]) -> Result<String> {
 /// `key info` rows for a certificate: ("subject", rfc4514), ("issuer", rfc4514),
 /// ("serial", lower-case hex without leading zeros, "0" for zero), ("not valid before",
 /// "YYYY-MM-DDTHH:MM:SS+00:00"), ("not valid after", same). Certificates are read by a
-/// strict DER walker with pyca's load-time checks (minimal INTEGERs, DER UTCTime /
-/// GeneralizedTime, Name value alphabets), not x509-cert (whose const-oid rejects OIDs pyca
-/// reads); an undecodable Name value → KeyParse "certificate is not valid DER X.509: {pyca
+/// strict DER parser of pyca's whole `Certificate` structure with its load-time checks
+/// (EXPLICIT [0] version DEFAULT v1 — an encoded v1 is EncodedDefault —, minimal INTEGERs,
+/// both AlgorithmIdentifiers and the SPKI algorithm with pyca's DEFINED BY parameters, DER
+/// UTCTime / GeneralizedTime, Name value alphabets, [1]/[2] unique IDs, [3] SEQUENCE OF
+/// Extension { OID, BOOLEAN DEFAULT FALSE, OCTET STRING }, nothing after; then a version
+/// other than v1/v3 is pyca's InvalidVersion "{n} is not a valid X509 version" — c2
+/// crashed, §11 D12(b) — and CSRs likewise: version 0, [0] SET OF Attribute { OID, SET OF
+/// ANY } in DER order), not x509-cert (whose const-oid rejects OIDs pyca reads); an
+/// undecodable Name value → KeyParse "certificate is not valid DER X.509: {pyca
 /// text}" and a GeneralizedTime in year 0 (which pyca loads) → "… X.509: year 0 is out of
 /// range" (Python's datetime text; c2 crashed lazily in both cases, §11 D12(b)).
 pub fn certificate_details(cert_der: &[u8]) -> Result<Vec<(String, String)>> {

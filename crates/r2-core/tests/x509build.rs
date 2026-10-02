@@ -745,24 +745,120 @@ fn pkcs12_empty_password() {
     );
 }
 
+/// The TLVs inside a constructed value's content.
+fn children(mut content: &[u8]) -> Vec<&[u8]> {
+    let mut out = Vec::new();
+    while !content.is_empty() {
+        let (_, inner) = split_tlv(content);
+        let header = if content[1] < 0x80 {
+            2
+        } else {
+            2 + (content[1] & 0x7f) as usize
+        };
+        let (tlv, rest) = content.split_at(header + inner.len());
+        out.push(tlv);
+        content = rest;
+    }
+    out
+}
+
+/// RFC 7292 B.2 with SHA-256 (u = 32, v = 64): the password is a NUL-terminated BMPString.
+fn pkcs12_mac_key(password: &str, salt: &[u8], iterations: usize) -> Vec<u8> {
+    let fill = |data: &[u8]| -> Vec<u8> {
+        if data.is_empty() {
+            return Vec::new();
+        }
+        let len = 64 * data.len().div_ceil(64);
+        data.iter().copied().cycle().take(len).collect()
+    };
+    let pass: Vec<u8> = password
+        .encode_utf16()
+        .chain([0])
+        .flat_map(u16::to_be_bytes)
+        .collect();
+    let mut input = vec![3u8; 64];
+    input.extend(fill(salt));
+    input.extend(fill(&pass));
+    let mut a = openssl::hash::hash(MessageDigest::sha256(), &input)
+        .unwrap()
+        .to_vec();
+    for _ in 1..iterations {
+        a = openssl::hash::hash(MessageDigest::sha256(), &a)
+            .unwrap()
+            .to_vec();
+    }
+    a
+}
+
+/// Checks the PFX MAC under `password` (HMAC-SHA256 over the authSafe content).
+fn pkcs12_mac_verifies(p12: &[u8], password: &str) -> bool {
+    let (_, pfx) = split_tlv(p12);
+    let parts = children(pfx);
+    let (_, auth_safe_info) = split_tlv(parts[1]);
+    let (_, explicit) = split_tlv(children(auth_safe_info)[1]);
+    let (_, auth_safe) = split_tlv(explicit);
+    let (_, mac_data) = split_tlv(parts[2]);
+    let mac_parts = children(mac_data);
+    let (_, digest_info) = split_tlv(mac_parts[0]);
+    let (_, digest) = split_tlv(children(digest_info)[1]);
+    let (_, salt) = split_tlv(mac_parts[1]);
+    let (_, iterations) = split_tlv(mac_parts[2]);
+    let iterations = iterations
+        .iter()
+        .fold(0usize, |acc, b| acc * 256 + *b as usize);
+    let key = PKey::hmac(&pkcs12_mac_key(password, salt, iterations)).unwrap();
+    let mut signer = Signer::new(MessageDigest::sha256(), &key).unwrap();
+    signer.update(auth_safe).unwrap();
+    signer.sign_to_vec().unwrap() == digest
+}
+
+/// The shroudedKeyBag's EncryptedPrivateKeyInfo (second authSafe ContentInfo, first bag).
+fn pkcs12_shrouded_key(p12: &[u8]) -> Vec<u8> {
+    let (_, pfx) = split_tlv(p12);
+    let (_, auth_safe_info) = split_tlv(children(pfx)[1]);
+    let (_, explicit) = split_tlv(children(auth_safe_info)[1]);
+    let (_, auth_safe) = split_tlv(split_tlv(explicit).1);
+    let (_, key_info) = split_tlv(children(auth_safe)[1]);
+    let (_, explicit) = split_tlv(children(key_info)[1]);
+    let (_, safe_contents) = split_tlv(split_tlv(explicit).1);
+    let (_, bag) = split_tlv(children(safe_contents)[0]);
+    let (_, explicit) = split_tlv(children(bag)[1]);
+    explicit.to_vec()
+}
+
 #[test]
-fn pkcs12_nul_guards() {
-    // §11 D16: r2 texts where rust-openssl would panic.
+fn pkcs12_nul_bytes_are_ordinary_characters() {
+    // c2 (pyca's native PKCS#12 writer) accepts NUL in the password and the friendly name:
+    // the password's BMPString carries U+0000 like any other character, and pyca's
+    // load_pkcs12 returns friendly_name b"k\x00x". (Only OpenSSL's PKCS12_parse takes a C
+    // string — §11 D16, parse path.)
     let key = p256();
     let pkcs8 = pkcs8_der(&key);
     let cert_der = build_self_signed_cert(&pkcs8, "k", 3650).unwrap();
-    let err = build_pkcs12(&pkcs8, &cert_der, "k", &secret("p\0w"), &[]).unwrap_err();
-    assert_eq!(err.param_name(), Some("password"));
+    let p12 = build_pkcs12(&pkcs8, &cert_der, "k", &secret("a\0b"), &[]).unwrap();
+    assert!(pkcs12_mac_verifies(&p12, "a\0b"));
+    assert!(!pkcs12_mac_verifies(&p12, "ab"));
+    assert!(!pkcs12_mac_verifies(&p12, "a"));
+    // the key bag is PBES2 over the raw UTF-8 password, NUL included
+    let shrouded = pkcs12_shrouded_key(&p12);
+    let mut cb = answer("a\0b");
+    let materials = parse_key_material(&shrouded, KeyHint::Auto, Some(&mut cb)).unwrap();
+    assert_eq!(*materials[0].data, pkcs8);
+    let mut cb = answer("a");
+    assert!(parse_key_material(&shrouded, KeyHint::Auto, Some(&mut cb)).is_err());
+    // the friendly name keeps its NUL (BMPString 006b 0000 0078)
+    let p12 = build_pkcs12(&pkcs8, &cert_der, "k\0x", &secret("pw"), &[]).unwrap();
+    assert!(hex(&p12).contains("1e06006b00000078"));
     assert_eq!(
-        err.message,
-        "PKCS#12 password must not contain NUL characters"
+        reload(&p12, "pw").cert.unwrap().alias(),
+        Some(b"k\0x".as_slice())
     );
-    let err = build_pkcs12(&pkcs8, &cert_der, "k\0", &secret("pw"), &[]).unwrap_err();
-    assert_eq!(err.kind.class_name(), "ParamError");
-    assert_eq!(
-        err.message,
-        "PKCS#12 friendly name must not contain NUL characters"
-    );
+    assert!(pkcs12_mac_verifies(&p12, "pw"));
+    // c2's label hint on load: 'k\x00x' for the key and the certificate
+    let mut cb = answer("pw");
+    let materials = parse_key_material(&p12, KeyHint::Auto, Some(&mut cb)).unwrap();
+    let labels: Vec<Option<&str>> = materials.iter().map(|m| m.label_hint.as_deref()).collect();
+    assert_eq!(labels, [Some("k\0x"), Some("k\0x")]);
 }
 
 #[test]

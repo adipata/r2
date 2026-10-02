@@ -1821,10 +1821,9 @@ Normative:
   the PrintableString alphabet); a failure → Crypto "assembled CSR failed to parse:
   {detail}" with pyca's detail, e.g. for `C=a*`.
 - `build_pkcs12`: empty password → Param "PKCS#12 password must not be empty"
-  (param_name "password", hint "PKCS#12 output is always encrypted (§5.6)"); NUL in the
-  password or friendly name → Param "PKCS#12 password must not contain NUL characters" /
-  "PKCS#12 friendly name must not contain NUL characters" (r2 guard, kept from the OpenSSL
-  builder whose `CString::new(..).unwrap()` panicked; §11 D16). The PFX is written by a
+  (param_name "password", hint "PKCS#12 output is always encrypted (§5.6)"). A NUL in the
+  password or friendly name is an ordinary character, as in pyca (U+0000 in the
+  BMPStrings; the PBKDF2 password is the raw UTF-8). The PFX is written by a
   port of pyca 49's `serialize_key_and_certificates` with `BestAvailableEncryption` (pyca
   writes PKCS#12 natively): authSafe = [encryptedData { the cert bags }, data { the
   shroudedKeyBag }], each encrypted with PBES2 / PBKDF2-HMAC-SHA256 (20000 iterations,
@@ -1890,7 +1889,8 @@ pub fn spki_facts(spki_der: &[u8], classifier: Classifier) -> Result<(KeyAlgorit
 /// KeyParseError propagated (c2 crashed or failed `keys`; r2 propagates the error, §11
 /// D12(b)). True when `err`, returned by `cert_facts` or `cert_attributes`, is of the skipped
 /// kind: every "certificate is not valid DER X.509: …" except a BIT STRING value under an OID
-/// other than x500UniqueIdentifier and an unknown Name value tag, and every "certificate
+/// other than x500UniqueIdentifier, an unknown Name value tag and pyca's InvalidVersion
+/// ("{n} is not a valid X509 version"), and every "certificate
 /// contains an invalid public key: …" except an unsupported curve ("Curve {oid} is not
 /// supported", explicit parameters of another curve) or key type ("Unknown key type: {oid}",
 /// "Unsupported key type."). "unsupported public key type …" propagates.
@@ -1943,9 +1943,9 @@ impl Encoding { pub fn as_str(self) -> &'static str { .. } }
 /// AES-256-CBC — pyca BestAvailableEncryption; salt length is OpenSSL's and not
 /// normative). Errors: invalid input → KeyParse "exported private key is not valid
 /// unencrypted PKCS#8 DER: {detail}"; empty password → Param "password must not be empty"
-/// (param_name "password"); NUL in password → Param "password must not contain NUL
-/// characters"; a password over 1023 UTF-8 bytes → Param "Passwords longer than 1023 bytes
-/// are not supported by this backend" (pyca's limit; c2 crashed, §11 D12(h)).
+/// (param_name "password"); a password over 1023 UTF-8 bytes → Param "Passwords longer
+/// than 1023 bytes are not supported by this backend" (pyca's limit; c2 crashed, §11
+/// D12(h)). A NUL byte is an ordinary password byte (pointer + length, no C string).
 pub fn private_key_bytes(pkcs8_der: &[u8], encoding: Encoding, password: Option<&SecretString>) -> Result<Zeroizing<Vec<u8>>> { .. }
 /// SPKI DER → PEM ("PUBLIC KEY") or DER. DER is returned verbatim WITHOUT validation (c2
 /// `_serialize_spki`); only the PEM path parses: invalid → KeyParse "exported public key is
@@ -6115,8 +6115,8 @@ Parsing backend (r2, normative; the OpenSSL counterpart of c2's pyca loaders):
   refuses a non-empty password without a MAC; pyca's bundled OpenSSL does not).
 - **NUL bytes.** A PKCS#12 password containing NUL is answered with c2's wrong-password
   text (`incorrect password for PKCS#12 (or corrupt PKCS#12 data)`) without calling
-  `Pkcs12::parse2`, which would `CString::new(..).unwrap()` it — no observable deviation
-  (§11 D16).
+  `Pkcs12::parse2`, which would `CString::new(..).unwrap()` it (pyca panicked in the same
+  call and c2 crashed; §11 D16).
 - **Classification** (normative rules in §4.4.3). `PKey::id()`
   (`Id::RSA/RSA_PSS/EC/ED25519/ED448/X25519/X448`); RSA `size_bits` =
   `rsa.n().num_bits()` (pyca `key_size`; never `Rsa::size() * 8`, which rounds up to whole
@@ -7527,6 +7527,12 @@ merges).**
     supported by this backend" out of c2's keyexport; r2's `formats::private_key_bytes`
     raises Param (`password`) with that text before encrypting. (Import decrypts with the
     whole password, as pyca does.)
+  - (i) an encrypted PKCS#8 (DER, or a PEM `ENCRYPTED PRIVATE KEY` block) whose PBES2
+    PBKDF2 iterationCount exceeds OpenSSL's C int (above 2^31 − 1): rust-openssl's
+    `pbkdf2_hmac` unwraps the conversion, so pyca panicked (`PanicException`, past c2's
+    `except ValueError`) once the password was given; r2 treats the count as pyca's
+    ValueError → KeyParse `incorrect password for encrypted private key (or corrupt
+    encrypted data)` after the prompt.
 - *Reason*: every expected failure must be a `ConsoleError`; OpenSSL would reject the CN
   with a different text anyway.
 - *Verified by*: R8 certops test (a), R6 keyparse/x509info/formats fixtures (b, f, g, h:
@@ -7538,7 +7544,8 @@ merges).**
   `encrypted_with_empty_password_still_requires_a_password`,
   `pkcs12_with_a_key_pyca_does_not_support_is_d12g`,
   `invalid_rsa_private_keys_are_pycas_value_errors`,
-  `passwords_over_1023_bytes_are_refused_as_pyca`), R7 repl test (c), R1 codec
+  `passwords_over_1023_bytes_are_refused_as_pyca`, i:
+  `pbkdf2_iteration_counts_above_c_int_are_the_wrong_password_text`), R7 repl test (c), R1 codec
   differential vectors (e).
 
 **D13 — Ctrl-C while a command runs is honored at step boundaries.**
@@ -7587,18 +7594,20 @@ merges).**
   on the path) and label truncation, S0 cryptoki spike.
 - *Verified by*: R11 wizard tests (shared-path case, multibyte label).
 
-**D16 — NUL bytes in OpenSSL C-string parameters (build paths only).**
-- *Description*: rust-openssl `CString::new(..).unwrap()`s some values, so r2 checks them
-  first. Parse path (`Pkcs12::parse2`): a password containing NUL gets c2's wrong-password
-  text `incorrect password for PKCS#12 (or corrupt PKCS#12 data)` without calling OpenSSL —
-  no observable deviation. Build paths (`Pkcs12::build2`, `Pkcs12Builder::name`, the
-  `*_passphrase` PKCS#8 writers): `Param` `PKCS#12 password must not contain NUL
-  characters` / `PKCS#12 friendly name must not contain NUL characters` (§4.4.4) and
-  `password must not contain NUL characters` (§4.4.6) — r2 texts where c2's behavior
-  depended on pyca. Only reachable through piped input or files, since a terminal cannot
-  type NUL.
-- *Reason*: rust-openssl would panic (S0 OpenSSL spike).
-- *Verified by*: R6 keyparse/x509build/formats tests.
+**D16 — NUL bytes in OpenSSL C-string parameters (PKCS#12 parse path only).**
+- *Description*: rust-openssl's `Pkcs12::parse2` `CString::new(..).unwrap()`s the
+  password, so r2 checks it first: a PKCS#12 password containing NUL gets c2's
+  wrong-password text `incorrect password for PKCS#12 (or corrupt PKCS#12 data)` without
+  calling OpenSSL (pyca's own `load_pkcs12` panicked in the same call; c2 crashed). The
+  build paths have no such guard: `build_pkcs12` is r2's native writer (no OpenSSL
+  builder, no C string) and the encrypted-PKCS#8 writers pass pointer + length, so a NUL
+  in an export password or a PKCS#12 friendly name works as in c2. Only reachable through
+  piped input or files, since a terminal cannot type NUL.
+- *Reason*: rust-openssl would panic (S0 OpenSSL spike); OpenSSL's `PKCS12_parse` takes a
+  C string, so such a password cannot be passed to it.
+- *Verified by*: R6 keyparse test `pkcs12_password_with_nul_is_the_wrong_password_text`;
+  the build paths' parity by R6 x509build/formats tests
+  (`pkcs12_nul_bytes_are_ordinary_characters`, `nul_in_the_password_is_an_ordinary_byte`).
 
 **D17 — YAML parser-level differences.**
 - *Description*: r2 types YAML exactly like PyYAML 6.0.3 `safe_load` and writes it

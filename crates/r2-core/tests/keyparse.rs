@@ -455,6 +455,38 @@ fn encrypted_pkcs8_scheme_set_is_pycas() {
     }
 }
 
+#[test]
+fn pbkdf2_iteration_counts_above_c_int_are_the_wrong_password_text() {
+    // §11 D12(i): OpenSSL's PKCS5_PBKDF2_HMAC takes a C int; rust-openssl unwraps the
+    // conversion, so pyca panicked (c2 crashed: PanicException) on 2^31 iterations. r2
+    // treats it as pyca's ValueError → the wrong-password text after the prompt.
+    // EncryptedPrivateKeyInfo: PBES2 / PBKDF2 (salt "saltsalt", iterations 2^31,
+    // hmacWithSHA256) / AES-256-CBC (zero IV), 32 zero bytes of ciphertext.
+    let der_2_31 = unhex(concat!(
+        "307e305a06092a864886f70d01050d304d302c06092a864886f70d01050c301f04087361",
+        "6c7473616c7402050080000000300c06082a864886f70d02090500301d06096086480165",
+        "0304012a0410000000000000000000000000000000000420000000000000000000000000",
+        "0000000000000000000000000000000000000000",
+    ));
+    // the same with 2^40 iterations (one more INTEGER content byte)
+    let der_2_40 = unhex(concat!(
+        "307f305b06092a864886f70d01050d304e302d06092a864886f70d01050c302004087361",
+        "6c7473616c740206010000000000300c06082a864886f70d02090500301d060960864801",
+        "650304012a04100000000000000000000000000000000004200000000000000000000000",
+        "000000000000000000000000000000000000000000",
+    ));
+    for der in [der_2_31, der_2_40] {
+        for data in [der.clone(), pem_wrap(&der, "ENCRYPTED PRIVATE KEY")] {
+            let prompts = Rc::new(RefCell::new(Vec::new()));
+            let mut cb = recording_cb("pw", prompts.clone());
+            let err = parse_with(&data, &mut cb).unwrap_err();
+            assert_eq!(err.kind, ErrorKind::KeyParse);
+            assert_eq!(err.message, WRONG_PW);
+            assert_eq!(prompts.borrow().len(), 1);
+        }
+    }
+}
+
 // --------------------------------------------------------------------------- PKCS#12
 
 /// (pkcs12-DER, cert-DER, chain-cert-DER) with friendly name 'bundle', pw 'secret'.
