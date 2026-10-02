@@ -1,4 +1,5 @@
-// R0 skeleton — owner R6 (generated from spec §4)
+//! `ct_eq`, `random_bytes`, `ensure_legacy_provider` (spec §4.4.8; owner R6). The three bodies
+//! are the R0 mandated working bodies, kept as documented.
 use crate::error::Result;
 use zeroize::Zeroizing;
 
@@ -27,7 +28,8 @@ pub fn random_bytes(len: usize) -> Result<Zeroizing<Vec<u8>>> {
 /// `static LEGACY: OnceLock<Option<openssl::provider::Provider>>` initialized with
 /// `Provider::try_load(None, "legacy", true)` (retain_fallbacks MUST be true; the Provider is
 /// never dropped). Failure is non-fatal: logged at debug, only RC2/DES inputs then fail.
-/// Called by keyparse before PKCS#12/traditional-PEM parsing and by r2-cli at startup.
+/// Called by keyparse before PKCS#12, traditional-PEM and encrypted-PKCS#8 parsing and by
+/// r2-cli at startup.
 pub fn ensure_legacy_provider() {
     static LEGACY: std::sync::OnceLock<Option<openssl::provider::Provider>> =
         std::sync::OnceLock::new();

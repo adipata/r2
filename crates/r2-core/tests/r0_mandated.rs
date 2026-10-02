@@ -146,9 +146,6 @@ fn not_implemented_is_a_generic_error_not_a_panic() {
     assert_eq!(err.message, "not implemented (R4)");
     assert_eq!(err.hint, None);
     assert_eq!(err.to_string(), "not implemented (R4)");
-    // A stub of another loop reaches it through the Err path (§4.1.1 handoff 1).
-    let err = r2_core::der::ecdsa_rs_to_der(&[1, 2]).unwrap_err();
-    assert_eq!(err.message, "not implemented (R6)");
 }
 
 #[test]
