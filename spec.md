@@ -3378,10 +3378,13 @@ hard error (never a silent fallthrough):
    show; a `current_dir` failure (deleted working directory) skips this step (c2 crashed,
    §11 D12)
 4. `<user config dir>/r2.yaml`, where the user config dir follows platformdirs
-   `user_config_dir("r2")` (appauthor defaulting to appname): Linux/BSD
-   `$XDG_CONFIG_HOME/r2` (when set and non-blank) else `~/.config/r2`; macOS
-   `~/Library/Application Support/r2`; Windows `%LOCALAPPDATA%\r2\r2` (Local, not
-   Roaming). So the file is e.g. `~/.config/r2/r2.yaml`.
+   `user_config_dir("r2")` (appauthor defaulting to appname; platformdirs 4.10.1, whose
+   `XDGMixin` serves both Unix and MacOS): Linux/BSD and macOS `$XDG_CONFIG_HOME/r2`
+   when the variable is set and non-blank, using the value STRIPPED of Python whitespace
+   (`str.strip()`; on POSIX an undecodable byte is not whitespace), else Linux/BSD
+   `~/.config/r2`, macOS `~/Library/Application Support/r2`; Windows
+   `%LOCALAPPDATA%\r2\r2` (Local, not Roaming). So the file is e.g.
+   `~/.config/r2/r2.yaml`.
 
 Merge (deliberately boring): mappings merge recursively, scalars from the external file
 replace defaults, **lists replace wholesale** (an external `providers.pkcs11` fully
@@ -3420,12 +3423,18 @@ pub fn discover(cli_path: Option<&Path>) -> Result<Option<PathBuf>> { .. }
 use std::path::PathBuf;
 
 /// platformdirs-compatible `user_config_dir("r2")` (rules above); no extra dependency:
-/// home = `std::env::home_dir()`, Windows base = `%LOCALAPPDATA%` (platformdirs' env
-/// fallback). None when that lookup fails.
+/// home as in `expand_user` (`$XDG_CONFIG_HOME` read as an OsString, so a non-UTF-8 value
+/// is used, not ignored), Windows base = `%LOCALAPPDATA%` (platformdirs' env fallback).
+/// None when that lookup fails.
 pub fn user_config_dir() -> Option<PathBuf> { .. }
 /// Python `Path(p).expanduser()`: `text::py_path(p)` first (c2 always built the `Path`
 /// before expanding), then a leading `~` or `~/…` (`~\…` on Windows) → home dir; anything
-/// else is the normalized path.
+/// else is the normalized path. POSIX (`posixpath.expanduser`): the home of `~` is `$HOME`
+/// used as is whenever it is set (even empty: `userhome.rstrip('/') or '/'`, so `~/x` →
+/// `/x`), else `std::env::home_dir()` (getpwuid); `~name/…` is that user's home read from
+/// `/etc/passwd`; an unresolvable `~…` stays literal (§11 D12 (g)). Windows: `~`/`~\…`
+/// only, home = `std::env::home_dir()`. `discover` applies the same expansion to a
+/// non-UTF-8 `--config`/`$R2_CONFIG` byte for byte (crate-private `expand_user_path`).
 pub fn expand_user(path: &str) -> PathBuf { .. }
 ```
 
@@ -3435,9 +3444,15 @@ hint "$R2_CONFIG must point to an existing file"; "cannot read config file {path
 {os_error_text}"; "invalid YAML in config file {path}: {parser text}" (`yaml::parse`'s
 message; the parser text differs from PyYAML's — §11 D17); "config file {path} must
 contain a top-level mapping"; "config
-file {path}: top-level keys must be strings, got {key!r}". An empty file means "no
-overrides". When an external file is in play, every decode error is re-raised as
-"{message} (config file: {path})" with the hint kept. `LoadedConfig.origins` maps each
+file {path}: top-level keys must be strings, got {key!r}"; a file that is not valid UTF-8 →
+"cannot read config file {path}: {CPython UnicodeDecodeError text}" (e.g. "'utf-8' codec
+can't decode byte 0xff in position 19: invalid start byte"; c2 crashed, §11 D12 (f)); the
+text is read with Python's universal newlines (`\r\n`/`\r` → `\n`). An empty file means "no
+overrides". `config_from_yaml` uses the same texts with "config text" in place of "config
+file {path}" ("invalid YAML in config text: …", "config text must contain a top-level
+mapping", "config text: top-level keys must be strings, got …"). When an external file is
+in play, every decode error is re-raised as "{message} (config file: {path})" with the hint
+kept. `LoadedConfig.origins` maps each
 top-level section of the defaults, in defaults order, to `str(source_path)` when the
 external file defines it, else "default".
 
@@ -3662,6 +3677,7 @@ is "template class key"); never printed to stdout. Problems:
 | identifiers (memory.name, pkcs11[].name, softhsm.provider_name) | "invalid provider name {name!r}" (hint "provider names match [A-Za-z_][A-Za-z0-9_-]*") |
 | app.log.max_bytes, app.log.backups, custom_attributes.*.code, custom_mechanisms[].ckm, pkcs11[].slot | "must not be negative" (for `pkcs11[].slot` an r2 addition — c2 accepted a negative slot, §11 D18) |
 | ui.hex_group / ui.hex_width | "must not be negative (0 = continuous)" / "must be at least 1" |
+| integers above the field's Rust type (app.log.backups > u32, ui.hex_group/hex_width > usize, an INT/ENUM `params[].default` > i64) | "must be at most {max}" (r2 only: c2's int is unbounded — §11 D18; every other integer field is u64 and YAML ints stop at 2^64-1, §4.8.4) |
 | empty strings (params[].name, custom_mechanisms[].id, cli_name) | "must not be empty" |
 | ENUM param without choices | "{path}.choices: required for kind 'enum'" |
 | template values | "invalid hex bytes {raw!r}" (hint "0x… values hold whole hex bytes"); "template attribute values must be bool, int or string, got {T}" (hint 'bool → BOOL, int → ULONG, "0x…" → BYTES, other string → STR (§4.7)'); negative int → "must not be negative" (r2: ULONG is unsigned; c2 failed later, at the first create flow, with "template attribute {name} must not be negative" — §11 D18) |
@@ -3717,7 +3733,19 @@ the same types in r2 and every r2-written file is byte-identical to c2's:
     `<<` merge keys follow PyYAML `flatten_mapping` (a mapping or a sequence of mappings;
     the node's own keys win; among merge sources the earlier wins; merged keys come first in
     order); a sequence/mapping used as a key → "found unhashable key".
-  - Anchors/aliases are resolved (the alias shares the anchored value); more than one
+  - First, PyYAML's `Reader.check_printable`: the first character outside
+    `[\t\n\r\x20-\x7E\x85\xA0-\uD7FF\uE000-\uFFFD\U00010000-\U0010FFFF]` (C0 controls
+    but TAB/LF/CR, DEL, C1 controls but NEL, U+FFFE/U+FFFF) → "unacceptable character
+    #x{cp:04x}: special characters are not allowed\n  in \"<unicode string>\", position
+    {char index}" (PyYAML's text verbatim; a NUL never truncates the text).
+  - NEL (U+0085) is a line break everywhere (PyYAML's `scan_line_break` reads it as
+    `\n`); a literal LS/PS (U+2028/U+2029) is an error (§11 D17 (f)).
+  - Block scalars (`|`, `>`) keep only the line breaks PyYAML reads: one whose last line
+    runs to the end of a text without a final line break gets no trailing `\n`
+    (`a: |\n  x` → "x"), and one without content lines at the end of the text is "" (keep
+    `|+`: its empty lines' breaks), where yaml-rust2 (YAML 1.2) adds a break.
+  - Anchors/aliases are resolved by copying the anchored value (recursive alias = error;
+    limits and residual differences in §11 D17 (e)); more than one
     document → "expected a single document in the stream"; empty text or an empty
     document → `Value::Null`.
   - Error texts are yaml-rust2's (syntax) or the PyYAML texts quoted above (construction);
@@ -7354,10 +7382,29 @@ merges).**
     base64`. In an RFC 1421 header line, c2's final `.encode("ascii")` raised
     `UnicodeEncodeError`; r2 keeps the line and returns the re-wrapped text as UTF-8
     (the key parser then rejects the block).
+  - (f) a config file that is not valid UTF-8 (`Path.read_text` raised
+    `UnicodeDecodeError`), or whose YAML construction raised a plain `ValueError` (an
+    impossible timestamp such as `2001-02-30` or `2001-13-01`, a malformed explicit
+    `!!int`/`!!float`/`!!bool` scalar): c2's `_read_external` caught only `OSError` and
+    `yaml.YAMLError`, so startup crashed with a traceback. r2 raises Config `cannot read
+    config file <path>: <CPython UnicodeDecodeError text>` resp. `invalid YAML in config
+    file <path>: <Python's ValueError text>` (`day is out of range for month`, `month must
+    be in 1..12`, `invalid literal for int() with base 10: 'x'`, …; §4.8.1).
+  - (g) `~name/…` (another user's home) in `--config`, `$R2_CONFIG` or a config path
+    field: c2's `Path.expanduser()` resolved it with `pwd.getpwnam` and raised
+    `RuntimeError: Could not determine home directory.` (startup crash) for an unknown
+    user. r2 resolves it from `/etc/passwd` and keeps an unresolvable `~name/…` literally
+    (`--config ~nosuch/x` → `config file not found: ~nosuch/x`). Residual differences:
+    users known only to other NSS sources (LDAP, sssd) or to macOS Directory Services are
+    not resolved, and on Windows `~name` is not expanded (ntpath guessed a sibling of
+    `%USERPROFILE%`).
 - *Reason*: every expected failure must be a `ConsoleError`; OpenSSL would reject the CN
   with a different text anyway.
 - *Verified by*: R8 certops test (a), R6 keyparse fixtures (b), R7 repl test (c), R1 codec
-  differential vectors (e).
+  differential vectors (e), R2 loader tests (d, f: `invalid_utf8_is_a_read_error`,
+  `deleted_working_directory_skips_the_cwd_candidate`, the `LOAD` vectors; g:
+  `discovery::expand_user_is_python_expanduser`,
+  `discovery::expand_user_resolves_other_users`).
 
 **D13 — Ctrl-C while a command runs is honored at step boundaries.**
 - *Description*: c2's `KeyboardInterrupt` surfaced at the next Python bytecode after the
@@ -7425,13 +7472,38 @@ merges).**
   <text>` / `invalid YAML in template file <path>: <text>` differs (construction errors —
   unknown tag, unhashable key, several documents — use PyYAML's wording); (b) inputs that
   only one of the two parsers rejects (exotic or malformed syntax: tabs in indentation,
-  YAML-1.2-only escapes, directives) may load in one and fail in the other; (c) an integer
+  YAML-1.2-only escapes, directives) may load in one and fail in the other — among them,
+  a top-level block scalar with unindented content is rejected (`unindented block scalar
+  content at line <l>, column 1`; PyYAML's minimum indentation is 1, so such a line ends
+  the scalar, and YAML 1.2 would load it as content); (c) an integer
   literal outside -2^63..=2^64-1 is a parse error `integer out of range: <text>`, where
-  Python's int is unbounded.
+  Python's int is unbounded; (d) the explicit collection tags `!!set`, `!!omap` and
+  `!!pairs` (which PyYAML's SafeLoader constructs as `set` / list of pairs) are rejected
+  with `could not determine a constructor for the tag 'tag:yaml.org,2002:set'` (resp.
+  `omap`, `pairs`); (e) aliases are expanded into copies: a recursive alias (an anchored
+  collection that contains its own alias) is an error, a duplicate anchor name silently
+  rebinds (PyYAML: `found duplicate anchor`), and a document is rejected beyond a nesting
+  depth of 400 (PyYAML hits CPython's recursion limit, a crash in c2, between 400 and 500)
+  or beyond 1,000,000 values after alias expansion, or beyond 64 MiB (67,108,864 bytes) of
+  scalar text copied by alias expansion (`document too large: …`; PyYAML shares the
+  aliased object, so a "billion laughs" document, or many aliases of a large scalar,
+  loads there); consequently `yaml::dump` never emits the
+  `&id001`/`*id001` anchors that PyYAML writes for a collection object shared twice — this
+  is visible only when the wizard's structural rewrite (§5.13) re-dumps a user config that
+  aliases a mapping or list (r2 writes the copies); nested `<<` merge lists count against
+  the same 1,000,000-value budget while they are flattened; (f) a literal LS or PS
+  character (U+2028/U+2029) anywhere in the text is rejected with `unsupported line break
+  character U+2028 at line <l>, column <c>` (PyYAML treats both as line breaks, keeping the
+  character itself in folded content; yaml-rust2 treats them as ordinary characters, so the
+  same text would load to a different value). NEL (U+0085), PyYAML's third extra break, is
+  normalized to `\n` before parsing and loads exactly like PyYAML.
 - *Reason*: no maintained Rust YAML 1.1 parser exists; the event parser is the only way to
   see scalar styles (§4.8.4).
-- *Verified by*: R2 loader tests (typing vectors generated with PyYAML, the three cases
-  above), R14 template-file tests, the R13 config interop check.
+- *Verified by*: R2 loader tests (typing vectors generated with PyYAML, the cases above:
+  `yaml::tests::load_r2_errors`, `yaml::tests::alias_expansion_rules`,
+  `yaml::tests::nested_merges_hit_the_value_budget`,
+  `yaml::tests::aliased_large_scalar_hits_the_byte_budget`), R14 template-file
+  tests, the R13 config interop check.
 
 **D18 — Numeric range and load-time typing guards.**
 - *Description*: Rust's fixed-width integers and typed config make r2 reject some values
@@ -7443,22 +7515,32 @@ merges).**
     template file: Param `template attribute <name> must not be negative` at load (c2
     raised the latter only at the first create flow);
   - `custom_mechanisms[].params[].default` is typed by its `kind` at load (`expected a
-    <kind> default, got <T>`; c2 failed at invocation); an explicit `default: null` is
+    <kind> default, got <T>`, `keyref parameters cannot have a default`, or a BYTES
+    default's `decode_data` CodecError text) — also where c2 never read the default (a
+    `required` param, the default: c2's ParamResolver uses `default` only when not
+    required; or a name the packer ignores), so a c2 config carrying such a mistyped
+    default ran in c2 and fails to load in r2; where c2 did read it, c2 failed at
+    invocation; an explicit `default: null` is
     absent for every kind, and an ENUM default written as a YAML int stays an integer
     (`ParamValue::Int`), so c2's gcm-packer behaviour is unchanged (§4.8.3);
   - a numeric builtin param read through `params::param_int` whose text is outside i64
     → `parameter '<name>' must be an integer, got <text!r>` (c2: unbounded int);
   - `providers.pkcs11[].slot` must not be negative (c2 accepted it);
+  - an integer config value above its field's Rust type — `app.log.backups` above
+    4294967295, `ui.hex_group`/`ui.hex_width` above `usize::MAX`, an INT or ENUM
+    `params[].default` above 9223372036854775807 — is a load error `<path>: must be at most
+    <max>` (c2 accepted any int; §4.8.3);
   - a custom-mechanism parameter declared `required: false` without a default is ABSENT
     when not given, so the packer default applies (c2 stored `None` and the packer raised
     `custom mechanism parameter <name!r> must be …`, §4.6.3);
   - numeric text read through `text::py_int` (template-editor ULONG values, `param_int`)
-    accepts ASCII digits only (CPython's `int()` also accepts other Unicode decimal
-    digits); `select` answers and template-editor row numbers are gated by
-    `text::py_isdigit` (c2 `str.isdigit()`), which is ASCII-only too: CPython's
-    `isdigit()` also accepts e.g. superscript digits, for which c2's following `int()`
-    then raised (unexpected-error path) and r2 answers "invalid choice …" / "… is not a
-    row number";
+    and an explicit `!!int`/`!!float` YAML scalar (`yaml::parse`, which otherwise follows
+    Python's `int()`/`float()`: surrounding whitespace, sign, base prefix) accept ASCII
+    digits only (CPython's `int()` also accepts other Unicode decimal digits); `select`
+    answers and template-editor row numbers are gated by `text::py_isdigit` (c2
+    `str.isdigit()`), which is ASCII-only too: CPython's `isdigit()` also accepts e.g.
+    superscript digits, for which c2's following `int()` then raised (unexpected-error
+    path) and r2 answers "invalid choice …" / "… is not a row number";
   - `text::py_os_error_str` always renders the POSIX `[Errno n] …` form (CPython on Windows
     prints `[WinError n] …` for some calls).
 - *Reason*: `u64`/`i64`/`u32` types at the API boundary; typed config.
