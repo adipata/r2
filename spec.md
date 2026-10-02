@@ -7684,6 +7684,22 @@ merges).**
     `_private_material_attrs` caught only ValueError/TypeError, so it crashed; r2 raises
     KeyParse `private key material is not DER PKCS#8: {pyca detail}` (likewise
     `public key material is not DER SPKI: …`).
+  - (q) PKCS#11 crypto verbs where c2's own code raised a non-`ConsoleError` past `_op`
+    (R5b): a hash name outside sha1/sha224/sha256/sha384/sha512 reaching RSA-PKCS1 /
+    RSA-PSS / ECDSA sign or verify (c2 `KeyError` from `_COMBINED_*`, `ValueError` from
+    `hashlib.new`; unreachable through the ENUM-typed ops) → Param `unknown hash {name!r}`
+    (hint `valid hashes: sha1, sha224, sha256, sha384, sha512`, c2's `_check_hash` text);
+    the software RSA-OAEP fallback (token rejects the OAEP parameters) failing in OpenSSL —
+    e.g. a payload too long for the key — where pyca's `ValueError` escaped → Crypto
+    `RSA-OAEP encryption failed: <OpenSSL reason>` (the memory provider's text, §11 D11);
+    a negative `tag_bits` / `counter_bits` / `out_len`, or a counter block that is not 16
+    bytes, which PyKCS11's struct packing refused with `OverflowError`/`TypeError` → the
+    token's CKR for an invalid value per the §4.5.5 narrowing rule
+    (`CKR_MECHANISM_PARAM_INVALID` → UnsupportedOperation `token does not support <context>
+    (or its parameters) (CKR_MECHANISM_PARAM_INVALID)`; a negative derive `out_len` as
+    CKA_VALUE_LEN → `CKR_ATTRIBUTE_VALUE_INVALID`); and an ECDH SPKI peer pyca loads only as
+    `UnsupportedAlgorithm` (a curve pyca does not support) → Param `peer is not a valid SPKI
+    public key: <pyca detail>`, like c2's ValueError case.
 - *Reason*: every expected failure must be a `ConsoleError`; OpenSSL would reject the CN
   with a different text anyway.
 - *Verified by*: R8 certops test (a), R6 keyparse/x509info/formats fixtures (b, h, i, j:
@@ -7707,7 +7723,9 @@ merges).**
   `unsettable_env_entries_are_errors_not_panics`), R5a capability/objects tests (m:
   `unknown_ckms_survive_the_unfiltered_mechanism_list`,
   `listed_vendor_mechanisms_resolve_by_pykcs11_name`; n: the pyca gate of
-  `key_material_is_gated_by_pycas_der_loaders`).
+  `key_material_is_gated_by_pycas_der_loaders`), R5b verbs/mechanisms tests (q:
+  `pkcs1_prefers_the_combined_ckm_else_digestinfo_over_bare_rsa_pkcs`,
+  `gcm_packer_integer_reads_are_strict`, `ctr_needs_a_full_counter_block`).
 
 **D13 — Ctrl-C while a command runs is honored at step boundaries.**
 - *Description*: c2's `KeyboardInterrupt` surfaced at the next Python bytecode after the
