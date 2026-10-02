@@ -11,7 +11,7 @@ use openssl::symm::{Cipher, Crypter, Mode};
 use r2_core::crypto::ct_eq;
 use r2_core::error::{ConsoleError, Result};
 use r2_core::params::{ParamValue, Params, param_choice, param_int};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::ossl_reason;
 
@@ -666,7 +666,16 @@ pub(crate) fn pkcs1_decrypt(private: &PKeyRef<Private>, data: &[u8]) -> Option<Z
 // ECDH KDF (c2 `_x963_kdf`)
 // ---------------------------------------------------------------------------------------
 
+/// The X9.63 counter is 32 bits and starts at 1, so at most 2³² − 1 hash blocks.
+const X963_MAX_BLOCKS: u32 = u32::MAX;
+
 /// ANSI X9.63 KDF (the CKD_SHAx_KDF construction): Hash(Z ‖ counter ‖ shared).
+///
+/// `length` is operator-controlled (`out_len`), so it is bounded before anything is
+/// allocated (§11 D12(l)): above the X9.63 limit of hashlen × (2³² − 1) bytes (the 32-bit
+/// counter, where c2's `counter.to_bytes(4, "big")` would overflow) it is a `Param` error, and a
+/// buffer the allocator refuses is a `Param` error too — never a capacity-overflow panic
+/// or an allocation-failure abort. Every hash block is wiped after it is copied out.
 pub(crate) fn x963_kdf(
     z: &[u8],
     shared_data: &[u8],
@@ -676,16 +685,34 @@ pub(crate) fn x963_kdf(
     let failed =
         |err: ErrorStack| ConsoleError::crypto(format!("X9.63 KDF failed: {}", ossl_reason(&err)));
     let (md, size) = digest(hash_name);
-    let mut out = Zeroizing::new(Vec::with_capacity(length + size));
-    let mut counter: u32 = 1;
-    while out.len() < length {
+    let limit = size.saturating_mul(X963_MAX_BLOCKS as usize);
+    if length > limit {
+        return Err(ConsoleError::param(
+            format!(
+                "out_len {length} exceeds the X9.63 KDF limit of {limit} bytes for {hash_name}"
+            ),
+            "out_len",
+        ));
+    }
+    let blocks = length.div_ceil(size);
+    let mut out = Zeroizing::new(Vec::new());
+    out.try_reserve_exact(blocks.saturating_mul(size))
+        .map_err(|_| {
+            ConsoleError::param(
+                format!("out_len {length} is too large: cannot allocate the KDF output"),
+                "out_len",
+            )
+        })?;
+    // `blocks <= X963_MAX_BLOCKS` by the limit check, so the counter never wraps.
+    let blocks = u32::try_from(blocks).unwrap_or(X963_MAX_BLOCKS);
+    for counter in 1..=blocks {
         let mut hasher = Hasher::new(md).map_err(failed)?;
         hasher.update(z).map_err(failed)?;
         hasher.update(&counter.to_be_bytes()).map_err(failed)?;
         hasher.update(shared_data).map_err(failed)?;
-        let block = hasher.finish().map_err(failed)?;
+        let mut block = hasher.finish().map_err(failed)?;
         out.extend_from_slice(&block);
-        counter = counter.wrapping_add(1);
+        block.zeroize();
     }
     out.truncate(length);
     Ok(out)

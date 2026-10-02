@@ -1233,6 +1233,65 @@ fn test_ecdh_p256_agreement_and_kdf() {
     assert_eq!(*derived_default.raw.unwrap(), x963_sha256(&z_ab, b"", 32));
 }
 
+/// R4 fix round 1 (§11 D12(l)): an unbounded `out_len` with a hash KDF is a `Param`
+/// error before anything is allocated — never a capacity-overflow panic or an abort.
+#[test]
+fn ecdh_kdf_out_len_above_the_x963_limit_is_a_param_error() {
+    let provider = make();
+    let a = generate(
+        &provider,
+        KeyAlgorithm::Ec,
+        None,
+        Some(Curve::P256),
+        "a",
+        None,
+    )
+    .unwrap();
+    generate(
+        &provider,
+        KeyAlgorithm::Ec,
+        None,
+        Some(Curve::P256),
+        "b",
+        None,
+    )
+    .unwrap();
+    let b_pub_spki = provider
+        .export_key(&public_half(&provider, "b"))
+        .unwrap()
+        .data;
+    let limit_sha256 = 32 * u64::from(u32::MAX);
+    for (kdf, out_len, limit) in [
+        ("sha256", i64::MAX, limit_sha256),
+        (
+            "sha256",
+            i64::try_from(limit_sha256 + 1).unwrap(),
+            limit_sha256,
+        ),
+        ("sha1", i64::MAX, 20 * u64::from(u32::MAX)),
+    ] {
+        let err = err_class(
+            provider.derive(
+                &a,
+                &mech(
+                    "ECDH",
+                    &[
+                        ("peer", bytes(&b_pub_spki)),
+                        ("kdf", text(kdf)),
+                        ("out_len", int(out_len)),
+                    ],
+                ),
+            ),
+            "ParamError",
+        );
+        assert_eq!(
+            err.message,
+            format!("out_len {out_len} exceeds the X9.63 KDF limit of {limit} bytes for {kdf}")
+        );
+        assert_eq!(err.param_name(), Some("out_len"));
+    }
+}
+
 #[test]
 fn test_ecdh_null_kdf_out_len_rules() {
     let provider = make();
