@@ -5,7 +5,7 @@
 #
 # Every target: the binary embeds the vendored OpenSSL 3 (>= 3.2, §11 D26: implicit
 # rejection for RSA-PKCS1 decryption, as pyca/c2) with the legacy provider compiled in, and
-# links no shared libssl/libcrypto.
+# links no shared libssl/libcrypto, and OpenSSL's assembly is linked in (never no-asm).
 # Linux: a dynamically linked glibc ELF (never musl-static) of the target's machine whose
 # required GLIBC_* symbol versions are all <= $R2_GLIBC_BASELINE (default 2.28, RHEL/Rocky
 # 8), and whose NEEDED entries are glibc/libgcc only. macOS: the target's architecture and
@@ -49,6 +49,33 @@ for marker in 'OpenSSL Default Provider' 'OpenSSL Legacy Provider'; do
         fail "'$marker' not in the binary: OpenSSL is not vendored or the legacy provider is not compiled in"
 done
 echo "ok: built-in default and legacy providers are linked in"
+
+# OpenSSL's assembly (CRYPTOGAMS perlasm: AES-NI / ARMv8 AES, PCLMUL / PMULL GHASH,
+# Montgomery bignum) is linked in, not the `no-asm` portable C fallback (table-based,
+# non-constant-time AES and GHASH); `no-asm` drops every perlasm module at once, and no C
+# source carries these banners. Only banners sharing a section with referenced code or
+# tables survive section GC: x86_64 keeps its AES-NI, GHASH and Montgomery banners (in
+# .text), but on ARMv8 aesv8-armx has none and the GHASH/Montgomery ones sit alone in
+# .rodata and are collected, so ARMv8 is proven by the surviving banners (SHA-1/2,
+# NISTZ256, ChaCha20, Poly1305, Keccak). A universal binary is checked for both.
+case "$target" in
+    x86_64-*) asm_arches=x86_64 ;;
+    aarch64-*) asm_arches=ARMv8 ;;
+    universal-*) asm_arches='x86_64 ARMv8' ;;
+    *) fail "unsupported target $target" ;;
+esac
+for arch in $asm_arches; do
+    if [[ "$arch" == x86_64 ]]; then
+        markers=('AES for Intel AES-NI, CRYPTOGAMS' 'GHASH for x86_64, CRYPTOGAMS' 'Montgomery Multiplication for x86_64, CRYPTOGAMS')
+    else
+        markers=('for ARMv8, CRYPTOGAMS by')
+    fi
+    for marker in "${markers[@]}"; do
+        LC_ALL=C grep -a -q -F "$marker" "$binary" ||
+            fail "'$marker' not in the binary: OpenSSL was built without its $arch assembly (no-asm)"
+    done
+done
+echo "ok: OpenSSL assembly linked in ($asm_arches)"
 
 case "$target" in
     *-linux-gnu)

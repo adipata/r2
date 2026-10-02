@@ -63,8 +63,10 @@ jobs:
             os: macos-15-intel
           - target: aarch64-apple-darwin
             os: macos-15
-          # vendored OpenSSL needs a native Perl: the runner's Strawberry Perl, not
-          # Git Bash's msys perl (openssl-src honours OPENSSL_SRC_PERL).
+          # vendored OpenSSL needs a native Perl (the runner's Strawberry Perl, not Git
+          # Bash's msys perl; openssl-src honours OPENSSL_SRC_PERL) and NASM: without it
+          # openssl-src silently configures `no-asm` (no AES-NI/PCLMUL, table-based,
+          # non-constant-time AES/GHASH), so build.sh forces OPENSSL_RUST_USE_NASM=1.
           - target: x86_64-pc-windows-msvc
             os: windows-2025
     runs-on: ${{ matrix.os }}
@@ -86,9 +88,12 @@ jobs:
           "$RUNNER_TEMP/zig/bin/pip" install --quiet \
             "cargo-zigbuild==$CARGO_ZIGBUILD_VERSION" "ziglang==$ZIGLANG_VERSION"
           echo "$RUNNER_TEMP/zig/bin" >> "$GITHUB_PATH"
-      - name: Native Perl for openssl-src (Windows)
+      - name: Native Perl and NASM for openssl-src (Windows)
         if: runner.os == 'Windows'
-        run: printf '%s\n' 'OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe' >> "$GITHUB_ENV"
+        run: |
+          printf '%s\n' 'OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe' >> "$GITHUB_ENV"
+          choco install nasm --no-progress -y
+          printf '%s\n' 'C:\Program Files\NASM' >> "$GITHUB_PATH"
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.target }}
@@ -96,7 +101,7 @@ jobs:
         run: |
           bin="$(scripts/release/build.sh "$TARGET" | tail -n 1)"
           echo "BIN=$bin" >> "$GITHUB_ENV"
-      - name: Check the binary (OpenSSL static >= 3.2; Linux glibc <= 2.28)
+      - name: Check the binary (OpenSSL static >= 3.2 with asm; Linux glibc <= 2.28)
         run: scripts/release/check-binary.sh "$BIN" "$TARGET"
       - name: Smoke test (--version, piped help/providers/exit, PKCS#12 fixtures)
         run: scripts/release/smoke.sh "$BIN" "$VERSION"
