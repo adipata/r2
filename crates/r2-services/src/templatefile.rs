@@ -68,8 +68,12 @@ pub fn dump_template_file(
 /// '{name}'" (hint "define it under templates.custom_attributes (code + kind)"); kind/value
 /// mismatch (c2 `_value_from_yaml`, param_name = name) → BOOL: "{name} expects true/false";
 /// ULONG: a bool → "{name} expects an integer", a non-int non-symbol → "{name} expects an
-/// integer or CKO_/CKK_/CKC_/CKM_ constant", a negative int → "template attribute {name}
-/// must not be negative" (c2 raised it later, at conversion — §11 D18); BYTES: "{name}
+/// integer or CKO_/CKK_/CKC_/CKM_ constant", a negative int n ≥ −2^63 in a
+/// NON_CREATION_ATTRS row → its 64-bit two's complement 2^64 + n (c2 dumped PyKCS11's signed
+/// C long: `CKA_KEY_GEN_MECHANISM: -1` of an imported object loads as
+/// 18446744073709551615 = CK_UNAVAILABLE_INFORMATION, what r2's own dump writes; the row
+/// arrives disabled — §11 D18), any other negative int → "template attribute {name} must
+/// not be negative" (c2 raised it later, at conversion — §11 D18); BYTES: "{name}
 /// expects a 0x… hex string" | "{name} has invalid hex" (`text::py_fromhex`); STR: "{name}
 /// expects a string". Values are typed by the §4.8.4 loader, so `CKA_TOKEN: yes` is a bool
 /// and `CKA_LABEL: yes` fails "expects a string", exactly as in c2.

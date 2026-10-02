@@ -410,8 +410,8 @@ impl CryptokiBackend {
     }
 
     /// Single-part encrypt/decrypt/sign through cryptoki or RawFns. Empty input always goes
-    /// through RawFns, which sends pData=NULL as PyKCS11 did (cryptoki's safe calls pass a
-    /// non-NULL pointer of length 0, which SoftHSM accepts where c2 got CKR_ARGUMENTS_BAD).
+    /// through RawFns, which runs only the Init and answers CKR_ARGUMENTS_BAD without calling
+    /// the token, as PyKCS11 did (the operation stays active — c2 parity on every token).
     fn crypt(
         &self,
         op: RawOp,
@@ -713,7 +713,7 @@ impl super::Backend for CryptokiBackend {
             }
             with_mechanism(mech, |m| {
                 if data.is_empty() || signature.is_empty() {
-                    // pData/pSignature=NULL as PyKCS11 sent them (see `crypt`)
+                    // Init only, then CKR_ARGUMENTS_BAD as PyKCS11 did (see `crypt`)
                     let mechanism = sys::CK_MECHANISM::from(m);
                     return module.raw.verify(
                         session.handle(),
@@ -776,7 +776,7 @@ impl super::Backend for CryptokiBackend {
                 );
             }
             if wrapped.is_empty() {
-                // pWrappedKey=NULL as PyKCS11 sent it (see `crypt`)
+                // CKR_ARGUMENTS_BAD without a token call, as PyKCS11 did
                 return with_mechanism(mech, |m| {
                     let mechanism = sys::CK_MECHANISM::from(m);
                     module.raw.unwrap(

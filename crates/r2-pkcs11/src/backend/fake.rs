@@ -1,8 +1,9 @@
 //! FakeBackend — in-memory `Backend` double for r2-pkcs11's own tests (spec §4.10.4); a port
 //! of c2's `tests/support/fake_pykcs11.py` behind the raw §4.5.6 seam. SoftHSM-flavored:
 //! imported/generated keys default CKA_SENSITIVE=false, CKA_EXTRACTABLE=false; CKA_VALUE
-//! reads return None unless extractable and not sensitive; one-shot encrypt of empty input
-//! fails (multi-part works); OAEP accepts only SHA-1/MGF1-SHA1 with an empty label;
+//! reads return None unless extractable and not sensitive; empty one-shot input
+//! (encrypt/decrypt/sign/verify) is CKR_ARGUMENTS_BAD and leaves the session's operation
+//! active, as PyKCS11 left it (an empty unwrap blob is CKR_ARGUMENTS_BAD only); OAEP accepts only SHA-1/MGF1-SHA1 with an empty label;
 //! imported key objects read CKA_KEY_GEN_MECHANISM = CK_UNAVAILABLE_INFORMATION;
 //! `find_objects` returns matches in creation order.
 use std::cell::RefCell;
@@ -95,6 +96,10 @@ struct Object {
 struct Session {
     slot: u64,
     invalidated: bool,
+    /// An empty one-shot input left its operation active (PyKCS11 refused the buffer after
+    /// the `*Init`): every later operation Init and C_FindObjectsInit in this session
+    /// answers CKR_OPERATION_ACTIVE until the session is closed (SoftHSM parity).
+    op_active: bool,
 }
 
 #[derive(Default)]
@@ -128,6 +133,17 @@ struct State {
     /// The attribute types of every `unwrap_key` template, in call order.
     unwrap_templates: Vec<Vec<u64>>,
 }
+
+/// The methods whose token call starts with an operation Init (or C_FindObjectsInit) and so
+/// answers CKR_OPERATION_ACTIVE while a refused empty input left an operation active.
+const OPERATION_INITS: &[&str] = &[
+    "find_objects",
+    "encrypt",
+    "encrypt_multipart",
+    "decrypt",
+    "sign",
+    "verify",
+];
 
 /// SoftHSM-like CKM set (c2 fake_pykcs11 DEFAULT_MECHANISMS, as codes; numeric order).
 pub(crate) const DEFAULT_MECHANISMS: &[u64] = &[
@@ -420,10 +436,22 @@ impl FakeBackend {
         let Some(token) = state.slots.get(&session.slot) else {
             return Err(fail(rv::CKR_SESSION_HANDLE_INVALID, method));
         };
+        if session.op_active && OPERATION_INITS.contains(&method) {
+            return Err(fail(rv::CKR_OPERATION_ACTIVE, method));
+        }
         if need_login && !token.logged_in {
             return Err(fail(rv::CKR_USER_NOT_LOGGED_IN, method));
         }
         Ok(session.slot)
+    }
+
+    /// PyKCS11's empty one-shot input: the Init succeeded, the single-part call never
+    /// reached the token — the operation stays active and the answer is CKR_ARGUMENTS_BAD.
+    fn empty_input(&self, method: &'static str) -> BackendError {
+        if let Some(session) = self.state.borrow_mut().session.as_mut() {
+            session.op_active = true;
+        }
+        fail(rv::CKR_ARGUMENTS_BAD, method)
     }
 
     fn require_mechanism(&self, slot: u64, spec: &MechSpec, method: &'static str) -> BResult<u64> {
@@ -546,11 +574,10 @@ impl FakeBackend {
         let method = if encrypt { "encrypt" } else { "decrypt" };
         let slot = self.check(method, true)?;
         let code = self.require_mechanism(slot, mech, method)?;
-        if data.is_empty() {
-            // SoftHSM-like: PyKCS11 and RawFns send empty one-shot input as pData=NULL
-            return Err(fail(rv::CKR_ARGUMENTS_BAD, method));
-        }
         let secret = self.secret_of(key, method)?;
+        if data.is_empty() {
+            return Err(self.empty_input(method));
+        }
         if let MechSpec::Gcm {
             iv, aad, tag_bits, ..
         } = mech
@@ -671,6 +698,7 @@ impl Backend for FakeBackend {
         state.session = Some(Session {
             slot,
             invalidated: false,
+            op_active: false,
         });
         state.sessions_opened += 1;
         Ok(())
@@ -991,20 +1019,20 @@ impl Backend for FakeBackend {
     fn sign(&self, mech: &MechSpec, key: u64, data: &[u8]) -> BResult<Vec<u8>> {
         let slot = self.check("sign", true)?;
         let code = self.require_mechanism(slot, mech, "sign")?;
-        if data.is_empty() {
-            return Err(fail(rv::CKR_ARGUMENTS_BAD, "sign"));
-        }
         let secret = self.secret_of(key, "sign")?;
+        if data.is_empty() {
+            return Err(self.empty_input("sign"));
+        }
         Ok(Self::signature(&secret, code, data))
     }
 
     fn verify(&self, mech: &MechSpec, key: u64, data: &[u8], signature: &[u8]) -> BResult<bool> {
         let slot = self.check("verify", true)?;
         let code = self.require_mechanism(slot, mech, "verify")?;
-        if data.is_empty() || signature.is_empty() {
-            return Err(fail(rv::CKR_ARGUMENTS_BAD, "verify"));
-        }
         let secret = self.secret_of(key, "verify")?;
+        if data.is_empty() || signature.is_empty() {
+            return Err(self.empty_input("verify"));
+        }
         Ok(Self::signature(&secret, code, data) == signature)
     }
 
@@ -1043,6 +1071,7 @@ impl Backend for FakeBackend {
         let slot = self.check("unwrap_key", true)?;
         let code = self.require_mechanism(slot, mech, "unwrap_key")?;
         if wrapped.is_empty() {
+            // PyKCS11 refused it before any token call: no operation is left active
             return Err(fail(rv::CKR_ARGUMENTS_BAD, "unwrap_key"));
         }
         {

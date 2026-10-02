@@ -852,11 +852,12 @@ fn softhsm_cmac_and_ctr_and_ecb_match_openssl() {
     provider.shutdown().unwrap();
 }
 
-/// Empty one-shot input is sent as pData=NULL like PyKCS11 (§4.5.5): SoftHSM answers
-/// CKR_ARGUMENTS_BAD — the texts c2 showed on the same token; 2.6.1 also leaves the
-/// operation active, so the next operation in that session fails with CKR_OPERATION_ACTIVE.
+/// Empty one-shot input never reaches the token, as with PyKCS11 (§4.5.5): only the Init
+/// runs and the answer is CKR_ARGUMENTS_BAD — the texts c2 showed — and the operation stays
+/// active, so the session's next operation fails with CKR_OPERATION_ACTIVE on SoftHSM 2.6.1
+/// AND 2.7.0 (2.7.0 would end the operation had C_Encrypt/C_Decrypt been called with NULL).
 #[test]
-fn softhsm_empty_one_shot_input_is_null_like_pykcs11() {
+fn softhsm_empty_one_shot_input_is_refused_like_pykcs11() {
     let _lock = r2_testkit::global_state_lock();
     let key: Vec<u8> = (0u8..16).collect();
     let mac_key: Vec<u8> = (0u8..64).collect();
@@ -892,20 +893,21 @@ fn softhsm_empty_one_shot_input_is_null_like_pykcs11() {
     let ecb_none = mech("AES-ECB", vec![("padding", e("none"))]);
     let ctr = mech("AES-CTR", vec![("counter_block", b(&[0xf0u8; 16]))]);
 
-    // AES-ECB encrypt of b"" → CKR_ARGUMENTS_BAD; SoftHSM 2.6.1 leaves the session's
-    // encrypt active (c2 saw CKR_OPERATION_ACTIVE next), 2.7.0 ends it
+    // the operation the refused input left active blocks the session's next operation
+    let stuck = |provider: &Pkcs11Provider, aes: &KeyInfo| {
+        pkcs11_err(
+            provider.encrypt(aes, &ctr, MESSAGE).unwrap_err(),
+            "PKCS#11 encrypt with AES-CTR failed (CKR_OPERATION_ACTIVE)",
+        );
+    };
+
+    // AES-ECB encrypt of b"" → CKR_ARGUMENTS_BAD (c2 saw CKR_OPERATION_ACTIVE next)
     let (provider, aes, _) = fresh();
     pkcs11_err(
         provider.encrypt(&aes, &ecb_none, b"").unwrap_err(),
         "PKCS#11 encrypt with AES-ECB failed (CKR_ARGUMENTS_BAD)",
     );
-    match provider.encrypt(&aes, &ctr, MESSAGE) {
-        Ok(ct) => assert_eq!(ct.len(), MESSAGE.len()),
-        Err(err) => pkcs11_err(
-            err,
-            "PKCS#11 encrypt with AES-CTR failed (CKR_OPERATION_ACTIVE)",
-        ),
-    }
+    stuck(&provider, &aes);
     provider.shutdown().unwrap();
 
     // AES-CMAC sign of b""
@@ -916,10 +918,11 @@ fn softhsm_empty_one_shot_input_is_null_like_pykcs11() {
             .unwrap_err(),
         "PKCS#11 sign with AES-CMAC failed (CKR_ARGUMENTS_BAD)",
     );
+    stuck(&provider, &aes);
     provider.shutdown().unwrap();
 
     // HMAC verify of empty data
-    let (provider, _, generic) = fresh();
+    let (provider, aes, generic) = fresh();
     let expected = hmac(&mac_key, MessageDigest::sha256(), b"");
     pkcs11_err(
         provider
@@ -927,6 +930,7 @@ fn softhsm_empty_one_shot_input_is_null_like_pykcs11() {
             .unwrap_err(),
         "PKCS#11 verify with HMAC failed (CKR_ARGUMENTS_BAD)",
     );
+    stuck(&provider, &aes);
     provider.shutdown().unwrap();
 
     // pkcs7 ECB decrypt of b"": the token's Pkcs11 error, not a Crypto unpadding error
@@ -937,6 +941,7 @@ fn softhsm_empty_one_shot_input_is_null_like_pykcs11() {
             .unwrap_err(),
         "PKCS#11 decrypt with AES-ECB failed (CKR_ARGUMENTS_BAD)",
     );
+    stuck(&provider, &aes);
     provider.shutdown().unwrap();
 
     // a fresh session is unaffected: non-empty input still works
