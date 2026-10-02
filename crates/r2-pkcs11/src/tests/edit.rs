@@ -666,7 +666,7 @@ fn full_dump_covers_catalog_and_identity() {
     assert_eq!(get("CKA_SENSITIVE"), Some(AttrValue::Bool(false)));
     assert!(get("CKA_MODULUS").is_none()); // absent attrs are skipped, not None-filled
     // CKA_KEY_GEN_MECHANISM of an imported object reads CK_UNAVAILABLE_INFORMATION and is
-    // reported numerically (§5.16)
+    // reported numerically and unsigned (§5.16; c2/PyKCS11 showed the signed -1, §11 D18)
     assert_eq!(
         get("CKA_KEY_GEN_MECHANISM"),
         Some(AttrValue::Ulong(crate::ulong_to_u64(

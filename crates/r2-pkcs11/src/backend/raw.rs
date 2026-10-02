@@ -46,6 +46,18 @@ pub(crate) fn ulong(value: usize, code: u64, function: &'static str) -> BResult<
     CK_ULONG::try_from(value).map_err(|_| BackendError::Ckr(Ckr { code, function }))
 }
 
+/// An input buffer as PyKCS11 passed it: a zero-length buffer is pData=NULL (its
+/// `Vector2Buffer`), never a non-NULL pointer of length 0. SoftHSM answers NULL with
+/// CKR_ARGUMENTS_BAD (2.6.1 also leaves the operation active, as it did for c2), where a
+/// non-NULL empty buffer would be accepted — so the c2 behavior needs the NULL.
+pub(crate) fn in_ptr(data: &[u8]) -> *mut CK_BYTE {
+    if data.is_empty() {
+        null_mut()
+    } else {
+        data.as_ptr().cast_mut()
+    }
+}
+
 /// A `CK_MECHANISM` whose `pParameter` points at `param` verbatim (empty → NULL, c2 parity).
 /// The result borrows `param` through a raw pointer: build it in the frame of the call.
 pub(crate) fn bytes_mechanism(ckm: u64, param: &[u8]) -> BResult<CK_MECHANISM> {
@@ -269,7 +281,8 @@ impl RawFns {
         Ok(out)
     }
 
-    /// C_{Encrypt,Decrypt,Sign}Init + the single-part call with a raw mechanism.
+    /// C_{Encrypt,Decrypt,Sign}Init + the single-part call with a raw mechanism. Empty
+    /// input is sent as pData=NULL (PyKCS11 parity, see [`in_ptr`]).
     pub(crate) fn crypt(
         &self,
         op: RawOp,
@@ -280,7 +293,7 @@ impl RawFns {
     ) -> BResult<Zeroizing<Vec<u8>>> {
         let data_len = ulong(data.len(), rv::CKR_DATA_LEN_RANGE, "raw")?;
         let mut mech = *mechanism;
-        let input = data.as_ptr() as *mut CK_BYTE;
+        let input = in_ptr(data);
         match op {
             RawOp::Encrypt => {
                 let (init, run) = (entry!(self, C_EncryptInit), entry!(self, C_Encrypt));
@@ -332,15 +345,7 @@ impl RawFns {
         check(unsafe { init(session, &mut mech, key) }, "C_VerifyInit")?;
         // SAFETY: data and signature are valid for their announced lengths (read only).
         check(
-            unsafe {
-                run(
-                    session,
-                    data.as_ptr() as *mut CK_BYTE,
-                    data_len,
-                    signature.as_ptr() as *mut CK_BYTE,
-                    sig_len,
-                )
-            },
+            unsafe { run(session, in_ptr(data), data_len, in_ptr(signature), sig_len) },
             "C_Verify",
         )
     }
@@ -390,7 +395,7 @@ impl RawFns {
                     session,
                     &mut mech,
                     unwrapping_key,
-                    wrapped.as_ptr() as *mut CK_BYTE,
+                    in_ptr(wrapped),
                     wrapped_len,
                     attrs.as_mut_ptr(),
                     count,

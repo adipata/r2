@@ -64,7 +64,9 @@ fn is_recoverable(err: &BackendError) -> bool {
 }
 
 /// PyKCS11 `CK_ATTRIBUTE_SMART::GetNum`: the native-endian CK_ULONG when the value is
-/// exactly `sizeof(CK_ULONG)` bytes long, else 0.
+/// exactly `sizeof(CK_ULONG)` bytes long, else 0. Kept unsigned: PyKCS11 returned a signed
+/// C long, so c2 showed values ≥ 2^63 negative (CK_UNAVAILABLE_INFORMATION → `-1`) — §11
+/// D18; `AttrValue::Ulong` is a u64.
 fn pykcs11_num(raw: &[u8]) -> u64 {
     if raw.len() == std::mem::size_of::<std::ffi::c_ulong>() {
         decode_ulong(raw)

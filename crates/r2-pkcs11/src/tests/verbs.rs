@@ -822,6 +822,46 @@ fn ecb_pkcs7_padding_is_provider_side() {
 }
 
 #[test]
+fn empty_one_shot_input_is_the_tokens_arguments_bad() {
+    // SoftHSM-like FakeBackend: an empty one-shot buffer (sent as NULL, §4.5.5) is
+    // CKR_ARGUMENTS_BAD for encrypt/decrypt/sign/verify — before any provider-side unpadding
+    let (_backend, provider) = logged_in();
+    let info = provider
+        .import_key(&aes((0u8..16).collect()), "empty", None, None)
+        .unwrap();
+    let mac = provider
+        .import_key(&generic(), "empty-mac", None, None)
+        .unwrap();
+    let ecb = mech("AES-ECB", vec![]);
+    let pkcs7 = mech("AES-ECB", vec![("padding", penum("pkcs7"))]);
+    let hmac = mech("HMAC", vec![("hash", penum("sha256"))]);
+    let cases = [
+        (
+            provider.encrypt(&info, &ecb, b"").unwrap_err(),
+            "PKCS#11 encrypt with AES-ECB failed (CKR_ARGUMENTS_BAD)",
+        ),
+        (
+            provider.decrypt(&info, &pkcs7, b"").unwrap_err(),
+            "PKCS#11 decrypt with AES-ECB failed (CKR_ARGUMENTS_BAD)",
+        ),
+        (
+            provider
+                .sign(&info, &mech("AES-CMAC", vec![]), b"")
+                .unwrap_err(),
+            "PKCS#11 sign with AES-CMAC failed (CKR_ARGUMENTS_BAD)",
+        ),
+        (
+            provider.verify(&mac, &hmac, b"", &[0; 32]).unwrap_err(),
+            "PKCS#11 verify with HMAC failed (CKR_ARGUMENTS_BAD)",
+        ),
+    ];
+    for (err, text) in cases {
+        assert_eq!(err.kind.class_name(), "Pkcs11Error", "{}", err.message);
+        assert_eq!(err.message, text);
+    }
+}
+
+#[test]
 fn cbc_picks_the_ckm_by_padding_and_requires_it() {
     let (backend, provider) = logged_in();
     let info = provider

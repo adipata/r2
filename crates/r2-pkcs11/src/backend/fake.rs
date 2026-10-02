@@ -546,7 +546,8 @@ impl FakeBackend {
         let method = if encrypt { "encrypt" } else { "decrypt" };
         let slot = self.check(method, true)?;
         let code = self.require_mechanism(slot, mech, method)?;
-        if encrypt && data.is_empty() {
+        if data.is_empty() {
+            // SoftHSM-like: PyKCS11 and RawFns send empty one-shot input as pData=NULL
             return Err(fail(rv::CKR_ARGUMENTS_BAD, method));
         }
         let secret = self.secret_of(key, method)?;
@@ -990,6 +991,9 @@ impl Backend for FakeBackend {
     fn sign(&self, mech: &MechSpec, key: u64, data: &[u8]) -> BResult<Vec<u8>> {
         let slot = self.check("sign", true)?;
         let code = self.require_mechanism(slot, mech, "sign")?;
+        if data.is_empty() {
+            return Err(fail(rv::CKR_ARGUMENTS_BAD, "sign"));
+        }
         let secret = self.secret_of(key, "sign")?;
         Ok(Self::signature(&secret, code, data))
     }
@@ -997,6 +1001,9 @@ impl Backend for FakeBackend {
     fn verify(&self, mech: &MechSpec, key: u64, data: &[u8], signature: &[u8]) -> BResult<bool> {
         let slot = self.check("verify", true)?;
         let code = self.require_mechanism(slot, mech, "verify")?;
+        if data.is_empty() || signature.is_empty() {
+            return Err(fail(rv::CKR_ARGUMENTS_BAD, "verify"));
+        }
         let secret = self.secret_of(key, "verify")?;
         Ok(Self::signature(&secret, code, data) == signature)
     }
@@ -1035,6 +1042,9 @@ impl Backend for FakeBackend {
     ) -> BResult<u64> {
         let slot = self.check("unwrap_key", true)?;
         let code = self.require_mechanism(slot, mech, "unwrap_key")?;
+        if wrapped.is_empty() {
+            return Err(fail(rv::CKR_ARGUMENTS_BAD, "unwrap_key"));
+        }
         {
             let mut state = self.state.borrow_mut();
             state

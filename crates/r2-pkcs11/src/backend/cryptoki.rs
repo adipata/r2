@@ -409,7 +409,9 @@ impl CryptokiBackend {
         Ok(obj(handle)?.handle())
     }
 
-    /// Single-part encrypt/decrypt/sign through cryptoki or RawFns.
+    /// Single-part encrypt/decrypt/sign through cryptoki or RawFns. Empty input always goes
+    /// through RawFns, which sends pData=NULL as PyKCS11 did (cryptoki's safe calls pass a
+    /// non-NULL pointer of length 0, which SoftHSM accepts where c2 got CKR_ARGUMENTS_BAD).
     fn crypt(
         &self,
         op: RawOp,
@@ -431,6 +433,16 @@ impl CryptokiBackend {
                 );
             }
             with_mechanism(mech, |m| {
+                if data.is_empty() {
+                    let mechanism = sys::CK_MECHANISM::from(m);
+                    return module.raw.crypt(
+                        op,
+                        session.handle(),
+                        &mechanism,
+                        key_handle.handle(),
+                        data,
+                    );
+                }
                 let out = match op {
                     RawOp::Encrypt => session
                         .encrypt(m, key_handle, data)
@@ -700,6 +712,17 @@ impl super::Backend for CryptokiBackend {
                 );
             }
             with_mechanism(mech, |m| {
+                if data.is_empty() || signature.is_empty() {
+                    // pData/pSignature=NULL as PyKCS11 sent them (see `crypt`)
+                    let mechanism = sys::CK_MECHANISM::from(m);
+                    return module.raw.verify(
+                        session.handle(),
+                        &mechanism,
+                        key_handle.handle(),
+                        data,
+                        signature,
+                    );
+                }
                 session
                     .verify(m, key_handle, data, signature)
                     .map_err(|e| convert(e, "C_Verify"))
@@ -751,6 +774,19 @@ impl super::Backend for CryptokiBackend {
                     wrapped,
                     template,
                 );
+            }
+            if wrapped.is_empty() {
+                // pWrappedKey=NULL as PyKCS11 sent it (see `crypt`)
+                return with_mechanism(mech, |m| {
+                    let mechanism = sys::CK_MECHANISM::from(m);
+                    module.raw.unwrap(
+                        session.handle(),
+                        &mechanism,
+                        unwrapping.handle(),
+                        wrapped,
+                        template,
+                    )
+                });
             }
             let attrs = attributes(template)?;
             let result = with_mechanism(mech, |m| {

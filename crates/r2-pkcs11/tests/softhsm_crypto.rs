@@ -852,6 +852,101 @@ fn softhsm_cmac_and_ctr_and_ecb_match_openssl() {
     provider.shutdown().unwrap();
 }
 
+/// Empty one-shot input is sent as pData=NULL like PyKCS11 (§4.5.5): SoftHSM answers
+/// CKR_ARGUMENTS_BAD — the texts c2 showed on the same token; 2.6.1 also leaves the
+/// operation active, so the next operation in that session fails with CKR_OPERATION_ACTIVE.
+#[test]
+fn softhsm_empty_one_shot_input_is_null_like_pykcs11() {
+    let _lock = r2_testkit::global_state_lock();
+    let key: Vec<u8> = (0u8..16).collect();
+    let mac_key: Vec<u8> = (0u8..64).collect();
+    let fresh = || {
+        let provider = logged_in();
+        let label = unique_label();
+        let aes = provider
+            .import_key(
+                &KeyMaterial::new(KeyAlgorithm::Aes, KeyClass::Secret, key.clone()),
+                label.as_str(),
+                Some(&session_template(&[
+                    "CKA_SIGN",
+                    "CKA_ENCRYPT",
+                    "CKA_DECRYPT",
+                ])),
+                None,
+            )
+            .unwrap();
+        let generic = provider
+            .import_key(
+                &generic_material(&mac_key),
+                &format!("{}-hmac", label.as_str()),
+                Some(&session_template(&["CKA_SIGN", "CKA_VERIFY"])),
+                None,
+            )
+            .unwrap();
+        (provider, aes, generic)
+    };
+    let pkcs11_err = |err: r2_core::error::ConsoleError, text: &str| {
+        assert_eq!(err.kind.class_name(), "Pkcs11Error", "{}", err.message);
+        assert_eq!(err.message, text);
+    };
+    let ecb_none = mech("AES-ECB", vec![("padding", e("none"))]);
+    let ctr = mech("AES-CTR", vec![("counter_block", b(&[0xf0u8; 16]))]);
+
+    // AES-ECB encrypt of b"" → CKR_ARGUMENTS_BAD; SoftHSM 2.6.1 leaves the session's
+    // encrypt active (c2 saw CKR_OPERATION_ACTIVE next), 2.7.0 ends it
+    let (provider, aes, _) = fresh();
+    pkcs11_err(
+        provider.encrypt(&aes, &ecb_none, b"").unwrap_err(),
+        "PKCS#11 encrypt with AES-ECB failed (CKR_ARGUMENTS_BAD)",
+    );
+    match provider.encrypt(&aes, &ctr, MESSAGE) {
+        Ok(ct) => assert_eq!(ct.len(), MESSAGE.len()),
+        Err(err) => pkcs11_err(
+            err,
+            "PKCS#11 encrypt with AES-CTR failed (CKR_OPERATION_ACTIVE)",
+        ),
+    }
+    provider.shutdown().unwrap();
+
+    // AES-CMAC sign of b""
+    let (provider, aes, _) = fresh();
+    pkcs11_err(
+        provider
+            .sign(&aes, &mech("AES-CMAC", vec![]), b"")
+            .unwrap_err(),
+        "PKCS#11 sign with AES-CMAC failed (CKR_ARGUMENTS_BAD)",
+    );
+    provider.shutdown().unwrap();
+
+    // HMAC verify of empty data
+    let (provider, _, generic) = fresh();
+    let expected = hmac(&mac_key, MessageDigest::sha256(), b"");
+    pkcs11_err(
+        provider
+            .verify(&generic, &hmac_mech("sha256", vec![]), b"", &expected)
+            .unwrap_err(),
+        "PKCS#11 verify with HMAC failed (CKR_ARGUMENTS_BAD)",
+    );
+    provider.shutdown().unwrap();
+
+    // pkcs7 ECB decrypt of b"": the token's Pkcs11 error, not a Crypto unpadding error
+    let (provider, aes, _) = fresh();
+    pkcs11_err(
+        provider
+            .decrypt(&aes, &mech("AES-ECB", vec![("padding", e("pkcs7"))]), b"")
+            .unwrap_err(),
+        "PKCS#11 decrypt with AES-ECB failed (CKR_ARGUMENTS_BAD)",
+    );
+    provider.shutdown().unwrap();
+
+    // a fresh session is unaffected: non-empty input still works
+    let (provider, aes, _) = fresh();
+    let expected =
+        openssl::symm::encrypt(Cipher::aes_128_ctr(), &key, Some(&[0xf0u8; 16]), MESSAGE).unwrap();
+    assert_eq!(provider.encrypt(&aes, &ctr, MESSAGE).unwrap(), expected);
+    provider.shutdown().unwrap();
+}
+
 #[test]
 fn softhsm_oaep_fallbacks_and_raw_rsa() {
     // SoftHSM accepts only SHA-1/MGF1-SHA1 OAEP with an empty label: SHA-256 encrypts in
@@ -1125,11 +1220,13 @@ fn softhsm_read_full_template_dumps_the_object() {
     assert_eq!(get("CKA_VALUE"), Some(AttrValue::Bytes(key)));
     assert_eq!(get("CKA_VALUE_LEN"), Some(AttrValue::Ulong(32)));
     assert_eq!(get("CKA_TOKEN"), Some(AttrValue::Bool(false)));
-    // imported objects: CK_UNAVAILABLE_INFORMATION reported numerically (§5.16)
-    assert_eq!(
-        get("CKA_KEY_GEN_MECHANISM"),
-        Some(AttrValue::Ulong(u64::MAX))
-    );
+    // imported objects: CK_UNAVAILABLE_INFORMATION reported numerically and unsigned
+    // (§5.16; c2 showed PyKCS11's signed `-1` — §11 D18)
+    let key_gen = get("CKA_KEY_GEN_MECHANISM");
+    assert_eq!(key_gen, Some(AttrValue::Ulong(u64::MAX)));
+    if let Some(AttrValue::Ulong(n)) = key_gen {
+        assert_eq!(n.to_string(), "18446744073709551615");
+    }
     assert!(get("CKA_MODULUS").is_none());
     // a sensitive key withholds CKA_VALUE: skipped, not an error
     let sensitive_label = unique_label();
