@@ -87,6 +87,8 @@ fn key_cases() -> Vec<KeyCase> {
 const PASSWORD_HINT: &str =
     "provide --password or run interactively so the password can be prompted";
 const WRONG_PW: &str = "incorrect password for encrypted private key (or corrupt encrypted data)";
+/// pyca's prefix of a `pem` crate error (`{e:?}` follows).
+const PEM_FAQ: &str = "Unable to load PEM file. See https://cryptography.io/en/latest/faq/#why-can-t-i-import-my-pem-file for more details. ";
 
 // ------------------------------------------------------------- private-key round-trips
 
@@ -317,19 +319,43 @@ fn encrypted_pkcs8_without_callback() {
 #[test]
 fn encrypted_with_empty_password_still_requires_a_password() {
     // pyca TypeError parity: "asked" counts, even when the empty password would decrypt.
+    // An EMPTY answer is no password to pyca either ("Password was not given but private
+    // key is encrypted", which crashed c2): r2 answers with the no-password error after the
+    // prompt (§11 D12(f)), for encrypted PKCS#8 (DER and PEM) and traditional PEM alike.
     let key = p256();
-    for data in [
-        key.private_key_to_pkcs8_passphrase(Cipher::aes_256_cbc(), b"")
-            .unwrap(),
-        key.private_key_to_pem_pkcs8_passphrase(Cipher::aes_256_cbc(), b"")
-            .unwrap(),
+    let ec = key.ec_key().unwrap();
+    for (data, prompt) in [
+        (
+            key.private_key_to_pkcs8_passphrase(Cipher::aes_256_cbc(), b"")
+                .unwrap(),
+            "Password for encrypted private key",
+        ),
+        (
+            key.private_key_to_pkcs8_passphrase(Cipher::aes_256_cbc(), b"pw")
+                .unwrap(),
+            "Password for encrypted private key",
+        ),
+        (
+            key.private_key_to_pem_pkcs8_passphrase(Cipher::aes_256_cbc(), b"")
+                .unwrap(),
+            "Password for encrypted ENCRYPTED PRIVATE KEY",
+        ),
+        (
+            ec.private_key_to_pem_passphrase(Cipher::aes_128_cbc(), b"pw")
+                .unwrap(),
+            "Password for encrypted EC PRIVATE KEY",
+        ),
     ] {
         assert_eq!(
             err(&data).message,
             "encrypted key material requires a password"
         );
-        let materials = parse_with(&data, &mut answer("")).unwrap();
-        assert_eq!(*materials[0].data, pkcs8_der(&key));
+        let prompts = Rc::new(RefCell::new(Vec::new()));
+        let mut cb = recording_cb("", prompts.clone());
+        let err = parse_with(&data, &mut cb).unwrap_err();
+        assert_eq!(err.message, "encrypted key material requires a password");
+        assert_eq!(err.hint.as_deref(), Some(PASSWORD_HINT));
+        assert_eq!(*prompts.borrow(), vec![prompt.to_owned()]);
     }
 }
 
@@ -403,6 +429,20 @@ fn encrypted_pkcs8_scheme_set_is_pycas() {
         let materials = parse_with(&data, &mut answer("pw")).unwrap();
         assert_eq!(*materials[0].data, pkcs8_der(&key));
     }
+    // RC2-CBC: pyca decrypts only rc2ParameterVersion 58 (128-bit effective key).
+    let data = key
+        .private_key_to_pkcs8_passphrase(Cipher::rc2_cbc(), b"pw")
+        .unwrap();
+    let materials = parse_with(&data, &mut answer("pw")).unwrap();
+    assert_eq!(*materials[0].data, pkcs8_der(&key));
+    let data = key
+        .private_key_to_pkcs8_passphrase(Cipher::rc2_40_cbc(), b"pw")
+        .unwrap();
+    let prompts = Rc::new(RefCell::new(Vec::new()));
+    let mut cb = recording_cb("pw", prompts.clone());
+    let err = parse_with(&data, &mut cb).unwrap_err();
+    assert_eq!(err.message, WRONG_PW);
+    assert_eq!(prompts.borrow().len(), 1);
     for cipher in [Cipher::camellia_128_cbc(), Cipher::des_cbc()] {
         let data = key.private_key_to_pkcs8_passphrase(cipher, b"pw").unwrap();
         let err = parse_with(&data, &mut answer("pw")).unwrap_err();
@@ -495,19 +535,100 @@ fn pkcs12_without_callback() {
 
 #[test]
 fn pkcs12_unencrypted_needs_no_callback() {
-    // pyca NoEncryption: an empty-password PKCS#12 loads with parse2("").
+    // pyca NoEncryption: unencrypted bags (keyBag, plain certBag) — no callback needed.
     let key = p256();
     let cert = cn_cert(&key, "plain");
     let mut builder = Pkcs12::builder();
+    builder
+        .name("plain")
+        .pkey(&key)
+        .cert(&cert)
+        .key_algorithm(Nid::from_raw(-1))
+        .cert_algorithm(Nid::from_raw(-1));
+    let unencrypted = builder.build2("").unwrap().to_der().unwrap();
+    // … and bags encrypted with the empty password load the same way (parse2("")).
+    let mut builder = Pkcs12::builder();
     builder.name("plain").pkey(&key).cert(&cert);
-    let p12 = builder.build2("").unwrap().to_der().unwrap();
-    let materials = parse_key_material(&p12, KeyHint::Auto, None).unwrap();
-    let classes: Vec<KeyClass> = materials.iter().map(|m| m.key_class).collect();
-    assert_eq!(classes, [KeyClass::Private, KeyClass::Certificate]);
+    let empty_password = builder.build2("").unwrap().to_der().unwrap();
+    for p12 in [unencrypted, empty_password] {
+        let materials = parse_key_material(&p12, KeyHint::Auto, None).unwrap();
+        let classes: Vec<KeyClass> = materials.iter().map(|m| m.key_class).collect();
+        assert_eq!(classes, [KeyClass::Private, KeyClass::Certificate]);
+        assert_eq!(*materials[0].data, pkcs8_der(&key));
+        assert!(
+            materials
+                .iter()
+                .all(|m| m.label_hint.as_deref() == Some("plain"))
+        );
+    }
+}
+
+/// The PFX without its MacData (`openssl pkcs12 -export -nomac`).
+fn strip_mac(p12: &[u8]) -> Vec<u8> {
+    fn tlv_len(data: &[u8]) -> (usize, usize) {
+        let first = data[1];
+        if first < 0x80 {
+            (2, usize::from(first))
+        } else {
+            let n = usize::from(first & 0x7f);
+            let len = data[2..2 + n]
+                .iter()
+                .fold(0usize, |acc, b| acc * 256 + usize::from(*b));
+            (2 + n, len)
+        }
+    }
+    let (header, _) = tlv_len(p12);
+    let body = &p12[header..];
+    let (vh, vl) = tlv_len(body);
+    let rest = &body[vh + vl..];
+    let (ah, al) = tlv_len(rest);
+    let mut content = body[..vh + vl].to_vec();
+    content.extend_from_slice(&rest[..ah + al]);
+    tlv(0x30, &content)
+}
+
+#[test]
+fn pkcs12_without_a_mac_loads_with_its_password() {
+    // `openssl pkcs12 -export -nomac`: pyca (and c2) load it with the password; OpenSSL 3.0's
+    // PKCS12_parse wants a MAC for a non-empty password, so r2 supplies one.
+    r2_core::ensure_legacy_provider();
+    let key = p256();
+    let cert = cn_cert(&key, "nomac");
+    let mut builder = Pkcs12::builder();
+    builder.name("fn").pkey(&key).cert(&cert);
+    let p12 = strip_mac(&builder.build2("pw").unwrap().to_der().unwrap());
+    let prompts = Rc::new(RefCell::new(Vec::new()));
+    let mut cb = recording_cb("pw", prompts.clone());
+    let materials = parse_with(&p12, &mut cb).unwrap();
+    assert_eq!(*materials[0].data, pkcs8_der(&key));
+    assert_eq!(*materials[1].data, cert.to_der().unwrap());
     assert!(
         materials
             .iter()
-            .all(|m| m.label_hint.as_deref() == Some("plain"))
+            .all(|m| m.label_hint.as_deref() == Some("fn"))
+    );
+    assert_eq!(*prompts.borrow(), vec!["Password for PKCS#12".to_owned()]);
+    assert_eq!(
+        parse_with(&p12, &mut answer("bad")).unwrap_err().message,
+        "incorrect password for PKCS#12 (or corrupt PKCS#12 data)"
+    );
+    assert_eq!(
+        err(&p12).message,
+        "PKCS#12 requires a password (or the PKCS#12 data is corrupt)"
+    );
+    // without a MAC and without bag encryption: no password at all
+    let mut builder = Pkcs12::builder();
+    builder
+        .pkey(&key)
+        .cert(&cert)
+        .key_algorithm(Nid::from_raw(-1))
+        .cert_algorithm(Nid::from_raw(-1));
+    let p12 = strip_mac(&builder.build2("").unwrap().to_der().unwrap());
+    let materials = parse_key_material(&p12, KeyHint::Auto, None).unwrap();
+    assert!(
+        materials
+            .iter()
+            .all(|m| m.label_hint.as_deref() == Some("nomac"))
     );
 }
 
@@ -779,11 +900,26 @@ fn pem_marker_in_non_utf8_data() {
 
 #[test]
 fn pem_labels_strip_spaces_before_comparing() {
+    // c2 compares the stripped labels (so this is not "closed by"), but pyca's PEM parser
+    // compares the raw tags: "malformed … PEM block" with pyca's MismatchedTags text.
     let key = p256();
     let pem = String::from_utf8(spki_pem(&key))
         .unwrap()
         .replace("-----END PUBLIC KEY-----", "-----END PUBLIC KEY -----");
-    assert_eq!(*parse_one(pem.as_bytes()).data, spki_der(&key));
+    assert_eq!(
+        err(pem.as_bytes()).message,
+        format!(
+            "malformed PUBLIC KEY PEM block: {PEM_FAQ}MismatchedTags(\"PUBLIC KEY\", \"PUBLIC KEY \")"
+        )
+    );
+    // equal raw tags with a trailing space: pyca's tag filter refuses the block
+    let pem = String::from_utf8(cn_cert(&key, "x").to_pem().unwrap())
+        .unwrap()
+        .replace("CERTIFICATE-----", "CERTIFICATE -----");
+    assert_eq!(
+        err(pem.as_bytes()).message,
+        "malformed CERTIFICATE PEM block: Valid PEM but no BEGIN CERTIFICATE/END CERTIFICATE delimiters. Are you sure this is a certificate?"
+    );
 }
 
 // ------------------------------------------------------------------- multi-block PEM
@@ -1218,4 +1354,378 @@ fn a_refused_key_inside_an_encrypted_container_is_the_wrong_password_text() {
         .unwrap();
     let err = parse_with(&data, &mut answer("pw")).unwrap_err();
     assert_eq!(err.message, WRONG_PW);
+}
+
+// ------------------------------------------- pyca's DER strictness for key material
+
+/// The outer SEQUENCE length re-encoded one byte longer (BER, not DER).
+fn nonminimal_outer_length(der: &[u8]) -> Vec<u8> {
+    assert_eq!(der[0], 0x30);
+    if der[1] < 0x80 {
+        let mut out = vec![0x30, 0x81, der[1]];
+        out.extend_from_slice(&der[2..]);
+        out
+    } else {
+        let n = usize::from(der[1] & 0x7f);
+        let mut out = vec![0x30, 0x80 | (n as u8 + 1), 0x00];
+        out.extend_from_slice(&der[2..]);
+        out
+    }
+}
+
+/// (name, DER, PEM label) of every key encoding the DER try-chain and the PEM loaders read.
+fn key_ders() -> Vec<(&'static str, Vec<u8>, &'static str)> {
+    let (ec, rsa, ed) = (p256(), rsa_key(1024), ed25519());
+    vec![
+        ("ec pkcs8", pkcs8_der(&ec), "PRIVATE KEY"),
+        ("rsa pkcs8", pkcs8_der(&rsa), "PRIVATE KEY"),
+        ("ed25519 pkcs8", pkcs8_der(&ed), "PRIVATE KEY"),
+        (
+            "sec1",
+            ec.ec_key().unwrap().private_key_to_der().unwrap(),
+            "EC PRIVATE KEY",
+        ),
+        (
+            "pkcs1",
+            rsa.rsa().unwrap().private_key_to_der().unwrap(),
+            "RSA PRIVATE KEY",
+        ),
+        ("ec spki", spki_der(&ec), "PUBLIC KEY"),
+        ("rsa spki", spki_der(&rsa), "PUBLIC KEY"),
+        (
+            "rsa pkcs1 public",
+            rsa.rsa().unwrap().public_key_to_der_pkcs1().unwrap(),
+            "PUBLIC KEY",
+        ),
+        (
+            "encrypted pkcs8",
+            ec.private_key_to_pkcs8_passphrase(Cipher::aes_128_cbc(), b"pw")
+                .unwrap(),
+            "ENCRYPTED PRIVATE KEY",
+        ),
+    ]
+}
+
+#[test]
+fn key_der_with_trailing_bytes_or_ber_lengths_is_refused() {
+    // pyca parses keys as strict DER (rust-asn1); OpenSSL's d2i accepts trailing bytes and
+    // non-minimal lengths. c2 refuses all of these — the encrypted one without a prompt.
+    for (name, der, label) in key_ders() {
+        assert!(
+            !parse_with(&der, &mut answer("pw")).unwrap().is_empty(),
+            "{name}"
+        );
+        let mut variants = Vec::new();
+        for suffix in [&[0x00][..], &[0x05, 0x00], &[0x00, 0x00]] {
+            let mut data = der.clone();
+            data.extend_from_slice(suffix);
+            variants.push(data);
+        }
+        variants.push(nonminimal_outer_length(&der));
+        for data in variants {
+            let prompts = Rc::new(RefCell::new(Vec::new()));
+            let mut cb = recording_cb("pw", prompts.clone());
+            let err = parse_with(&data, &mut cb).unwrap_err();
+            assert!(
+                err.message
+                    .starts_with("could not parse key material (attempted: "),
+                "{name}: {}",
+                err.message
+            );
+            assert!(prompts.borrow().is_empty(), "{name}");
+            if label == "PUBLIC KEY" && name == "rsa pkcs1 public" {
+                continue; // pyca's PUBLIC KEY label is SPKI-only anyway
+            }
+            let prompts = Rc::new(RefCell::new(Vec::new()));
+            let mut cb = recording_cb("pw", prompts.clone());
+            let err = parse_with(&pem_wrap(&data, label), &mut cb).unwrap_err();
+            assert!(
+                err.message
+                    .starts_with(&format!("malformed {label} PEM block: ")),
+                "{name}: {}",
+                err.message
+            );
+            assert!(prompts.borrow().is_empty(), "{name}");
+        }
+    }
+}
+
+// --------------------------------------------- pyca's PEM framing (the `pem` 3.0 crate)
+
+fn lines_with(pem: &[u8], f: impl Fn(&str) -> String) -> Vec<u8> {
+    String::from_utf8(pem.to_vec())
+        .unwrap()
+        .split('\n')
+        .map(|line| {
+            if line.is_empty() || line.starts_with("-----") || line.contains(':') {
+                line.to_owned()
+            } else {
+                f(line)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .into_bytes()
+}
+
+fn first_body_line(pem: &[u8]) -> String {
+    String::from_utf8(pem.to_vec())
+        .unwrap()
+        .split('\n')
+        .nth(1)
+        .unwrap()
+        .to_owned()
+}
+
+#[test]
+fn pem_framing_is_pycas() {
+    let key = p256();
+    let spki = spki_pem(&key);
+    let text = String::from_utf8(spki.clone()).unwrap();
+    // a blank line inside the body: everything before it is read as header lines
+    let blank_mid = lines_with(&spki, |line| format!("{line}\n"));
+    assert_eq!(
+        err(&blank_mid).message,
+        format!(
+            "malformed PUBLIC KEY PEM block: {PEM_FAQ}InvalidHeader({:?})",
+            first_body_line(&spki)
+        )
+    );
+    // a header line not ended by a blank line is base64 data (':' is byte 58)
+    let no_blank = text.replacen("-----\n", "-----\nFoo: bar\n", 1);
+    assert_eq!(
+        err(no_blank.as_bytes()).message,
+        format!("malformed PUBLIC KEY PEM block: {PEM_FAQ}InvalidData(InvalidByte(3, 58))")
+    );
+    // "------END": the pem crate's naive marker search finds no END
+    let six = text.replace("\n-----END", "\n------END");
+    assert_eq!(
+        err(six.as_bytes()).message,
+        format!("malformed PUBLIC KEY PEM block: {PEM_FAQ}MalformedFraming")
+    );
+    // accepted: headers ended by a blank line, a blank line after BEGIN, CRLF, lines padded
+    // with any Unicode whitespace (VT, NBSP), indentation
+    let accepted = [
+        text.replacen("-----\n", "-----\nFoo: bar\n\n", 1)
+            .into_bytes(),
+        text.replacen("-----\n", "-----\n\n", 1).into_bytes(),
+        text.replace('\n', "\r\n").into_bytes(),
+        lines_with(&spki, |line| format!("{line}\u{b}")),
+        lines_with(&spki, |line| format!("{line}\u{a0}")),
+        lines_with(&spki, |line| format!("  {line}")),
+        lines_with(&spki, |line| format!("\t{line}")),
+    ];
+    for data in accepted {
+        assert_eq!(
+            *parse_one(&data).data,
+            spki_der(&key),
+            "{}",
+            String::from_utf8_lossy(&data)
+        );
+    }
+    // BEGIN/END raw tags differ (c2's stripped labels agree)
+    let cert = String::from_utf8(cn_cert(&key, "x").to_pem().unwrap()).unwrap();
+    let spaced = cert.replacen("CERTIFICATE-----", "CERTIFICATE  -----", 1);
+    assert_eq!(
+        err(spaced.as_bytes()).message,
+        format!(
+            "malformed CERTIFICATE PEM block: {PEM_FAQ}MismatchedTags(\"CERTIFICATE  \", \"CERTIFICATE\")"
+        )
+    );
+}
+
+// ------------------------------------- RFC 1421 encryption headers (pyca `decrypt_pem`)
+
+fn traditional_ec(key: &PKey<Private>) -> String {
+    let pem = key
+        .ec_key()
+        .unwrap()
+        .private_key_to_pem_passphrase(Cipher::aes_128_cbc(), b"pw")
+        .unwrap();
+    String::from_utf8(pem).unwrap()
+}
+
+/// (error message, prompts) of parsing `data` with a callback answering "pw".
+fn outcome(data: &[u8]) -> (std::result::Result<Vec<u8>, String>, Vec<String>) {
+    let prompts = Rc::new(RefCell::new(Vec::new()));
+    let mut cb = recording_cb("pw", prompts.clone());
+    let result = parse_with(data, &mut cb)
+        .map(|m| m[0].data.to_vec())
+        .map_err(|e| e.message);
+    let prompts = prompts.borrow().clone();
+    (result, prompts)
+}
+
+#[test]
+fn pem_encryption_headers_are_pycas() {
+    let key = p256();
+    let trad = traditional_ec(&key);
+    let pkcs8 = String::from_utf8(pkcs8_pem(&key)).unwrap();
+    let invalid_proc = |label: &str| {
+        format!(
+            "malformed {label} PEM block: Proc-Type PEM header is not valid, key could not be decrypted."
+        )
+    };
+    // only an exact "4,ENCRYPTED" decrypts; any other Proc-Type fails before any prompt
+    let cases: Vec<(String, std::result::Result<Vec<u8>, String>, usize)> = vec![
+        (
+            pkcs8.replacen("-----\n", "-----\nProc-Type: 4,NONE\n\n", 1),
+            Err(invalid_proc("PRIVATE KEY")),
+            0,
+        ),
+        (
+            pkcs8.replacen("-----\n", "-----\nProc-Type: 4,MIC-ONLY\n\n", 1),
+            Err(invalid_proc("PRIVATE KEY")),
+            0,
+        ),
+        (
+            trad.replace("4,ENCRYPTED", "4, ENCRYPTED"),
+            Err(invalid_proc("EC PRIVATE KEY")),
+            0,
+        ),
+        (
+            trad.lines()
+                .filter(|l| !l.starts_with("DEK-Info"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            Err(
+                "malformed EC PRIVATE KEY PEM block: Encrypted PEM doesn't have a DEK-Info header."
+                    .to_owned(),
+            ),
+            0,
+        ),
+        (
+            trad.replace("AES-128-CBC,", "AES-128-CBC "),
+            Err(
+                "malformed EC PRIVATE KEY PEM block: Encrypted PEM's DEK-Info header is not valid."
+                    .to_owned(),
+            ),
+            0,
+        ),
+        // DEK-Info parts are not trimmed: " ,"/", " → an unknown cipher / bad IV after the prompt
+        (trad.replace("AES-128-CBC,", "AES-128-CBC ,"), Err(WRONG_PW.to_owned()), 1),
+        (trad.replace("AES-128-CBC,", "AES-128-CBC, "), Err(WRONG_PW.to_owned()), 1),
+        // the header name/value are trimmed
+        (
+            trad.replace("Proc-Type: ", "Proc-Type:"),
+            Ok(pkcs8_der(&key)),
+            1,
+        ),
+        // the headers apply to every private label: a plaintext PKCS#8 with them is
+        // "encrypted" (prompt, then the wrong-password text)
+        (
+            pkcs8.replacen(
+                "-----\n",
+                "-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,00112233445566778899AABBCCDDEEFF\n\n",
+                1,
+            ),
+            Err(WRONG_PW.to_owned()),
+            1,
+        ),
+        // an encrypted SEC1 relabelled PRIVATE KEY decrypts, then fails to load as PKCS#8
+        (trad.replace("EC PRIVATE KEY", "PRIVATE KEY"), Err(WRONG_PW.to_owned()), 1),
+    ];
+    for (data, expected, prompt_count) in cases {
+        let (result, prompts) = outcome(data.as_bytes());
+        assert_eq!(result, expected, "{data}");
+        assert_eq!(prompts.len(), prompt_count, "{data}");
+    }
+    // without a callback the relabelled block needs a password (pyca TypeError)
+    assert_eq!(
+        err(trad.replace("EC PRIVATE KEY", "PRIVATE KEY").as_bytes()).message,
+        "encrypted key material requires a password"
+    );
+    // ENCRYPTED PRIVATE KEY under traditional headers: decrypted first, then not an
+    // EncryptedPrivateKeyInfo → wrong password
+    let enc = String::from_utf8(
+        key.private_key_to_pem_pkcs8_passphrase(Cipher::aes_128_cbc(), b"pw")
+            .unwrap(),
+    )
+    .unwrap()
+    .replacen(
+        "-----\n",
+        "-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,00112233445566778899AABBCCDDEEFF\n\n",
+        1,
+    );
+    let (result, prompts) = outcome(enc.as_bytes());
+    assert_eq!(result, Err(WRONG_PW.to_owned()));
+    assert_eq!(
+        prompts,
+        vec!["Password for encrypted ENCRYPTED PRIVATE KEY".to_owned()]
+    );
+}
+
+// ------------------------------------------ certificates read by pyca's parser alone
+
+#[test]
+fn certificates_openssl_refuses_load_as_in_pyca() {
+    // OpenSSL's X509 decoder refuses these Name value encodings; pyca (c2) loads them.
+    let key = p256();
+    let astral: Vec<u8> = "a\u{1f600}"
+        .encode_utf16()
+        .flat_map(|u| u.to_be_bytes())
+        .collect();
+    let cases: [(u8, Vec<u8>, &str); 4] = [
+        (0x1a, b"a b".to_vec(), "a b"),
+        (0x1a, b"AB\x01C".to_vec(), "AB\u{1}C"),
+        (0x04, b"ABCD".to_vec(), "ABCD"),
+        (0x1e, astral, "a\u{1f600}"),
+    ];
+    for (tag, value, cn) in cases {
+        let der = name_cert(&key, &raw_name(&[(CN_OID, tag, &value)]));
+        for data in [der.clone(), pem_wrap(&der, "CERTIFICATE")] {
+            let material = parse_one(&data);
+            assert_eq!(material.key_class, KeyClass::Certificate);
+            assert_eq!(*material.data, der);
+            assert_eq!(material.label_hint.as_deref(), Some(cn));
+        }
+    }
+}
+
+#[test]
+fn certificate_label_hint_with_a_unique_identifier_in_the_subject() {
+    // x500UniqueIdentifier is the one OID pyca reads as a BIT STRING (bytes value).
+    let key = p256();
+    let subject = raw_name(&[(CN_OID, 0x0c, b"x"), (UID_OID, 0x03, b"\x00\xab")]);
+    let material = parse_one(&name_cert(&key, &subject));
+    assert_eq!(material.label_hint.as_deref(), Some("x"));
+    let only_uid = raw_name(&[(UID_OID, 0x03, b"\x01\x02")]);
+    assert_eq!(parse_one(&name_cert(&key, &only_uid)).label_hint, None);
+}
+
+#[test]
+fn lazily_undecodable_subject_names_are_keyparse_errors() {
+    // pyca loads these certificates but cannot decode the subject: c2's `_subject_cn`
+    // crashed; r2 raises KeyParse "certificate is not valid DER X.509: …" (§11 D12(b)).
+    let key = p256();
+    let cases: [(&str, u8, &[u8], Option<&str>); 4] = [
+        (CN_OID, 0x16, b"ZZ\xe9Q", None),
+        (CN_OID, 0x14, b"ZZ\xe9Q", None),
+        (CN_OID, 0x0c, b"ZZ\xffQ", None),
+        (
+            CN_OID,
+            0x03,
+            b"\x00ab",
+            Some("oid must be X500_UNIQUE_IDENTIFIER for BitString type."),
+        ),
+    ];
+    for (oid, tag, value, text) in cases {
+        let der = name_cert(&key, &raw_name(&[(oid, tag, value)]));
+        for data in [der.clone(), pem_wrap(&der, "CERTIFICATE")] {
+            let err = err(&data);
+            assert!(
+                err.message
+                    .starts_with("certificate is not valid DER X.509: "),
+                "{}",
+                err.message
+            );
+            if let Some(text) = text {
+                assert_eq!(
+                    err.message,
+                    format!("certificate is not valid DER X.509: {text}")
+                );
+            }
+        }
+        // a label supplied by a PKCS#12 friendly name never decodes the subject in c2
+    }
 }

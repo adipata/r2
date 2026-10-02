@@ -389,3 +389,97 @@ fn subject_cn_follows_pyca_first_common_name() {
         assert_eq!(facts.subject_cn.as_deref(), *cn, "{case}");
     }
 }
+
+// ------------------------------------------- x500UniqueIdentifier, year 0, PKCS#11 skips
+
+#[test]
+fn unique_identifier_bit_string_renders_as_hex() {
+    // pyca: the BIT STRING value is bytes (its raw content) → "2.5.4.45=#<hex>".
+    let key = p256();
+    let subject = raw_name(&[(CN_OID, 0x0c, b"x"), (UID_OID, 0x03, b"\x00\xab")]);
+    let der = name_cert(&key, &subject);
+    let rows = certificate_details(&der).unwrap();
+    assert_eq!(
+        rows[0],
+        ("subject".to_owned(), "2.5.4.45=#00ab,CN=x".to_owned())
+    );
+    assert_eq!(rows[1].1, "2.5.4.45=#00ab,CN=x");
+    let facts = cert_facts(&der, Classifier::Pkcs11).unwrap();
+    assert_eq!(facts.subject_cn.as_deref(), Some("x"));
+    let attrs = cert_attributes(&der).unwrap();
+    assert_eq!(
+        attrs["CKA_SUBJECT"],
+        AttrValue::Str("2.5.4.45=#00ab,CN=x".to_owned())
+    );
+    let attrs = memory_cert_attributes(&der).unwrap();
+    assert_eq!(
+        attrs["subject"],
+        AttrValue::Str("2.5.4.45=#00ab,CN=x".to_owned())
+    );
+    let only = name_cert(&key, &raw_name(&[(UID_OID, 0x03, b"\x01\x02")]));
+    assert_eq!(certificate_details(&only).unwrap()[0].1, "2.5.4.45=#0102");
+}
+
+#[test]
+fn year_zero_validity_fails_only_where_c2_formatted_it() {
+    // pyca loads GeneralizedTime 0000…; Python's datetime refuses year 0 (c2 crashed in
+    // certificate_details / the memory attributes). The PKCS#11 attributes never read it.
+    let key = p256();
+    let name = raw_name(&[(CN_OID, 0x0c, b"y0")]);
+    let der = raw_cert(&key, &name, &name, "00000101000000Z", "20500101000000Z");
+    let expected = "certificate is not valid DER X.509: year 0 is out of range";
+    assert_eq!(certificate_details(&der).unwrap_err().message, expected);
+    assert_eq!(memory_cert_attributes(&der).unwrap_err().message, expected);
+    assert_eq!(
+        cert_attributes(&der).unwrap()["CKA_SUBJECT"],
+        AttrValue::Str("CN=y0".to_owned())
+    );
+    assert!(cert_facts(&der, Classifier::Pkcs11).is_ok());
+}
+
+#[test]
+fn pkcs11_skip_classification_mirrors_pycas_exception_classes() {
+    use r2_core::x509info::pkcs11_skips_certificate;
+    let key = p256();
+    // ValueError in c2 → skipped
+    let skipped = [
+        b"\x30\x00".to_vec(),
+        name_cert(&key, &raw_name(&[(CN_OID, 0x0c, b"ZZ\xffQ")])),
+        name_cert(&key, &raw_name(&[(CN_OID, 0x13, b"a_b")])),
+    ];
+    for der in skipped {
+        let err = cert_facts(&der, Classifier::Pkcs11)
+            .and_then(|_| cert_attributes(&der))
+            .unwrap_err();
+        assert!(pkcs11_skips_certificate(&err), "{}", err.message);
+    }
+    // TypeError / KeyError / UnsupportedAlgorithm / KeyParseError in c2 → propagated
+    let propagated = [
+        name_cert(&key, &raw_name(&[(CN_OID, 0x03, b"\x00ab")])),
+        name_cert(&key, &raw_name(&[(CN_OID, 0x30, b"")])),
+    ];
+    for der in propagated {
+        let err = cert_attributes(&der).unwrap_err();
+        assert!(!pkcs11_skips_certificate(&err), "{}", err.message);
+    }
+    let odd_curve = cn_cert(&ec_key(Nid::X9_62_PRIME239V1), "c")
+        .to_der()
+        .unwrap();
+    let err = cert_facts(&odd_curve, Classifier::Pkcs11).unwrap_err();
+    assert_eq!(
+        err.message,
+        "certificate contains an invalid public key: Curve 1.2.840.10045.3.1.4 is not supported"
+    );
+    assert!(!pkcs11_skips_certificate(&err));
+    let dsa = {
+        let dsa = openssl::dsa::Dsa::generate(1024).unwrap();
+        cn_cert(&PKey::from_dsa(dsa).unwrap(), "d")
+            .to_der()
+            .unwrap()
+    };
+    let err = cert_facts(&dsa, Classifier::Pkcs11).unwrap_err();
+    assert_eq!(err.message, "unsupported public key type DSAPublicKey");
+    assert!(!pkcs11_skips_certificate(&err));
+    let not_keyparse = r2_core::error::ConsoleError::crypto("x");
+    assert!(!pkcs11_skips_certificate(&not_keyparse));
+}

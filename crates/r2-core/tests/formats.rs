@@ -196,3 +196,46 @@ fn public_pem_of_a_pkcs1_rsa_key_is_spki() {
         spki_pem(&key)
     );
 }
+
+#[test]
+fn key_der_with_trailing_bytes_is_not_valid() {
+    // pyca re-parses canonical bytes as strict DER (OpenSSL's d2i would accept these).
+    let key = p256();
+    let mut p8 = pkcs8_der(&key);
+    p8.push(0);
+    for result in [
+        private_key_bytes(&p8, Encoding::Der, None).map(|b| b.to_vec()),
+        pkcs8_public_spki(&p8),
+    ] {
+        let err = result.unwrap_err();
+        assert!(
+            err.message
+                .starts_with("exported private key is not valid unencrypted PKCS#8 DER: "),
+            "{}",
+            err.message
+        );
+    }
+    let mut spki = spki_der(&key);
+    spki.extend_from_slice(&[0, 0]);
+    let err = public_key_bytes(&spki, Encoding::Pem).unwrap_err();
+    assert!(
+        err.message
+            .starts_with("exported public key is not valid DER SubjectPublicKeyInfo: ")
+    );
+    // DER export stays verbatim (c2 `_serialize_spki`)
+    assert_eq!(public_key_bytes(&spki, Encoding::Der).unwrap(), spki);
+}
+
+#[test]
+fn certificate_pem_of_a_name_openssl_refuses() {
+    // pyca loads a VisibleString CN; OpenSSL's X509 decoder does not. The PEM is the DER as
+    // loaded, 64 columns, LF.
+    let key = p256();
+    let der = name_cert(&key, &raw_name(&[(CN_OID, 0x1a, b"a b")]));
+    assert!(X509::from_der(&der).is_err());
+    assert_eq!(
+        certificate_bytes(&der, Encoding::Pem).unwrap(),
+        pem_wrap(&der, "CERTIFICATE")
+    );
+    assert_eq!(cert_spki(&der).unwrap(), spki_der(&key));
+}

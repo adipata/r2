@@ -410,7 +410,32 @@ pub type NameOutcome = Result<(&'static str, Option<&'static str>), &'static str
 pub const NAMES: &[(&str, &str, NameOutcome)] = &[
     (
         "bitstring_uid",
+        "300e310c300a060355042d030300abcd",
+        Ok(("2.5.4.45=#00abcd", None)),
+    ),
+    (
+        "bitstring_uid_odd",
+        "300d310b3009060355042d03020102",
+        Ok(("2.5.4.45=#0102", None)),
+    ),
+    (
+        "bitstring_uid_empty",
+        "300b31093007060355042d0300",
+        Ok(("2.5.4.45=", None)),
+    ),
+    (
+        "bitstring_uid_and_cn",
+        "3019310a300806035504030c0178310b3009060355042d030200ab",
+        Ok(("2.5.4.45=#00ab,CN=x", Some("x"))),
+    ),
+    (
+        "bitstring_other_oid",
         "300e310c300a0603550445030300abcd",
+        Err("TypeError: oid must be X500_UNIQUE_IDENTIFIER for BitString type."),
+    ),
+    (
+        "bitstring_cn",
+        "300e310c300a06035504030303006162",
         Err("TypeError: oid must be X500_UNIQUE_IDENTIFIER for BitString type."),
     ),
     (

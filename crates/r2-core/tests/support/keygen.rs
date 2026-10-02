@@ -161,3 +161,71 @@ pub fn unhex(text: &str) -> Vec<u8> {
         .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
         .collect()
 }
+
+/// DER TLV (single-byte tag, minimal definite length).
+pub fn tlv(tag: u8, content: &[u8]) -> Vec<u8> {
+    let mut out = vec![tag];
+    let len = content.len();
+    if len < 0x80 {
+        out.push(len as u8);
+    } else {
+        let bytes = len.to_be_bytes();
+        let skip = bytes.iter().take_while(|b| **b == 0).count();
+        out.push(0x80 | (bytes.len() - skip) as u8);
+        out.extend_from_slice(&bytes[skip..]);
+    }
+    out.extend_from_slice(content);
+    out
+}
+
+/// A DER Name of single-attribute RDNs: (OID content hex, value tag, value bytes).
+pub fn raw_name(rdns: &[(&str, u8, &[u8])]) -> Vec<u8> {
+    let mut body = Vec::new();
+    for (oid, tag, value) in rdns {
+        let mut atv = tlv(0x06, &unhex(oid));
+        atv.extend(tlv(*tag, value));
+        body.extend(tlv(0x31, &tlv(0x30, &atv)));
+    }
+    tlv(0x30, &body)
+}
+
+/// A v3 certificate assembled byte by byte (OpenSSL's X509 encoder refuses some Name value
+/// encodings pyca loads): serial 1, the given issuer/subject Name DER and validity times
+/// (UTCTime "YYMMDDHHMMSSZ" or GeneralizedTime "YYYYMMDDHHMMSSZ"), ECDSA-SHA256 signed.
+pub fn raw_cert(
+    key: &PKeyRef<Private>,
+    issuer: &[u8],
+    subject: &[u8],
+    not_before: &str,
+    not_after: &str,
+) -> Vec<u8> {
+    let time = |t: &str| tlv(if t.len() == 13 { 0x17 } else { 0x18 }, t.as_bytes());
+    let sig_alg = tlv(0x30, &tlv(0x06, &unhex("2a8648ce3d040302")));
+    let mut tbs = tlv(0xa0, &tlv(0x02, &[2]));
+    tbs.extend(tlv(0x02, &[1]));
+    tbs.extend_from_slice(&sig_alg);
+    tbs.extend_from_slice(issuer);
+    let mut validity = time(not_before);
+    validity.extend(time(not_after));
+    tbs.extend(tlv(0x30, &validity));
+    tbs.extend_from_slice(subject);
+    tbs.extend(key.public_key_to_der().unwrap());
+    let tbs = tlv(0x30, &tbs);
+    let mut signer = openssl::sign::Signer::new(MessageDigest::sha256(), key).unwrap();
+    signer.update(&tbs).unwrap();
+    let mut bits = vec![0];
+    bits.extend(signer.sign_to_vec().unwrap());
+    let mut cert = tbs;
+    cert.extend_from_slice(&sig_alg);
+    cert.extend(tlv(0x03, &bits));
+    tlv(0x30, &cert)
+}
+
+/// `raw_cert` self-issued, valid 2020-01-01 .. 2030-01-01.
+pub fn name_cert(key: &PKeyRef<Private>, subject: &[u8]) -> Vec<u8> {
+    raw_cert(key, subject, subject, "200101000000Z", "300101000000Z")
+}
+
+/// OID content hex of commonName / x500UniqueIdentifier.
+pub const CN_OID: &str = "550403";
+pub const UID_OID: &str = "55042d";

@@ -832,3 +832,41 @@ fn pkcs12_key_loading_errors() {
             .starts_with("PKCS#12 private key is not a valid DER PKCS#8 private key: ")
     );
 }
+
+#[test]
+fn csr_spki_with_trailing_bytes_is_refused_before_signing() {
+    // pyca's load_der_public_key is strict DER; c2 raised before assembling anything.
+    let key = p256();
+    let mut spki = spki_der(&key);
+    spki.push(0);
+    let mut called = false;
+    let mut sign = |_: &[u8]| -> r2_core::Result<Vec<u8>> {
+        called = true;
+        Ok(Vec::new())
+    };
+    let err = build_csr(&spki, "CN=x", SignatureAlg::EcdsaSha256, &mut sign).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::KeyParse);
+    assert!(
+        err.message
+            .starts_with("public key is not a valid DER SubjectPublicKeyInfo: "),
+        "{}",
+        err.message
+    );
+    assert!(!called);
+}
+
+#[test]
+fn pkcs12_of_a_certificate_openssl_cannot_decode_is_refused() {
+    // §11 D24: pyca writes PKCS#12 natively; r2 needs an OpenSSL X509, whose decoder
+    // refuses e.g. a VisibleString CN that pyca loads.
+    let key = p256();
+    let der = name_cert(&key, &raw_name(&[(CN_OID, 0x1a, b"a b")]));
+    let err = build_pkcs12(&pkcs8_der(&key), &der, "k", &secret("pw"), &[]).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::KeyParse);
+    assert!(
+        err.message
+            .starts_with("certificate is not valid DER X.509: "),
+        "{}",
+        err.message
+    );
+}

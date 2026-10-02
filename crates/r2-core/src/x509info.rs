@@ -39,8 +39,8 @@ pub enum Classifier {
     /// the PKCS#11 certificate read path (`Pkcs11Provider._spki_facts`): only p256/p384/p521
     /// are named, any other EC curve → curve None (shown "-"); unsupported → KeyParse
     /// "unsupported public key type {pyca public class name}" (e.g. "DSAPublicKey"), no hint.
-    /// (On that read path a certificate whose DER does not parse is skipped — not listed —
-    /// while this error propagates, as in c2.)
+    /// (On that read path a certificate c2 skipped — not listed — is told apart from one
+    /// whose error propagates by `pkcs11_skips_certificate`.)
     Pkcs11,
 }
 
@@ -75,14 +75,47 @@ pub fn spki_facts(
             "public key is not a valid DER SubjectPublicKeyInfo: {detail}"
         ))
     };
+    check_key_der(spki_der).map_err(|detail| invalid(&detail))?;
     let pkey = PKey::public_key_from_der(spki_der).map_err(|err| invalid(&ossl_detail(&err)))?;
     let pkey = normalize_public(pkey).map_err(|detail| invalid(&detail))?;
     classify_key(&pkey, classifier, false)
 }
+/// c2's PKCS#11 certificate read path (provider.py `_key_info`) caught pyca's ValueError and
+/// skipped the certificate (not listed) — while UnsupportedAlgorithm / TypeError / KeyError /
+/// KeyParseError propagated (c2 crashed or failed `keys`; r2 propagates the error, §11
+/// D12(b)). True when `err`, returned by `cert_facts` or `cert_attributes`, is of the skipped
+/// kind: every "certificate is not valid DER X.509: …" except a BIT STRING value under an OID
+/// other than x500UniqueIdentifier and an unknown Name value tag, and every "certificate
+/// contains an invalid public key: …" except an unsupported curve ("Curve {oid} is not
+/// supported", explicit parameters of another curve) or key type ("Unknown key type: {oid}",
+/// "Unsupported key type."). "unsupported public key type …" propagates.
+pub fn pkcs11_skips_certificate(err: &ConsoleError) -> bool {
+    if err.kind != crate::error::ErrorKind::KeyParse {
+        return false;
+    }
+    if let Some(detail) = err
+        .message
+        .strip_prefix("certificate contains an invalid public key: ")
+    {
+        let unsupported = (detail.starts_with("Curve ") && detail.ends_with(" is not supported"))
+            || detail.starts_with("ECDSA keys with explicit parameters are only supported")
+            || detail.starts_with("Unknown key type: ")
+            || detail == "Unsupported key type.";
+        return !unsupported;
+    }
+    if let Some(detail) = err
+        .message
+        .strip_prefix("certificate is not valid DER X.509: ")
+    {
+        return detail != BIT_STRING_OID_TEXT && !detail.starts_with(UNSUPPORTED_TAG_TEXT);
+    }
+    false
+}
 /// Port of pyca `Name.rfc4514_string()`: RDNs reversed, '+' within an RDN, short names only
 /// for CN L ST O OU C STREET DC UID (else dotted OID), `_escape_dn_value` escaping
 /// (`\ " + , ; < >`, NUL → `\00`, leading `#`/space and trailing space), non-string
-/// values as `#hex`. NOT x509-cert's Display.
+/// values (an x500UniqueIdentifier BIT STRING: its raw content) as `#hex` ("" when empty).
+/// NOT x509-cert's Display.
 pub fn rfc4514_string(name_der: &[u8]) -> Result<String> {
     let rdns = decode_name(name_der).map_err(|detail| {
         ConsoleError::key_parse(format!("name is not a valid DER X.509 Name: {detail}"))
@@ -91,16 +124,26 @@ pub fn rfc4514_string(name_der: &[u8]) -> Result<String> {
 }
 /// `key info` rows for a certificate: ("subject", rfc4514), ("issuer", rfc4514),
 /// ("serial", lower-case hex without leading zeros, "0" for zero), ("not valid before",
-/// "YYYY-MM-DDTHH:MM:SS+00:00"), ("not valid after", same) — via x509-cert
-/// `Time::to_date_time`.
+/// "YYYY-MM-DDTHH:MM:SS+00:00"), ("not valid after", same). Certificates are read by a
+/// strict DER walker with pyca's load-time checks (minimal INTEGERs, DER UTCTime /
+/// GeneralizedTime, Name value alphabets), not x509-cert (whose const-oid rejects OIDs pyca
+/// reads); an undecodable Name value → KeyParse "certificate is not valid DER X.509: {pyca
+/// text}" and a GeneralizedTime in year 0 (which pyca loads) → "… X.509: year 0 is out of
+/// range" (Python's datetime text; c2 crashed lazily in both cases, §11 D12(b)).
 pub fn certificate_details(cert_der: &[u8]) -> Result<Vec<(String, String)>> {
     let facts = TextFacts::of(cert_der)?;
     Ok(vec![
         ("subject".to_owned(), facts.subject),
         ("issuer".to_owned(), facts.issuer),
         ("serial".to_owned(), facts.serial),
-        ("not valid before".to_owned(), facts.not_before),
-        ("not valid after".to_owned(), facts.not_after),
+        (
+            "not valid before".to_owned(),
+            facts.not_before.iso().map_err(invalid_cert)?,
+        ),
+        (
+            "not valid after".to_owned(),
+            facts.not_after.iso().map_err(invalid_cert)?,
+        ),
     ])
 }
 /// KeyInfo.attributes of a certificate on the PKCS#11 read path (c2 provider.py):
@@ -124,11 +167,11 @@ pub fn memory_cert_attributes(cert_der: &[u8]) -> Result<BTreeMap<String, AttrVa
         ("serial_number".to_owned(), AttrValue::Str(facts.serial)),
         (
             "not_valid_before".to_owned(),
-            AttrValue::Str(facts.not_before),
+            AttrValue::Str(facts.not_before.iso().map_err(invalid_cert)?),
         ),
         (
             "not_valid_after".to_owned(),
-            AttrValue::Str(facts.not_after),
+            AttrValue::Str(facts.not_after.iso().map_err(invalid_cert)?),
         ),
     ]))
 }
@@ -141,8 +184,8 @@ struct TextFacts {
     subject: String,
     issuer: String,
     serial: String,
-    not_before: String,
-    not_after: String,
+    not_before: DerTime,
+    not_after: DerTime,
 }
 
 impl TextFacts {
@@ -157,8 +200,8 @@ impl TextFacts {
             subject: name_text(cert.subject)?,
             issuer: name_text(cert.issuer)?,
             serial: py_int_hex(serial.content),
-            not_before: cert.not_before.iso(),
-            not_after: cert.not_after.iso(),
+            not_before: cert.not_before,
+            not_after: cert.not_after,
         })
     }
 }
@@ -174,9 +217,38 @@ fn invalid_public_key(what: &str, detail: &str) -> ConsoleError {
 /// The embedded SPKI of a certificate / CSR as a normalized OpenSSL key (pyca
 /// `public_key()`); failures → "{what} contains an invalid public key: {detail}".
 pub(crate) fn cert_public_key(spki_der: &[u8], what: &str) -> Result<PKey<openssl::pkey::Public>> {
-    let pkey = PKey::public_key_from_der(spki_der)
-        .map_err(|err| invalid_public_key(what, &ossl_detail(&err)))?;
+    check_key_der(spki_der).map_err(|detail| invalid_public_key(what, &detail))?;
+    let pkey = PKey::public_key_from_der(spki_der).map_err(|err| {
+        let detail = unknown_key_type(spki_der).unwrap_or_else(|| ossl_detail(&err));
+        invalid_public_key(what, &detail)
+    })?;
     normalize_public(pkey).map_err(|detail| invalid_public_key(what, &detail))
+}
+
+/// SPKI algorithm OIDs pyca's `parse_public_key` knows (RSA, RSA-PSS, EC, X25519, X448,
+/// Ed25519, Ed448, DSA, DH): any other OID is pyca's UnsupportedAlgorithm "Unknown key type".
+const KNOWN_KEY_OIDS: [&[u8]; 10] = [
+    OID_RSA,
+    OID_RSA_PSS,
+    &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01],
+    &[0x2b, 0x65, 0x6e],
+    &[0x2b, 0x65, 0x6f],
+    &[0x2b, 0x65, 0x70],
+    &[0x2b, 0x65, 0x71],
+    &[0x2a, 0x86, 0x48, 0xce, 0x38, 0x04, 0x01],
+    &[0x2a, 0x86, 0x48, 0xce, 0x3e, 0x02, 0x01],
+    &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x03, 0x01],
+];
+
+/// pyca's "Unknown key type: {oid}" for an SPKI whose algorithm OID pyca does not know.
+fn unknown_key_type(spki_der: &[u8]) -> Option<String> {
+    let (seq, _) = read_tlv(spki_der).ok()?;
+    let (alg, _) = read_tlv(seq.content).ok()?;
+    let (oid, _) = read_tlv(alg.content).ok()?;
+    if oid.tag != 0x06 || KNOWN_KEY_OIDS.contains(&oid.content) {
+        return None;
+    }
+    Some(format!("Unknown key type: {}", oid_dotted(oid.content)?))
 }
 
 /// Python `format(n, "x")` of a DER INTEGER content (two's complement, big-endian).
@@ -217,12 +289,17 @@ pub(crate) struct DerTime {
 }
 
 impl DerTime {
-    /// pyca `not_valid_*_utc.isoformat()`: "YYYY-MM-DDTHH:MM:SS+00:00".
-    fn iso(&self) -> String {
-        format!(
+    /// pyca `not_valid_*_utc.isoformat()`: "YYYY-MM-DDTHH:MM:SS+00:00". A GeneralizedTime
+    /// in year 0 loads in pyca, but Python's `datetime` refuses it (c2 crashed in
+    /// `certificate_details`; §11 D12(b)).
+    fn iso(&self) -> std::result::Result<String, String> {
+        if self.year == 0 {
+            return Err("year 0 is out of range".to_owned());
+        }
+        Ok(format!(
             "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}+00:00",
             self.year, self.month, self.day, self.hour, self.minute, self.second
-        )
+        ))
     }
 
     /// UTCTime "YYMMDDHHMMSSZ" (RFC 5280: 50..=99 → 19xx) or GeneralizedTime
@@ -385,9 +462,15 @@ pub(crate) fn load_certificate(der: &[u8]) -> std::result::Result<CertParts<'_>,
     })
 }
 
+/// The parts of a CSR r2 reads (raw TLVs of the original encoding).
+pub(crate) struct CsrParts<'a> {
+    pub(crate) subject: &'a [u8],
+    pub(crate) spki: &'a [u8],
+}
+
 /// Strict DER CSR load (pyca `load_der_x509_csr`): CertificationRequest { info { version,
 /// subject, SPKI, [0] attributes }, AlgorithmIdentifier, BIT STRING }, Name values checked.
-pub(crate) fn load_csr(der: &[u8]) -> std::result::Result<(), String> {
+pub(crate) fn load_csr(der: &[u8]) -> std::result::Result<CsrParts<'_>, String> {
     let (req, rest) = expect(der, 0x30)?;
     no_extra(rest)?;
     let (info, rest) = expect(req.content, 0x30)?;
@@ -403,16 +486,128 @@ pub(crate) fn load_csr(der: &[u8]) -> std::result::Result<(), String> {
     let (_attributes, rest) = expect(rest, 0xa0)?;
     no_extra(rest)?;
     validate_name_load(subject.raw)?;
-    check_spki(spki.raw)
+    check_spki(spki.raw)?;
+    Ok(CsrParts {
+        subject: subject.raw,
+        spki: spki.raw,
+    })
 }
 
-/// First CN of a DER Name, decoded as pyca does (None when absent or undecodable).
-pub(crate) fn first_common_name(name_der: &[u8]) -> Option<String> {
-    let rdns = decode_name(name_der).ok()?;
-    rdns.iter()
+// ---------------------------------------------------------------------------------------
+// Strict DER for key structures (pyca parses keys with rust-asn1: DER only)
+// ---------------------------------------------------------------------------------------
+
+/// rsaEncryption (1.2.840.113549.1.1.1) and id-RSASSA-PSS (1.2.840.113549.1.1.10): the SPKI
+/// BIT STRING holds a DER RSAPublicKey that pyca parses too.
+const OID_RSA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
+const OID_RSA_PSS: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a];
+
+/// pyca's DER strictness for key material, checked before any OpenSSL key decoder (whose
+/// d2i accepts trailing bytes and BER lengths): exactly one TLV, definite minimal lengths,
+/// nothing after it, constructed values walked recursively (only SEQUENCE / SET among the
+/// universal tags), minimal INTEGERs, DER BOOLEAN / NULL / BIT STRING / OID forms; the DER
+/// nested in a PKCS#8 privateKey OCTET STRING and in an RSA SPKI's BIT STRING is checked the
+/// same way. `Err` = the detail text (§11 D11).
+pub(crate) fn check_key_der(data: &[u8]) -> std::result::Result<(), String> {
+    let (tlv, rest) = read_tlv(data)?;
+    no_extra(rest)?;
+    check_der_value(&tlv, 0)?;
+    if tlv.tag != 0x30 {
+        return Ok(());
+    }
+    let items = sequence_items(tlv.content)?;
+    // PrivateKeyInfo / OneAsymmetricKey: INTEGER, AlgorithmIdentifier, OCTET STRING, …
+    if let [version, alg, private, ..] = items.as_slice()
+        && version.tag == 0x02
+        && alg.tag == 0x30
+        && private.tag == 0x04
+    {
+        let (inner, rest) = read_tlv(private.content)?;
+        no_extra(rest)?;
+        check_der_value(&inner, 0)?;
+    }
+    // SubjectPublicKeyInfo of an RSA key: AlgorithmIdentifier, BIT STRING { RSAPublicKey }
+    if let [alg, bits] = items.as_slice()
+        && alg.tag == 0x30
+        && bits.tag == 0x03
+        && let Ok((oid, _)) = read_tlv(alg.content)
+        && oid.tag == 0x06
+        && (oid.content == OID_RSA || oid.content == OID_RSA_PSS)
+    {
+        let key = bits.content.get(1..).unwrap_or_default();
+        let (inner, rest) = read_tlv(key)?;
+        no_extra(rest)?;
+        check_der_value(&inner, 0)?;
+    }
+    Ok(())
+}
+
+fn sequence_items(mut input: &[u8]) -> std::result::Result<Vec<Tlv<'_>>, String> {
+    let mut items = Vec::new();
+    while !input.is_empty() {
+        let (tlv, rest) = read_tlv(input)?;
+        items.push(tlv);
+        input = rest;
+    }
+    Ok(items)
+}
+
+fn check_der_value(tlv: &Tlv<'_>, depth: usize) -> std::result::Result<(), String> {
+    if depth > 32 {
+        return Err(ASN1_ERR.to_owned());
+    }
+    let constructed = tlv.tag & 0x20 != 0;
+    let universal = tlv.tag >> 6 == 0;
+    if constructed {
+        if universal && tlv.tag != 0x30 && tlv.tag != 0x31 {
+            return Err(ASN1_ERR.to_owned());
+        }
+        for item in sequence_items(tlv.content)? {
+            check_der_value(&item, depth + 1)?;
+        }
+        return Ok(());
+    }
+    if !universal {
+        return Ok(());
+    }
+    let c = tlv.content;
+    let ok = match tlv.tag {
+        0x01 => c == [0x00] || c == [0xff],
+        0x02 => check_integer(tlv).is_ok(),
+        0x03 => match c.split_first() {
+            None => false,
+            Some((unused, bits)) => {
+                *unused <= 7
+                    && (bits.is_empty() && *unused == 0
+                        || bits
+                            .last()
+                            .is_some_and(|last| last & ((1u8 << *unused) - 1) == 0))
+            }
+        },
+        0x05 => c.is_empty(),
+        0x06 => oid_dotted(c).is_some(),
+        _ => true,
+    };
+    if ok { Ok(()) } else { Err(ASN1_ERR.to_owned()) }
+}
+
+/// c2 `_subject_cn`: the first CN of a DER Name, decoded as pyca does (the whole Name is
+/// decoded, so an undecodable value anywhere fails with pyca's text — c2 crashed there).
+pub(crate) fn subject_common_name(name_der: &[u8]) -> std::result::Result<Option<String>, String> {
+    let rdns = decode_name(name_der)?;
+    Ok(rdns
+        .iter()
         .flatten()
-        .find(|attr| attr.oid == OID_CN)
-        .map(|attr| attr.value.clone())
+        .filter(|attr| attr.oid == OID_CN)
+        .find_map(|attr| match &attr.value {
+            NameValue::Str(text) => Some(text.clone()),
+            NameValue::Bytes(_) => None,
+        }))
+}
+
+/// The first CN, or None when absent or the Name is undecodable.
+pub(crate) fn first_common_name(name_der: &[u8]) -> Option<String> {
+    subject_common_name(name_der).ok().flatten()
 }
 
 // ---------------------------------------------------------------------------------------
@@ -476,10 +671,18 @@ pub(crate) fn read_tlv(input: &[u8]) -> std::result::Result<(Tlv<'_>, &[u8]), St
     ))
 }
 
-/// A decoded name attribute: OID content bytes + pyca's `str` value.
+/// A decoded name attribute value: pyca's `str`, or `bytes` (an x500UniqueIdentifier
+/// BIT STRING, whose value is the raw content including the unused-bits octet).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum NameValue {
+    Str(String),
+    Bytes(Vec<u8>),
+}
+
+/// A decoded name attribute: OID content bytes + pyca's value.
 pub(crate) struct NameAttr {
     pub(crate) oid: Vec<u8>,
-    pub(crate) value: String,
+    pub(crate) value: NameValue,
 }
 
 /// The raw structure: RDNs (DER order) of (OID content, value TLV) pairs.
@@ -604,9 +807,19 @@ fn decode_universal(content: &[u8]) -> Option<String> {
         .collect()
 }
 
+/// DER content of the x500UniqueIdentifier OID (2.5.4.45), the one OID pyca accepts with a
+/// BIT STRING value.
+const OID_UNIQUE_IDENTIFIER: &[u8] = &[0x55, 0x04, 0x2d];
+/// pyca's TypeError for a BIT STRING value under any other OID (c2 crashed there).
+pub(crate) const BIT_STRING_OID_TEXT: &str =
+    "oid must be X500_UNIQUE_IDENTIFIER for BitString type.";
+/// r2's text for a value tag outside pyca's `_ASN1Type` (c2 KeyError, a crash).
+pub(crate) const UNSUPPORTED_TAG_TEXT: &str = "unsupported name attribute value tag ";
+
 /// Decode a DER Name the way pyca's `Name.from_bytes` / `cert.subject` does: values become
-/// `str` (BMP/Universal strings by their encodings, every other string type as UTF-8); a
-/// BitString, a tag outside pyca's `_ASN1Type`, an empty RDN or a duplicate attribute in an
+/// `str` (BMP/Universal strings by their encodings, every other string type as UTF-8), an
+/// x500UniqueIdentifier BIT STRING becomes `bytes` (its raw content); a BitString under any
+/// other OID, a tag outside pyca's `_ASN1Type`, an empty RDN or a duplicate attribute in an
 /// RDN fails with pyca's text.
 pub(crate) fn decode_name(der: &[u8]) -> std::result::Result<Vec<Vec<NameAttr>>, String> {
     validate_name_load(der)?;
@@ -615,22 +828,25 @@ pub(crate) fn decode_name(der: &[u8]) -> std::result::Result<Vec<Vec<NameAttr>>,
     for rdn in raw {
         let mut attrs: Vec<NameAttr> = Vec::with_capacity(rdn.len());
         for (oid, value) in rdn {
-            let text = match value.tag {
-                0x03 => {
-                    return Err("oid must be X500_UNIQUE_IDENTIFIER for BitString type.".to_owned());
+            let value = match value.tag {
+                0x03 if oid == OID_UNIQUE_IDENTIFIER => NameValue::Bytes(value.content.to_vec()),
+                0x03 => return Err(BIT_STRING_OID_TEXT.to_owned()),
+                0x1e => {
+                    NameValue::Str(decode_bmp(value.content).ok_or_else(|| ASN1_ERR.to_owned())?)
                 }
-                0x1e => decode_bmp(value.content).ok_or_else(|| ASN1_ERR.to_owned())?,
-                0x1c => decode_universal(value.content).ok_or_else(|| ASN1_ERR.to_owned())?,
-                0x04 | 0x0c | 0x12 | 0x13 | 0x14 | 0x16 | 0x17 | 0x18 | 0x1a => {
+                0x1c => NameValue::Str(
+                    decode_universal(value.content).ok_or_else(|| ASN1_ERR.to_owned())?,
+                ),
+                0x04 | 0x0c | 0x12 | 0x13 | 0x14 | 0x16 | 0x17 | 0x18 | 0x1a => NameValue::Str(
                     std::str::from_utf8(value.content)
                         .map_err(|_| ASN1_ERR.to_owned())?
-                        .to_owned()
-                }
-                other => return Err(format!("unsupported name attribute value tag {other}")),
+                        .to_owned(),
+                ),
+                other => return Err(format!("{UNSUPPORTED_TAG_TEXT}{other}")),
             };
             attrs.push(NameAttr {
                 oid: oid.to_vec(),
-                value: text,
+                value,
             });
         }
         if attrs.is_empty() {
@@ -681,7 +897,13 @@ fn format_rfc4514(rdns: &[Vec<NameAttr>]) -> String {
                             || oid_dotted(&attr.oid).unwrap_or_default(),
                             |(name, _)| (*name).to_owned(),
                         );
-                    format!("{name}={}", escape_dn_value(&attr.value))
+                    let value = match &attr.value {
+                        NameValue::Str(text) => escape_dn_value(text),
+                        // pyca `_escape_dn_value`: "" for an empty value, else "#" + hex.
+                        NameValue::Bytes(bytes) if bytes.is_empty() => String::new(),
+                        NameValue::Bytes(bytes) => format!("#{}", hex::encode(bytes)),
+                    };
+                    format!("{name}={value}")
                 })
                 .collect::<Vec<_>>()
                 .join("+")

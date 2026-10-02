@@ -188,7 +188,7 @@ pub fn build_csr(
 }
 
 /// PEM text: BEGIN line, base64 at 64 columns, END line, LF endings (pyca/OpenSSL layout).
-fn pem_encode(der: &[u8], label: &str) -> Vec<u8> {
+pub(crate) fn pem_encode(der: &[u8], label: &str) -> Vec<u8> {
     let body = STANDARD.encode(der);
     let mut out = format!("-----BEGIN {label}-----\n");
     for chunk in body.as_bytes().chunks(64) {
@@ -319,7 +319,8 @@ fn pyca_private_class(key: &PKey<Private>) -> &'static str {
     }
 }
 
-/// pyca `load_der_x509_certificate` (strict) as an OpenSSL certificate.
+/// pyca `load_der_x509_certificate` (strict) as an OpenSSL certificate; OpenSSL may refuse
+/// Name encodings pyca loads (§11 D24).
 fn load_x509(der: &[u8]) -> std::result::Result<X509, String> {
     x509info::load_certificate(der)?;
     X509::from_der(der).map_err(|err| ossl_detail(&err))

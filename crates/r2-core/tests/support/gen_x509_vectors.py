@@ -62,10 +62,16 @@ def name(rdns: list[list[tuple[bytes, bytes]]]) -> bytes:
 CN = bytes.fromhex("0603550403")
 O = bytes.fromhex("060355040a")
 UNK = bytes.fromhex("06032a0304")
-UID = bytes.fromhex("0603550445")
+UID = bytes.fromhex("060355042d")  # x500UniqueIdentifier (2.5.4.45)
+OID_2_5_4_69 = bytes.fromhex("0603550445")
 EMAIL = bytes.fromhex("06092a864886f70d010901")
 NAMES = {
     "bitstring_uid": name([[(UID, tlv(3, b"\x00\xab\xcd"))]]),
+    "bitstring_uid_odd": name([[(UID, tlv(3, b"\x01\x02"))]]),
+    "bitstring_uid_empty": name([[(UID, tlv(3, b""))]]),
+    "bitstring_uid_and_cn": name([[(CN, tlv(12, b"x"))], [(UID, tlv(3, b"\x00\xab"))]]),
+    "bitstring_other_oid": name([[(OID_2_5_4_69, tlv(3, b"\x00\xab\xcd"))]]),
+    "bitstring_cn": name([[(CN, tlv(3, b"\x00ab"))]]),
     "octet": name([[(CN, tlv(4, b"abc"))]]),
     "seq": name([[(CN, tlv(0x30, b""))]]),
     "utf8bad": name([[(CN, tlv(12, b"\xff"))]]),

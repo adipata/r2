@@ -2,7 +2,6 @@
 //! of c2 keyexport's pyca serializers (`_serialize_private`, `_serialize_spki`,
 //! `_load_certificate`, `_cert_spki`).
 use openssl::symm::Cipher;
-use openssl::x509::X509;
 use secrecy::{ExposeSecret, SecretString};
 use zeroize::Zeroizing;
 
@@ -105,9 +104,10 @@ pub fn certificate_bytes(cert_der: &[u8], encoding: Encoding) -> Result<Vec<u8>>
     if encoding == Encoding::Der {
         return Ok(cert_der.to_vec());
     }
-    let cert = load_exported_certificate(cert_der)?;
-    cert.to_pem()
-        .map_err(|err| invalid_exported_cert(&ossl_detail(&err)))
+    // c2 `_load_certificate` (pyca's strict load) then `public_bytes(PEM)`: the DER as
+    // loaded, PEM-wrapped (OpenSSL's X509 decoder refuses Name encodings pyca loads).
+    x509info::load_certificate(cert_der).map_err(|d| invalid_exported_cert(&d))?;
+    Ok(crate::x509build::pem_encode(cert_der, "CERTIFICATE"))
 }
 /// SPKI of a DER certificate (c2 keyexport `_cert_spki`). Errors → KeyParse "exported
 /// certificate is not valid DER X.509: {detail}" / "certificate contains an invalid public
@@ -147,10 +147,4 @@ fn invalid_exported_cert(detail: &str) -> ConsoleError {
     ConsoleError::key_parse(format!(
         "exported certificate is not valid DER X.509: {detail}"
     ))
-}
-
-/// c2 `_load_certificate`: pyca's strict load, as an OpenSSL certificate.
-fn load_exported_certificate(cert_der: &[u8]) -> Result<X509> {
-    x509info::load_certificate(cert_der).map_err(|d| invalid_exported_cert(&d))?;
-    X509::from_der(cert_der).map_err(|err| invalid_exported_cert(&ossl_detail(&err)))
 }
