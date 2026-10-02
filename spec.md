@@ -2861,11 +2861,12 @@ use r2_core::error::ConsoleError;
 
 use crate::backend::BackendError;
 
-/// Implements the §5.2 table (names via `catalog::ckr_name`). `token_label` = the label in
-/// the CKR_PIN_* texts: callers pass the logged-in token's label (or the token being
-/// logged in to); None renders "?" (c2's default). The CALLER logs
-/// "{provider}: {context} failed with {CKR}" at INFO (it knows the provider name).
-pub(crate) fn translate(err: BackendError, context: &str, token_label: Option<&str>) -> ConsoleError { .. }
+/// Implements the §5.2 table (names via `catalog::ckr_name`). `provider` = the provider
+/// instance name (the ``login <provider>`` / ``slots <provider>`` texts of the table).
+/// `token_label` = the label in the CKR_PIN_* texts: callers pass the logged-in token's
+/// label (or the token being logged in to); None renders "?" (c2's default). The CALLER
+/// logs "{provider}: {context} failed with {CKR}" at INFO.
+pub(crate) fn translate(err: BackendError, provider: &str, context: &str, token_label: Option<&str>) -> ConsoleError { .. }
 ```
 
 `Backend::initialize` reports any `C_Initialize` CKR other than

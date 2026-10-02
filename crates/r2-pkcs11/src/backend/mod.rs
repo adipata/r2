@@ -1,6 +1,5 @@
-#![allow(dead_code)]
-// R0 skeleton — owner R5a (generated from spec §4)
-// ---- spec §4.5.6 block 0
+//! The PKCS#11 backend seam (spec §4.5.6; crate-private, owner R5a): raw-shaped and
+//! r2-owned, implemented by CryptokiBackend (real) and FakeBackend (tests).
 use secrecy::SecretString;
 use zeroize::Zeroizing;
 
