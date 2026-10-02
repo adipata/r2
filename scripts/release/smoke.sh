@@ -7,9 +7,12 @@
 # 1. `--version` prints exactly `r2 <version>` (default: the workspace version).
 # 2. A piped `help` / `providers` / `exit` session exits 0, shows the banner, the help
 #    table and the providers table with the built-in `mem` memory provider, and no error.
-# 3. Legacy provider compiled in (spec §9): with OPENSSL_MODULES and OPENSSL_CONF pointing
-#    nowhere, a piped session loads fixtures/legacy-rc2-3des.p12 (RC2-40 certificate bag,
-#    3DES key bag, SHA-1 MAC; `openssl pkcs12 -export -legacy`) into `mem`.
+# 3. Vendored OpenSSL cipher set (spec §9): with OPENSSL_MODULES and OPENSSL_CONF pointing
+#    nowhere, a piped session loads into `mem` (as c2/pyca do; password `r2-smoke`):
+#    fixtures/legacy-rc2-3des.p12 (RC2-40 certificate bag, 3DES key bag, SHA-1 MAC;
+#    `openssl pkcs12 -export -legacy`: the legacy provider is compiled in),
+#    fixtures/pbes2-camellia.p12 and fixtures/pbes2-seed.p12 (PBES2/PBKDF2 bags with
+#    CAMELLIA-256-CBC / SEED-CBC: OpenSSL's default ciphers, which openssl-src alone omits).
 #
 # Sessions run in a scratch HOME/XDG/APPDATA so no user config, history or log is used or
 # written, with R2_CONFIG and SOFTHSM2_LIB unset.
@@ -30,7 +33,7 @@ binary="$(cd "$(dirname "$binary")" && pwd)/$(basename "$binary")"
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 mkdir -p "$scratch/home" "$scratch/work"
-cp "$here/fixtures/legacy-rc2-3des.p12" "$scratch/work/"
+cp "$here/fixtures/"*.p12 "$scratch/work/"
 
 # GNU timeout when present (not on stock macOS; the workflow job has its own timeout).
 run_limited() {
@@ -106,14 +109,20 @@ expect "$scratch/session.out" "providers table: mem/memory" "^[[:space:]]*mem[[:
 expect "$scratch/session.out" "exit echoed" "r2> exit"
 no_errors "$scratch/session.out"
 
-# 3. legacy provider compiled in --------------------------------------------------------------
-printf 'load mem --file legacy-rc2-3des.p12 --password r2-smoke\nkeys mem\nexit\n' > "$scratch/legacy.in"
+# 3. vendored OpenSSL: legacy provider compiled in, default cipher set -----------------------
+{
+    for fixture in legacy-rc2-3des pbes2-camellia pbes2-seed; do
+        printf 'load mem --file %s.p12 --password r2-smoke\n' "$fixture"
+    done
+    printf 'keys mem\nexit\n'
+} > "$scratch/legacy.in"
 status="$(session "$scratch/legacy.in" "$scratch/legacy.out" \
     OPENSSL_MODULES="$scratch/no-such-modules-dir" OPENSSL_CONF="$scratch/no-such-openssl.cnf")"
-[[ "$status" == 0 ]] || { cat "$scratch/legacy.out" >&2; fail "legacy session exited with status $status"; }
-expect "$scratch/legacy.out" "legacy PKCS#12 loaded" "loaded into mem"
-expect "$scratch/legacy.out" "private key listed" "mem:r2-legacy-smoke:priv[[:space:]]+private[[:space:]]+ec"
-expect "$scratch/legacy.out" "certificate listed" "mem:r2-legacy-smoke:cert[[:space:]]+cert[[:space:]]+ec"
+[[ "$status" == 0 ]] || { cat "$scratch/legacy.out" >&2; fail "PKCS#12 session exited with status $status"; }
+for label in r2-legacy-smoke r2-camellia-smoke r2-seed-smoke; do
+    expect "$scratch/legacy.out" "$label: private key loaded" "mem:$label:priv[[:space:]]+private[[:space:]]+ec"
+    expect "$scratch/legacy.out" "$label: certificate loaded" "mem:$label:cert[[:space:]]+cert[[:space:]]+ec"
+done
 no_errors "$scratch/legacy.out"
 
 echo "smoke: $binary passed"

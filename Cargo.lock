@@ -983,6 +983,7 @@ dependencies = [
  "hex",
  "indexmap",
  "openssl",
+ "openssl-src",
  "r2-testkit",
  "secrecy",
  "spki",

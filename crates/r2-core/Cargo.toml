@@ -11,8 +11,10 @@ workspace = true
 
 [features]
 softhsm = []
-# spec §9 (owner R12): openssl-src 300.x, `no-shared no-module`, `legacy` compiled in.
-vendored-openssl = ["openssl/vendored"]
+# spec §9 (owner R12): openssl-src 300.x, `no-shared no-module`, `legacy` compiled in, with
+# OpenSSL's default camellia/idea/seed ciphers (the build-dependency below unifies with
+# openssl-sys's own openssl-src build-dependency).
+vendored-openssl = ["openssl/vendored", "dep:openssl-src"]
 
 [dependencies]
 openssl = { workspace = true }
@@ -28,6 +30,10 @@ base64 = { workspace = true }
 comfy-table = { workspace = true }
 anstyle = { workspace = true }
 tracing = { workspace = true }
+
+# spec §9 (owner R12): only for the features above; r2-core has no build script.
+[build-dependencies]
+openssl-src = { workspace = true, optional = true }
 
 [dev-dependencies]
 r2-testkit = { workspace = true }

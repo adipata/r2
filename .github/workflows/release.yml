@@ -79,16 +79,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain (rust-toolchain.toml)
         run: rustup toolchain install && rustup target add "$TARGET" && cargo --version
-      - name: Install zig + cargo-zigbuild (Linux)
+      - name: Install zig + cargo-zigbuild (Linux; both from PyPI, pinned)
         if: runner.os == 'Linux'
         run: |
           python3 -m venv "$RUNNER_TEMP/zig"
-          "$RUNNER_TEMP/zig/bin/pip" install --quiet "ziglang==$ZIGLANG_VERSION"
+          "$RUNNER_TEMP/zig/bin/pip" install --quiet \
+            "cargo-zigbuild==$CARGO_ZIGBUILD_VERSION" "ziglang==$ZIGLANG_VERSION"
           echo "$RUNNER_TEMP/zig/bin" >> "$GITHUB_PATH"
-      - uses: taiki-e/install-action@v2
-        if: runner.os == 'Linux'
-        with:
-          tool: cargo-zigbuild@${{ env.CARGO_ZIGBUILD_VERSION }}
       - name: Native Perl for openssl-src (Windows)
         if: runner.os == 'Windows'
         run: printf '%s\n' 'OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe' >> "$GITHUB_ENV"
@@ -101,7 +98,7 @@ jobs:
           echo "BIN=$bin" >> "$GITHUB_ENV"
       - name: Check the binary (OpenSSL static >= 3.2; Linux glibc <= 2.28)
         run: scripts/release/check-binary.sh "$BIN" "$TARGET"
-      - name: Smoke test (--version, piped help/providers/exit, legacy PKCS#12)
+      - name: Smoke test (--version, piped help/providers/exit, PKCS#12 fixtures)
         run: scripts/release/smoke.sh "$BIN" "$VERSION"
       - name: Package
         run: scripts/release/package.sh "$BIN" "$TARGET" "$VERSION" dist
