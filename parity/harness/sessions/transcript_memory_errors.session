@@ -1,5 +1,6 @@
 ## Error messages, hints and parse carets on the memory provider (spec §8: errors and
 ## hints are compared verbatim after glyph normalization).
+## secret: pw-one pw-two
 frobnicate
 help frob
 keys nosuchprovider

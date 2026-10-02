@@ -3,12 +3,18 @@
 Both tools run the same piped session. Before comparing, every difference the spec
 records as a deviation (§11) or as non-TTY noise is normalized away, nothing else:
 
-- Input echo. Neither tool's echo of what was typed is output of a command, and c2's is
-  prompt_toolkit's non-TTY rendering (``Warning: Input is not a terminal (fd=0).``, the
-  doubled ``c2> cmd<pad>c2> cmd`` echo wrapped at 80 columns, padding lines, the ``*``
-  run after a hidden-input prompt, §11 D20): every c2 line carrying a carriage return is
-  echo; r2 (PlainIo, §11 D2) prints each prompt followed by the line it read (nothing for
-  hidden input), matched in order against the session's input lines. Both are dropped.
+- Input echo. What was typed is not command output, but the PROMPT it answered is: each
+  echo is replaced by a ``PROMPT: <prompt><answer>`` line in place, and the prompt lines
+  are compared like any other line. c2's echo is prompt_toolkit's non-TTY rendering
+  (``Warning: Input is not a terminal (fd=0).``, the doubled ``<prompt><answer><pad>
+  <prompt><answer>`` copy ending in a carriage return, padding lines, wraps at 80
+  columns, §11 D2): the doubled copy is reduced to one; c2 lines carrying a carriage
+  return that are not a clean doubled copy are the REPL command echo mangled by the
+  80-column wrap and are dropped (the REPL prompt is the tool name, the command is the
+  input). r2 (PlainIo, §11 D2) prints each prompt followed by the line it read, matched in
+  order against the session's input lines. A hidden-input answer (the session's
+  ``## secret:`` values) is shown as c2's ``*`` run on both sides; r2 echoes nothing after
+  a hidden prompt (§11 D20). The REPL prompt (``c2> ``/``r2> ``) echo is dropped.
 - The tool name (§11 D7): ``c2`` → ``r2`` as a word (banner, ``c2.yaml``, ``c2.log``,
   messages naming the tool); hex dump lines are left alone.
 - Table and panel glyphs (§11 D1): box-drawing characters become spaces, runs of
@@ -33,6 +39,9 @@ _TOOL_RE = re.compile(r"\bc2\b")
 _HANDLE_RE = re.compile(r"^handle \d+$")
 _ROW_RE = re.compile(r"^[a-z][a-z0-9_-]*:\S+ ")
 _PROMPT_ENDS = (": ", "? ", "] ", "> ", "| ")
+_DOUBLED_RE = re.compile(r" *(\S.*?) +\1 *")
+_C2_WRAP_RE = re.compile(r"\r {79}(.)\r\n")
+PROMPT = "PROMPT: "
 
 
 def _is_echo(line: str, want: str) -> bool:
@@ -43,38 +52,93 @@ def _is_echo(line: str, want: str) -> bool:
     return prefix.endswith(_PROMPT_ENDS)
 
 
-def _drop_r2_echo(lines: list[str], inputs: list[str]) -> list[str]:
+def _r2_echo(lines: list[str], inputs: list[str], secrets: set[str]) -> list[str]:
+    """r2's echo lines replaced by ``PROMPT:`` lines (REPL prompt echoes dropped)."""
     out: list[str] = []
     i = 0
     for line in lines:
         if i < len(inputs):
             want = inputs[i]
-            if _is_echo(line, want):
+            if want in secrets:
+                # hidden input (PIN/password): the prompt alone, nothing echoed (§11 D20);
+                # an echoed secret is NOT an echo and stays in the transcript as a diff
+                if line.endswith(_PROMPT_ENDS) and not (want and want in line):
+                    out.append(PROMPT + line + "*" * len(want))
+                    i += 1
+                    continue
+            elif _is_echo(line, want):
+                prompt = line[: len(line) - len(want)]
+                if prompt != "r2> ":
+                    out.append(PROMPT + line)
                 i += 1
                 continue
-            if want and line.endswith(": "):
-                # hidden input (PIN/password): the prompt alone, nothing echoed (§11 D20)
-                i += 1
-                continue
-        elif _is_echo(line, ""):
-            continue  # a prompt answered by end of input
+        elif line == "r2> ":
+            continue  # the REPL prompt answered by end of input
         out.append(line)
     return out
 
 
+def _c2_echo(lines: list[str]) -> list[str]:
+    """c2's prompt_toolkit echo reduced to ``PROMPT:`` lines (REPL echoes dropped).
+
+    A clean echo is one line ``<echo><pad><echo>\\r``. prompt_toolkit may also render an
+    answer incrementally (a partial copy, then the full one on a later line, each ending
+    in a carriage return) or wrap it at 80 columns; such a run of carriage-return lines is
+    a group: dropped when it is the REPL command echo (any piece starts with ``c2>``),
+    reduced to its final copy when every earlier piece is a prefix of it (the partial
+    renders, at whatever point the read was split), and otherwise kept verbatim
+    as ``PROMPT?:`` lines so that it shows up in the diff instead of passing silently.
+    """
+    out: list[str] = []
+    group: list[str] = []
+
+    def flush() -> None:
+        if group and not any(piece.startswith("c2>") for piece in group):
+            if len(group) >= 2 and all(group[-1].startswith(piece) for piece in group):
+                out.append(PROMPT + group[-1])
+            else:
+                out.extend("PROMPT?: " + piece for piece in group)
+        group.clear()
+
+    for line in lines:
+        if line.startswith("Warning: Input is not a terminal"):
+            continue
+        if "\r" not in line:
+            flush()
+            out.append(line)
+            continue
+        head = line.split("\r", 1)[0]
+        match = _DOUBLED_RE.fullmatch(head)
+        if match:
+            flush()
+            if not match.group(1).startswith("c2>"):
+                out.append(PROMPT + match.group(1))
+            continue
+        for piece in line.split("\r"):
+            if piece.strip():
+                group.append(piece.strip())
+    flush()
+    return out
+
+
 def normalize(
-    text: str, tool: str, work: str, fixtures: str, inputs: list[str] | None = None
+    text: str,
+    tool: str,
+    work: str,
+    fixtures: str,
+    inputs: list[str] | None = None,
+    secrets: set[str] | None = None,
 ) -> list[str]:
     """Normalized, comparable lines of one tool's stdout."""
-    lines = text.replace("\r\n", "\r\n").split("\n")
     if tool == "c2":
-        lines = [
-            line
-            for line in lines
-            if "\r" not in line and not line.startswith("Warning: Input is not a terminal")
-        ]
+        # prompt_toolkit's 80-column wrap: the 80th cell is written after ``\r`` + 79
+        # blanks, then the line breaks; rejoin it so the doubled echo is one line again
+        text = _C2_WRAP_RE.sub(r"\1", text)
+    lines = text.split("\n")
+    if tool == "c2":
+        lines = _c2_echo(lines)
     else:
-        lines = _drop_r2_echo(lines, inputs or [])
+        lines = _r2_echo(lines, inputs or [], secrets or set())
     out: list[str] = []
     for line in lines:
         line = line.replace(work, "{WORK}").replace(fixtures, "{FIX}")

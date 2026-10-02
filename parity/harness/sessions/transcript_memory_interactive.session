@@ -1,5 +1,6 @@
 ## Interactive flows on the memory provider: mechanism pick lists, parameter prompts,
 ## multiline pastes, password prompts, quoted multi-line tokens and the config views.
+## secret: p12pw wrong pw8
 load mem aes 000102030405060708090a0b0c0d0e0f --label k
 load mem generic 0x0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b --label hmac
 encrypt mem:k

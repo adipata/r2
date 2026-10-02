@@ -18,7 +18,10 @@ python3 parity/harness/run_parity.py --suite token -v   # one suite, print trans
 Options: `--c2-dir` (default `../c2`, or `$C2_DIR`), `--r2-bin` (default
 `$CARGO_TARGET_DIR/debug/r2`, else `target/debug/r2`, or `$R2_BIN`), `--keep` (keep the
 work dir; it is always kept when something differs). `just parity` and the optional `parity`
-CI job run the same command. Exit status 0 means no unlisted difference.
+CI job run the same command. Exit status 0 means no unlisted difference. The CI job checks
+out c2 by its full commit SHA (`408d6f29aa968ad4afcd7888b5958ba4608c902c`); its repository
+is `vars.C2_REPOSITORY` (default `<owner>/c2`), and a private c2 needs a read token in the
+`C2_TOKEN` secret.
 
 ## Suites
 
@@ -34,11 +37,21 @@ The user config file case (`transcript_user_config`) appends `fixtures/user_conf
 
 ## Normalization (`normalize.py`) — the complete list
 
-- **Input echo** (§11 D2, D20): c2 renders each prompt and its answer twice through
-  prompt_toolkit on a pipe (lines carrying `\r`, wrapped at 80 columns, plus `Warning:
-  Input is not a terminal (fd=0).`); r2's PlainIo prints the prompt followed by the line it
-  read (nothing after a hidden-input prompt). Both are dropped; only command output is
-  compared.
+- **Input echo** (§11 D2, D20): what was typed is not output, but the prompt it answered
+  is, so each echo becomes one `PROMPT: <prompt><answer>` line in place and prompt texts
+  are compared like any other line (password, PIN, select, confirm, parameter, `| `
+  multiline and template-editor prompts alike). c2 renders each prompt and its answer
+  twice through prompt_toolkit on a pipe (`<echo><pad><echo>\r`, wrapped at 80 columns,
+  sometimes a partial render first, plus `Warning: Input is not a terminal (fd=0).`): the
+  wrap is rejoined and the copy reduced to one; a carriage-return run that cannot be
+  reduced stays in the diff as `PROMPT?:` lines. r2's PlainIo prints the prompt followed
+  by the line it read, matched in order against the session's inputs. Hidden input is
+  keyed on the session's `## secret:` answers only: c2's `*` run is kept and r2's bare
+  prompt gets the same run (r2 echoes nothing, D20; an r2 line that echoes a secret is a
+  difference). Only the REPL prompt's echo (`c2> <command>` / `r2> <command>`) is
+  dropped. `test_normalize.py` (`python3 -B -m unittest discover -s parity/harness`)
+  proves a changed prompt, an extra output line ending in `: ` and an echoed secret are
+  all reported.
 - **Tool name** (§11 D7): `c2` → `r2` as a word, except inside hex dump lines.
 - **Glyphs** (§11 D1): box-drawing characters become spaces, whitespace runs collapse,
   blank lines are dropped. Both tools run with `COLUMNS=200` (the token suite with 1000, so
@@ -61,7 +74,8 @@ in spec §11 through the §4.11 procedure and only then normalized here.
 
 One input line per line, exactly as typed (template editor answers such as `ok`, select
 answers, pasted PEM lines and the empty line that ends a paste included). `## key: value`
-lines are headers (`same-files`, `config`), other `##` lines are comments.
+lines are headers (`same-files`, `config`, `secret` = the answers typed at hidden-input
+prompts), other `##` lines are comments.
 `{WORK}`/`{FIX}`/`{SRC}` are substituted; a line `{PASTE:<fixture>}` expands to the
 lines of that fixture file. Fixtures in `fixtures/` were generated once with pyca in c2's
 virtualenv (fixed keys, so signatures and exports are deterministic).
@@ -69,11 +83,12 @@ virtualenv (fixed keys, so signatures and exports are deterministic).
 ## Results at R13 sign-off (2026-10-02, SoftHSM 2.6.1)
 
 All suites green, with the debug build (system OpenSSL 3) and with the release dry-run
-binary (vendored OpenSSL 3.6.3, glibc 2.28 zigbuild): `transcript_help` (125 normalized
-lines), `transcript_memory_core` (350 lines, 16 files byte-identical),
-`transcript_memory_errors` (159), `transcript_memory_interactive` (313),
-`transcript_user_config` (167), `interop_memory` (328 lines × 4) and `token_objects`
-(560 lines × 4); `pty_paste_check.py` passes on both binaries.
+binary (vendored OpenSSL 3.6.3, glibc 2.28 zigbuild): `transcript_help`,
+`transcript_memory_core` (16 files byte-identical), `transcript_memory_errors`,
+`transcript_memory_interactive`, `transcript_user_config`, `interop_memory` (× 4) and
+`token_objects` (× 4); `pty_paste_check.py` passes on both binaries. (Line counts are
+printed by each run; they vary slightly with c2's prompt_toolkit render timing and are not
+recorded here.)
 
 Differences found and fixed in r2 during R13:
 

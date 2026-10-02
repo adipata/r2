@@ -8,11 +8,13 @@ equivalent configs (``c2.yaml`` / ``r2.yaml``), compared after ``normalize.norma
 - ``transcript``: memory-provider sessions restricted to deterministic operations; the
   normalized transcripts must be equal line for line, and the files a session lists under
   ``## same-files:`` must be byte-identical between the two tools' work dirs.
-- ``interop``: an export session writes every file format (PKCS#8 plain/encrypted, PKCS#1,
-  SEC1, SPKI, X.509, PKCS#12, CSR, raw secrets, wrapped blobs raw/hex/b64, template YAML,
-  the user config renamed) and an import session loads them. Each tool's export is
-  imported by BOTH tools; the four import transcripts (c2→c2, c2→r2, r2→c2, r2→r2) must be
-  equal.
+- ``interop``: an export session writes every file format ``export`` produces (PKCS#8
+  plain/encrypted PEM+DER, SPKI, X.509 PEM+DER, PKCS#12 incl. on-the-fly self-signed,
+  CSRs, raw secrets, wrapped blobs raw/hex/b64 under KW/KWP/CBC/GCM/OAEP/PKCS1) and an
+  import session loads them. Each tool's export is imported by BOTH tools; the four import
+  transcripts (c2→c2, c2→r2, r2→c2, r2→r2) must be equal. ``key template`` YAML dumps are
+  exchanged by the ``token`` suite (dumped by one tool, re-seeded by the other) and the
+  renamed c2 user config by ``transcript_user_config``.
 - ``token`` (``--softhsm``): both tools share ONE SoftHSM token dir. A create session puts
   objects of every kind on the token, a use session lists, uses, copies, dumps and deletes
   them; the four (creator, user) transcripts must be equal.
@@ -37,9 +39,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unittest
 from dataclasses import dataclass, field
 from pathlib import Path
 
+sys.dont_write_bytecode = True  # no __pycache__ in the source tree
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from normalize import normalize  # noqa: E402
 
@@ -152,12 +156,18 @@ def compare(
     outputs: dict[str, str],
     works: dict[str, Path],
     inputs: dict[str, list[str]],
+    secrets: set[str] | None = None,
 ) -> bool:
     """``outputs``/``works``/``inputs`` are keyed by label ``[<producer>->]<consumer>``
     whose last ``:``-separated part is the tool that produced the transcript."""
     norm = {
         label: normalize(
-            text, label.split(":")[-1], str(works[label]), str(FIXTURES), inputs[label]
+            text,
+            label.split(":")[-1],
+            str(works[label]),
+            str(FIXTURES),
+            inputs[label],
+            secrets or set(),
         )
         for label, text in outputs.items()
     }
@@ -209,7 +219,7 @@ def suite_transcript(ctx: Ctx) -> None:
             outputs[tool] = run_tool(ctx, tool, work, lines, {}, extra)
             works[tool] = work
             inputs[tool] = lines
-        compare(ctx, path.stem, outputs, works, inputs)
+        compare(ctx, path.stem, outputs, works, inputs, set(headers.get("secret", [])))
         same_files(ctx, path.stem, headers.get("same-files", []), works["c2"], works["r2"])
 
 
@@ -231,14 +241,14 @@ def suite_interop(ctx: Ctx) -> None:
             for consumer in TOOLS:
                 work = ctx.base / "interop" / stem / f"import-{producer}-by-{consumer}"
                 src = str(produced[producer])
-                lines, _ = load_session(
+                lines, headers = load_session(
                     importer, {"WORK": str(work), "SRC": src, "FIX": str(FIXTURES)}
                 )
                 label = f"{producer}->{consumer}:{consumer}"
                 outputs[label] = run_tool(ctx, consumer, work, lines, {}).replace(src, "{SRC}")
                 works[label] = work
                 inputs[label] = [line.replace(src, "{SRC}") for line in lines]
-        compare(ctx, stem, outputs, works, inputs)
+        compare(ctx, stem, outputs, works, inputs, set(headers.get("secret", [])))
 
 
 def suite_token(ctx: Ctx) -> None:
@@ -254,7 +264,7 @@ def suite_token(ctx: Ctx) -> None:
                 lines, _ = load_session(create, {"WORK": str(cwork), "FIX": str(FIXTURES)})
                 run_tool(ctx, creator, cwork, lines, {}, columns="1000")
                 uwork = ctx.base / "token" / stem / f"use-{creator}-by-{user}"
-                lines, _ = load_session(
+                lines, headers = load_session(
                     use, {"WORK": str(uwork), "SRC": str(cwork), "FIX": str(FIXTURES)}
                 )
                 label = f"{creator}->{user}:{user}"
@@ -263,7 +273,7 @@ def suite_token(ctx: Ctx) -> None:
                 )
                 works[label] = uwork
                 inputs[label] = [line.replace(str(cwork), "{SRC}") for line in lines]
-        compare(ctx, stem, outputs, works, inputs)
+        compare(ctx, stem, outputs, works, inputs, set(headers.get("secret", [])))
 
 
 SUITES = {"transcript": suite_transcript, "interop": suite_interop, "token": suite_token}
@@ -308,6 +318,15 @@ def main() -> int:
     suites = args.suite or (["transcript", "interop"] + (["token"] if args.softhsm else []))
     if "token" in suites:
         args.softhsm = True
+
+    # the normalization's own self-tests first: a harness that cannot see a changed prompt
+    # must not report "no unlisted difference"
+    selftest = unittest.TextTestRunner(stream=sys.stderr, verbosity=0).run(
+        unittest.defaultTestLoader.discover(str(HERE), pattern="test_normalize.py")
+    )
+    if not selftest.wasSuccessful():
+        print("harness self-test failed (test_normalize.py)", file=sys.stderr)
+        return 2
 
     base = Path(tempfile.mkdtemp(prefix="r2-parity-"))
     ctx = Ctx(c2_cmd=c2_cmd, r2_cmd=[r2_bin], base=base, verbose=args.verbose)

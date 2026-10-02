@@ -1,6 +1,7 @@
 ## Artifact interop, import half: the consuming tool loads every file the producer wrote
 ## and proves the material by deterministic operations (RSA-PKCS1 / Ed25519 signatures,
 ## AES-ECB, HMAC, re-exports listed by `keys`).
+## secret: pw8 pw12
 load mem aes 2b7e151628aed2a6abf7158809cf4f3c --label kek
 load mem --file {FIX}/rsa2048.pem --label kekrsa
 load mem --file {SRC}/rsa_p8.pem --label rsa1

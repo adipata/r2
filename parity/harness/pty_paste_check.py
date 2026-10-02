@@ -24,6 +24,8 @@ import os
 import pty
 import re
 import select
+import shutil
+import signal
 import sys
 import tempfile
 import time
@@ -41,18 +43,20 @@ class Term:
         if self.pid == 0:  # child
             os.execve(argv[0], argv, env)
         self.buffer = b""
+        self.eof = False  # the child closed the pty (exited or crashed)
 
     def pump(self, timeout: float) -> None:
         end = time.time() + timeout
-        while time.time() < end:
+        while time.time() < end and not self.eof:
             ready, _, _ = select.select([self.fd], [], [], 0.05)
             if not ready:
                 continue
             try:
                 chunk = os.read(self.fd, 65536)
             except OSError:
-                return
+                chunk = b""
             if not chunk:
+                self.eof = True
                 return
             self.buffer += chunk
             # answer every cursor-position query as a terminal would (row 1, col 1)
@@ -60,11 +64,24 @@ class Term:
                 os.write(self.fd, b"\x1b[1;1R")
                 chunk = chunk.replace(CPR_QUERY, b"", 1)
 
-    def expect(self, needle: bytes, timeout: float = 15.0) -> None:
+    def mark(self) -> int:
+        """The current end of the transcript; ``expect(..., after=mark)`` looks past it."""
+        self.pump(0.0)
+        return len(self.buffer)
+
+    def expect(self, needle: bytes, timeout: float = 15.0, after: int = 0) -> None:
+        """Wait (at most ``timeout`` s) for ``needle`` in the output after offset ``after``;
+        fail at once when the child is gone."""
         end = time.time() + timeout
-        while needle not in self.buffer:
+        while needle not in self.buffer[after:]:
+            if self.eof:
+                raise AssertionError(
+                    f"r2 exited while waiting for {needle!r}; tail {self.buffer[-600:]!r}"
+                )
             if time.time() > end:
-                raise AssertionError(f"timed out waiting for {needle!r}; got tail {self.buffer[-600:]!r}")
+                raise AssertionError(
+                    f"timed out waiting for {needle!r}; tail {self.buffer[-600:]!r}"
+                )
             self.pump(0.2)
 
     def send(self, data: bytes) -> None:
@@ -75,8 +92,23 @@ class Term:
             self.pump(0.1)
             pid, status = os.waitpid(self.pid, os.WNOHANG)
             if pid:
+                self.pid = 0
                 return os.waitstatus_to_exitcode(status)
         raise AssertionError(f"r2 did not exit; tail {self.buffer[-800:]!r}")
+
+    def close(self) -> None:
+        """Kill a child that is still running and release the pty."""
+        if self.pid:
+            try:
+                os.kill(self.pid, signal.SIGKILL)
+                os.waitpid(self.pid, 0)
+            except (ProcessLookupError, ChildProcessError):
+                pass
+            self.pid = 0
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
 
 
 def main() -> int:
@@ -85,6 +117,16 @@ def main() -> int:
     parser.add_argument("--r2-bin", default=os.environ.get("R2_BIN", str(target / "debug" / "r2")))
     args = parser.parse_args()
     work = Path(tempfile.mkdtemp(prefix="r2-pty-"))
+    try:
+        return check(args.r2_bin, work)
+    except AssertionError as err:
+        print(f"FAIL: {err}")
+        return 1
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def check(r2_bin: str, work: Path) -> int:
     config = work / "r2.yaml"
     config.write_text(
         f"app:\n  history_file: {work / 'history'}\n  log:\n    file: {work / 'r2.log'}\n"
@@ -101,67 +143,72 @@ def main() -> int:
     }
     pem = PEM.read_bytes().replace(b"\r\n", b"\n")
     assert b"DEK-Info:" in pem and b"\n\n" in pem, "fixture must be a traditional encrypted PEM"
-    term = Term([args.r2_bin, "--config", str(config)], env)
+    term = Term([r2_bin, "--config", str(config)], env)
+    try:
+        return session(term, pem, work)
+    finally:
+        term.close()
+
+
+def session(term: Term, pem: bytes, work: Path) -> int:
     term.expect(b"r2>")
+    mark = term.mark()
     term.send(b"load mem rsa --label pasted\r")
-    term.expect(b"finish with an empty line")
-    term.expect(b"| ")
+    term.expect(b"finish with an empty line", after=mark)
+    term.expect(b"| ", after=mark)
     # one bracketed paste (terminals send ESC[200~ … ESC[201~ around pasted text)
     term.send(b"\x1b[200~" + pem.rstrip(b"\n").replace(b"\n", b"\r") + b"\x1b[201~")
     time.sleep(0.3)
-    term.send(b"\r")  # Enter submits the pasted answer
-    term.expect(b"\r")
+    mark = term.mark()
+    term.send(b"\r")  # Enter submits the pasted answer: the next `| ` prompt follows
+    term.expect(b"| ", after=mark)
     time.sleep(0.3)
+    mark = term.mark()
     term.send(b"\r")  # the empty line that ends the paste
-    term.expect(b"Password for encrypted RSA PRIVATE KEY")
+    term.expect(b"Password for encrypted RSA PRIVATE KEY", after=mark)
+    mark = term.mark()
     term.send(b"tr4d\r")
-    term.expect(b"loaded into mem")
+    term.expect(b"loaded into mem", after=mark)
+    mark = term.mark()
     term.send(b"keys mem\r")
-    term.expect(b"exportable")
-    deadline = time.time() + 15
+    term.expect(b"exportable", after=mark)
     # the next prompt after the table: `keys` has finished
-    while b"r2>" not in term.buffer[term.buffer.rfind(b"exportable") :]:
-        if time.time() > deadline:
-            raise AssertionError(f"no prompt after `keys`; tail {term.buffer[-600:]!r}")
-        term.pump(0.2)
+    term.expect(b"r2>", after=term.buffer.rfind(b"exportable"))
     # a 4096-bit RSA PEM (3.2 KiB) in one bracketed paste (item 2: no input stall)
     big = (HERE / "fixtures" / "rsa4096.pem").read_bytes()
+    mark = term.mark()
     term.send(b"load mem rsa --label big\r")
-    mark = len(term.buffer)
-    while b"finish with an empty line" not in term.buffer[mark:]:
-        term.pump(0.2)
+    term.expect(b"finish with an empty line", after=mark)
     time.sleep(0.3)
     term.send(b"\x1b[200~" + big.rstrip(b"\n").replace(b"\n", b"\r") + b"\x1b[201~")
     time.sleep(0.3)
     term.send(b"\r")
     time.sleep(0.3)
+    mark = term.mark()
     term.send(b"\r")
-    mark = len(term.buffer)
-    deadline = time.time() + 15
-    while b"mem:big" not in term.buffer[mark:]:
-        if time.time() > deadline:
-            raise AssertionError(f"4096-bit paste did not load; tail {term.buffer[-600:]!r}")
-        term.pump(0.2)
+    term.expect(b"mem:big", after=mark)
     # hidden password entry (item 3) and Ctrl-C at a password prompt (item 4)
     p12 = work / "p.p12"
+    mark = term.mark()
     term.send(f"export mem:pasted {p12} --format p12\r".encode())
-    term.expect(b"PKCS#12 password")
+    term.expect(b"PKCS#12 password", after=mark)
+    mark = term.mark()
     term.send(b"s3cr3t-pw\r")
-    term.expect(b"(again)")
+    term.expect(b"(again)", after=mark)
+    mark = term.mark()
     term.send(b"s3cr3t-pw\r")
-    term.expect(b"wrote")
+    term.expect(b"wrote", after=mark)
+    mark = term.mark()
     term.send(f"export mem:pasted {work / 'q.p12'} --format p12\r".encode())
-    mark = len(term.buffer)
-    while b"PKCS#12 password" not in term.buffer[mark:]:
-        term.pump(0.2)
+    term.expect(b"PKCS#12 password", after=mark)
     time.sleep(0.3)
+    mark = term.mark()
     term.send(b"\x03")  # Ctrl-C at the hidden prompt
-    term.expect(b"Aborted.")
+    term.expect(b"Aborted.", after=mark)
     time.sleep(0.3)
+    mark = term.mark()
     term.send(b"keys mem\r")  # the next command is not aborted
-    mark = len(term.buffer)
-    while b"exportable" not in term.buffer[mark:]:
-        term.pump(0.2)
+    term.expect(b"exportable", after=mark)
     time.sleep(0.5)
     term.send(b"exit\r")
     status = term.wait()
