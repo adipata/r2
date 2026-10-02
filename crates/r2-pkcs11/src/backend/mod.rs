@@ -76,11 +76,12 @@ pub(crate) enum MechSpec {
     Plain { ckm: u64 },
     /// pParameter = `param` verbatim (CBC IV, custom `iv`/`raw` packers); empty → NULL.
     Bytes { ckm: u64, param: Vec<u8> },
-    /// CK_GCM_PARAMS: owned IV copy, AAD always non-NULL (possibly empty), ulTagBits.
+    /// CK_GCM_PARAMS: owned IV copy, AAD always non-NULL (possibly empty; wiped on drop —
+    /// the GCM-over-AAD GMAC carries the whole message here), ulTagBits, ulIvBits 0.
     Gcm {
         ckm: u64,
         iv: Vec<u8>,
-        aad: Vec<u8>,
+        aad: Zeroizing<Vec<u8>>,
         tag_bits: u64,
     },
     /// CK_AES_CTR_PARAMS (CKM_AES_CTR): full 16-byte counter block.

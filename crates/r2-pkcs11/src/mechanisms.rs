@@ -200,7 +200,7 @@ pub(crate) fn gcm(iv: &[u8], aad: &[u8], tag_bits: i64, ckm: Option<u64>) -> ORe
     Ok(MechSpec::Gcm {
         ckm: ckm.unwrap_or(w(sys::CKM_AES_GCM)),
         iv: iv.to_vec(),
-        aad: aad.to_vec(),
+        aad: Zeroizing::new(aad.to_vec()),
         tag_bits: param_ulong(tag_bits)?,
     })
 }
@@ -448,6 +448,14 @@ pub(crate) fn oaep_decode(
     Ok(Zeroizing::new(db[sep + 1..].to_vec()))
 }
 
+/// Discard the calling thread's pending OpenSSL errors. rust-openssl's `ErrorStack::get`
+/// drains the whole thread-local queue, and SoftHSM shares the process's libcrypto (its
+/// C_Initialize leaves the failed `rdrand` engine load queued), so every OpenSSL operation
+/// whose [`reason`] is reported clears the queue first: the reason is then its own.
+pub(crate) fn clear_openssl_errors() {
+    let _stale = openssl::error::ErrorStack::get();
+}
+
 /// The first OpenSSL reason of an error stack (§11 D11).
 pub(crate) fn reason(err: &openssl::error::ErrorStack) -> String {
     err.errors()
@@ -467,6 +475,7 @@ pub(crate) fn software_oaep_encrypt(
     mgf_hash: &str,
     label: &[u8],
 ) -> Result<Vec<u8>> {
+    clear_openssl_errors();
     let failed = |err: openssl::error::ErrorStack| {
         ConsoleError::crypto(format!("RSA-OAEP encryption failed: {}", reason(&err)))
     };

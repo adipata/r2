@@ -155,7 +155,7 @@ fn gcm_builds_the_gcm_params() {
         MechSpec::Gcm {
             ckm: CKM_AES_GCM,
             iv: iv12(),
-            aad: b"ctx".to_vec(),
+            aad: zeroize::Zeroizing::new(b"ctx".to_vec()),
             tag_bits: 96
         }
     );

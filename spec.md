@@ -5518,6 +5518,14 @@ impl FakeBackend {
     pub(crate) fn objects(&self) -> Vec<(u64, std::collections::BTreeMap<u64, Vec<u8>>)> { .. }
     /// The last MechSpec handed to a crypto call (packer tests).
     pub(crate) fn last_mechanism(&self) -> Option<MechSpec> { .. }
+    // R5b additions (crate-private, test-only):
+    /// The session is invalidated right after the next successful C_SetAttributeValue
+    /// (edit recovery tests).
+    pub(crate) fn invalidate_after_next_set(&self) { .. }
+    /// C_UnwrapKey fails with `rv` while the template carries attribute type `attr`.
+    pub(crate) fn reject_unwrap_with(&self, attr: u64, rv: u64) { .. }
+    /// The attribute types of every C_UnwrapKey template seen, in call order.
+    pub(crate) fn unwrap_templates(&self) -> Vec<Vec<u64>> { .. }
 }
 impl Backend for FakeBackend { .. }
 /// SoftHSM-like CKM set (c2 fake_pykcs11 DEFAULT_MECHANISMS, as codes; numeric order).
@@ -6565,9 +6573,9 @@ DC → IA5String; everything else UTF8String).
 
 | Mechanism | memory (openssl) | PKCS#11 (cryptoki) | Notes |
 |---|---|---|---|
-| AES-ECB | `symm::Crypter` over `Cipher::aes_{128,192,256}_ecb()` with `pad(false)`; PKCS7 (block 16) in r2 code when `padding=pkcs7` | `Mechanism::AesEcb` (`CKM_AES_ECB`); **no** `_PAD` variant exists → **Pkcs11Provider** applies/strips PKCS7 around the token call (padding is always provider-side, symmetric with memory) | `padding=none` requires 16-B-aligned input (checked, `Param`: `padding=none requires input length to be a multiple of 16 bytes`) |
+| AES-ECB | `symm::Crypter` over `Cipher::aes_{128,192,256}_ecb()` with `pad(false)`; PKCS7 (block 16) in r2 code when `padding=pkcs7` | `Mechanism::AesEcb` (`CKM_AES_ECB`); **no** `_PAD` variant exists → **Pkcs11Provider** applies/strips PKCS7 around the token call (padding is always provider-side, symmetric with memory) | `padding=none` requires 16-B-aligned input (checked, `Param`, param_name `padding`; each provider keeps its c2 text — memory: `padding=none requires input length to be a multiple of 16 bytes`, Pkcs11Provider: `data length must be a multiple of 16 with padding=none`) |
 | AES-CBC | `Crypter` over `aes_*_cbc()` with the IV and `pad(false)` + r2-owned PKCS7 | `padding=none` → `Mechanism::AesCbc(iv)` (`CKM_AES_CBC`); `padding=pkcs7` → `Mechanism::AesCbcPad(iv)` (`CKM_AES_CBC_PAD`) | memory-PKCS7 and `_PAD` must be byte-identical (KAT cross-check, §8; S0-verified); `iv` must be 16 bytes (`Param`) |
-| AES-GCM | `symm::Crypter` over `Cipher::aes_*_gcm()` (the `symm::encrypt_aead` computation, with AAD and data fed in ≤ 2³⁰-byte updates, §11 D12(m)), output **ct‖tag** truncated to `tag_bits/8`; decrypt sets the tag before `finalize` (a bad tag is an error) | `Mechanism::AesGcm(GcmParams::new(&mut iv_copy, &aad, tag_bits))` [V, S0] returns ct‖tag natively (`GcmParams` needs an owned mutable IV copy) | AAD: always pass a non-NULL (possibly empty) buffer — SoftHSM builds reject NULL [V] (cryptoki passes a non-NULL pointer with length 0 for empty AAD, S0 capture). **[U]** FIPS HSMs may ignore the supplied IV and append their own — detect via output length, surface "HSM-generated IV" to the operator. Tamper on SoftHSM: `CKR_GENERAL_ERROR` (2.6.1) / `CKR_ENCRYPTED_DATA_INVALID` (2.7.0) |
+| AES-GCM | `symm::Crypter` over `Cipher::aes_*_gcm()` (the `symm::encrypt_aead` computation, with AAD and data fed in ≤ 2³⁰-byte updates, §11 D12(m)), output **ct‖tag** truncated to `tag_bits/8`; decrypt sets the tag before `finalize` (a bad tag is an error) | a `CK_GCM_PARAMS` (owned mutable IV copy, AAD, `ulTagBits`) through `VendorDefinedMechanism` [V, S0] returns ct‖tag natively; `ulIvBits` is sent as 0 — PyKCS11's `AES_GCM_Mechanism` never set it (c2 parity; cryptoki's `GcmParams::new` would send 8·len(iv)) | AAD: always pass a non-NULL (possibly empty) buffer — SoftHSM builds reject NULL [V] (cryptoki passes a non-NULL pointer with length 0 for empty AAD, S0 capture). **[U]** FIPS HSMs may ignore the supplied IV and append their own — detect via output length, surface "HSM-generated IV" to the operator. Tamper on SoftHSM: `CKR_GENERAL_ERROR` (2.6.1) / `CKR_ENCRYPTED_DATA_INVALID` (2.7.0) |
 | AES-CTR | `Cipher::aes_*_ctr()` with the full 16-B counter block as IV (OpenSSL increments the whole block big-endian, = pyca) | `Mechanism::VendorDefined(VendorDefinedMechanism::new(MechanismType::AES_CTR, Some(&CK_AES_CTR_PARAMS { ulCounterBits: counter_bits, cb: counter_block })))` [V, S0] (cryptoki has no CTR variant; no `unsafe`) | default `counter_bits=128` reproduces pyca's semantics; cross-provider KAT required. Memory accepts only `counter_bits=128` and a full 16-byte `counter_block` (`Param`, c2 texts). SoftHSM refuses a counter that would wrap within `counter_bits` (`CKR_DATA_LEN_RANGE`) |
 | RSA-OAEP | `encrypt::Encrypter`/`Decrypter` with `Padding::PKCS1_OAEP`, `set_rsa_oaep_md(hash)`, `set_rsa_mgf1_md(mgf_hash)`, `set_rsa_oaep_label(label)` only when the label is non-empty | `Mechanism::RsaPkcsOaep(PkcsOaepParams::new(hash, mgf, PkcsOaepSource::empty() \| data_specified(&label)))` [V, S0]; tokens that reject non-SHA1 OAEP params (SoftHSM: SHA-1/MGF1-SHA1 with an empty label only) fall back to on-token raw RSA (`Mechanism::RsaX509`) + provider-side OAEP en/decoding (c2 L5/L13 fold-back), triggered by `CKR_ARGUMENTS_BAD` / `CKR_MECHANISM_PARAM_INVALID` | hash/MGF pair (CKM_SHAx, CKG_MGF1_SHAx); mgf_hash defaults to hash; an empty label is sent as NULL source data (c2 parity, S0 capture). Decrypt failures are detail-free (`RSA-OAEP decryption failed`) |
 | RSA-PKCS1 | `Encrypter`/`Decrypter` with `Padding::PKCS1` | `Mechanism::RsaPkcs` (`CKM_RSA_PKCS`) | decrypt failures detail-free (`RSA-PKCS1 decryption failed`). A malformed ciphertext or wrong key follows the linked OpenSSL (§11 D26): an error on OpenSSL < 3.2 (the system 3.0 of source builds), implicit rejection (pseudo-random plaintext, no error) on 3.2+ (the vendored release build, as pyca/c2) |
@@ -7693,7 +7701,8 @@ merges).**
     e.g. a payload too long for the key — where pyca's `ValueError` escaped → Crypto
     `RSA-OAEP encryption failed: <OpenSSL reason>` (the memory provider's text, §11 D11);
     a negative `tag_bits` / `counter_bits` / `out_len`, or a counter block that is not 16
-    bytes, which PyKCS11's struct packing refused with `OverflowError`/`TypeError` → the
+    bytes, which PyKCS11's struct packing refused with `OverflowError` (negative widths) /
+    `ValueError` (counter block not 16 bytes) → the
     token's CKR for an invalid value per the §4.5.5 narrowing rule
     (`CKR_MECHANISM_PARAM_INVALID` → UnsupportedOperation `token does not support <context>
     (or its parameters) (CKR_MECHANISM_PARAM_INVALID)`; a negative derive `out_len` as
@@ -7725,7 +7734,10 @@ merges).**
   `listed_vendor_mechanisms_resolve_by_pykcs11_name`; n: the pyca gate of
   `key_material_is_gated_by_pycas_der_loaders`), R5b verbs/mechanisms tests (q:
   `pkcs1_prefers_the_combined_ckm_else_digestinfo_over_bare_rsa_pkcs`,
-  `gcm_packer_integer_reads_are_strict`, `ctr_needs_a_full_counter_block`).
+  `gcm_packer_integer_reads_are_strict`, `ctr_needs_a_full_counter_block`,
+  `oaep_software_fallback_failure_is_a_crypto_error`,
+  `derive_negative_out_len_is_the_tokens_value_invalid`, `derive_peer_rules`; SoftHSM
+  `softhsm_oaep_software_fallback_reports_its_own_openssl_reason`).
 
 **D13 — Ctrl-C while a command runs is honored at step boundaries.**
 - *Description*: c2's `KeyboardInterrupt` surfaced at the next Python bytecode after the

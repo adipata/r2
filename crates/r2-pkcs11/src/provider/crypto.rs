@@ -843,6 +843,8 @@ fn left_pad(data: &[u8], k: usize) -> Zeroizing<Vec<u8>> {
 /// An SPKI peer (pyca `load_der_public_key`): EC → the uncompressed point, X25519/X448 →
 /// the raw u-coordinate; anything else → Param.
 fn spki_peer_point(peer: &[u8]) -> Result<Vec<u8>> {
+    // stale queue entries (SoftHSM's init) must not become this parse's reason
+    crate::mechanisms::clear_openssl_errors();
     let invalid = |detail: &str| {
         ConsoleError::param(
             format!("peer is not a valid SPKI public key: {detail}"),

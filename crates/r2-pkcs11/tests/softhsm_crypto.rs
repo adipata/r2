@@ -540,7 +540,7 @@ fn hmac_mech(hash: &str, extra: Vec<(&str, ParamValue)>) -> MechanismInvocation 
 }
 
 #[test]
-fn softhsm_hmac_matches_openssl_and_crosses_providers() {
+fn softhsm_hmac_matches_openssl() {
     // c2 crossed into MemoryProvider; r2-pkcs11 cannot dev-depend on r2-memory (§4.1.2), so
     // the software side is OpenSSL's HMAC — the computation MemoryProvider performs (§5.9)
     let _lock = r2_testkit::global_state_lock();
@@ -588,9 +588,18 @@ fn softhsm_hmac_matches_openssl_and_crosses_providers() {
             MESSAGE,
         )
         .unwrap();
-    assert_eq!(
-        short,
-        hmac(&generic_key, MessageDigest::sha256(), MESSAGE)[..12]
+    let software_short = hmac(&generic_key, MessageDigest::sha256(), MESSAGE)[..12].to_vec();
+    assert_eq!(short, software_short);
+    // the token accepts the software-computed truncated MAC (c2's memory → token leg)
+    assert!(
+        provider
+            .verify(
+                &on_token,
+                &hmac_mech("sha256", vec![("mac_len", i(12))]),
+                MESSAGE,
+                &software_short
+            )
+            .unwrap()
     );
     provider.shutdown().unwrap();
 }
@@ -884,6 +893,33 @@ fn softhsm_oaep_fallbacks_and_raw_rsa() {
         provider
             .verify(&public, &raw, &[0x42; 8], &signature)
             .unwrap()
+    );
+    provider.shutdown().unwrap();
+}
+
+#[test]
+fn softhsm_oaep_software_fallback_reports_its_own_openssl_reason() {
+    // SoftHSM's C_Initialize leaves stale entries on the thread's OpenSSL error queue (its
+    // rdrand engine load fails); the software OAEP fallback must report the reason of its
+    // own failure, also on the first OpenSSL failure after a fresh login (§11 D12(q))
+    let _lock = r2_testkit::global_state_lock();
+    let provider = logged_in();
+    let label = unique_label();
+    generate(
+        &provider,
+        KeyAlgorithm::Rsa,
+        Some(2048),
+        None,
+        &label,
+        session_template(&["CKA_DECRYPT"]),
+    );
+    let public = public_of(&provider, &label);
+    let oaep = mech("RSA-OAEP", vec![("hash", e("sha256"))]);
+    let err = provider.encrypt(&public, &oaep, &[1u8; 250]).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Crypto);
+    assert_eq!(
+        err.message,
+        "RSA-OAEP encryption failed: data too large for key size"
     );
     provider.shutdown().unwrap();
 }

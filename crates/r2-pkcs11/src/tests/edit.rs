@@ -26,6 +26,7 @@ const CKA_ID: u64 = 0x0102;
 const CKA_SENSITIVE: u64 = 0x0103;
 const CKA_ENCRYPT: u64 = 0x0104;
 const CKA_DECRYPT: u64 = 0x0105;
+const CKA_VALUE_LEN: u64 = 0x0161;
 const CKA_CERTIFICATE_CATEGORY: u64 = 0x0087;
 const CKA_LOCAL: u64 = 0x0163;
 const CKA_NEVER_EXTRACTABLE: u64 = 0x0164;
@@ -767,6 +768,92 @@ fn certificate_category_round_trips_through_the_byte_path() {
     assert_eq!(
         seed.get("CKA_CERTIFICATE_CATEGORY").unwrap().value,
         AttrValue::Ulong(1)
+    );
+}
+
+/// Re-store the object labelled `label` with `code` set to `value` (a non-conforming
+/// token writing raw bytes the provider's guards would refuse).
+fn plant_value(backend: &FakeBackend, label: &str, code: u64, value: Vec<u8>) {
+    use crate::backend::Backend;
+    let (handle, mut attrs) = backend
+        .objects()
+        .into_iter()
+        .find(|(_, attrs)| attrs.get(&0x0003).map(Vec::as_slice) == Some(label.as_bytes()))
+        .unwrap();
+    attrs.insert(code, value);
+    backend.destroy_object(handle).unwrap();
+    backend.plant_object(0, attrs.into_iter().collect(), &[]);
+}
+
+#[test]
+fn empty_certificate_category_reads_as_unreadable() {
+    // c2 `_coerce_attr`: `decode_vendor_value(ULONG, raw) if raw else None` — no row
+    let (backend, provider) = logged_in();
+    let info = provider
+        .import_key(&certificate(), "crt-empty", None, None)
+        .unwrap();
+    plant_value(&backend, "crt-empty", CKA_CERTIFICATE_CATEGORY, Vec::new());
+    let full = provider.read_full_template(&info).unwrap();
+    assert!(full.get("CKA_CERTIFICATE_CATEGORY").is_none());
+    let seed = provider.read_key_template(&info).unwrap();
+    assert!(seed.get("CKA_CERTIFICATE_CATEGORY").is_none());
+    // any non-empty length decodes natively (`int.from_bytes(raw, sys.byteorder)`)
+    plant_value(&backend, "crt-empty", CKA_CERTIFICATE_CATEGORY, vec![2]);
+    let full = provider.read_full_template(&info).unwrap();
+    assert_eq!(
+        full.get("CKA_CERTIFICATE_CATEGORY").unwrap().value,
+        AttrValue::Ulong(2)
+    );
+}
+
+#[test]
+fn odd_length_values_decode_like_pykcs11() {
+    // PyKCS11 GetNum: 0 unless exactly sizeof(CK_ULONG) bytes; GetBool: true only for a
+    // single nonzero byte. CKA_KEY_TYPE goes through GetNum too (an int, so c2 names it).
+    let (backend, provider) = logged_in();
+    let info = provider.import_key(&aes(), "odd", None, None).unwrap();
+    plant_value(&backend, "odd", CKA_ENCRYPT, vec![0, 1]);
+    plant_value(&backend, "odd", CKA_DECRYPT, vec![1, 0]);
+    plant_value(&backend, "odd", CKA_SENSITIVE, vec![2]);
+    plant_value(&backend, "odd", CKA_KEY_TYPE, vec![0x1f, 0, 0]);
+    let full = provider.read_full_template(&info).unwrap();
+    assert_eq!(
+        full.get("CKA_ENCRYPT").unwrap().value,
+        AttrValue::Bool(false)
+    );
+    assert_eq!(
+        full.get("CKA_DECRYPT").unwrap().value,
+        AttrValue::Bool(false)
+    );
+    assert_eq!(
+        full.get("CKA_SENSITIVE").unwrap().value,
+        AttrValue::Bool(true)
+    );
+    assert_eq!(
+        full.get("CKA_KEY_TYPE").unwrap().value,
+        AttrValue::Symbol("CKK_RSA".into())
+    );
+    plant_value(&backend, "odd", CKA_KEY_TYPE, Vec::new());
+    let full = provider.read_full_template(&info).unwrap();
+    assert_eq!(
+        full.get("CKA_KEY_TYPE").unwrap().value,
+        AttrValue::Symbol("CKK_RSA".into())
+    );
+    plant_value(&backend, "odd", CKA_VALUE_LEN, vec![32, 0, 0, 0]);
+    let full = provider.read_full_template(&info).unwrap();
+    let expected = if std::mem::size_of::<std::ffi::c_ulong>() == 4 {
+        32
+    } else {
+        0
+    };
+    assert_eq!(
+        full.get("CKA_VALUE_LEN").unwrap().value,
+        AttrValue::Ulong(expected)
+    );
+    let seed = provider.read_key_template(&info).unwrap();
+    assert_eq!(
+        seed.get("CKA_ENCRYPT").unwrap().value,
+        AttrValue::Bool(false)
     );
 }
 

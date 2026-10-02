@@ -151,7 +151,7 @@ fn gcm_packer_conventional_names() {
         MechSpec::Gcm {
             ckm: VENDOR,
             iv: vec![2; 12],
-            aad: b"aad".to_vec(),
+            aad: zeroize::Zeroizing::new(b"aad".to_vec()),
             tag_bits: 96
         }
     );
@@ -170,10 +170,23 @@ fn gcm_packer_defaults() {
         MechSpec::Gcm {
             ckm: VENDOR,
             iv: vec![2; 12],
-            aad: Vec::new(),
+            aad: zeroize::Zeroizing::new(Vec::new()),
             tag_bits: 128
         }
     );
+}
+
+#[test]
+fn gcm_params_leave_iv_bits_zero_like_pykcs11() {
+    // PyKCS11's AES_GCM_Mechanism never sets ulIvBits (c2 sent 0); r2 sends the same
+    let mut iv = vec![1u8; 12];
+    let aad = b"hdr".to_vec();
+    let params = crate::backend::cryptoki::gcm_params(&mut iv, &aad, 96).unwrap();
+    assert_eq!(params.ulIvBits, 0);
+    assert_eq!(params.ulIvLen, 12);
+    assert_eq!(params.ulAADLen, 3);
+    assert_eq!(params.ulTagBits, 96);
+    assert_eq!(params.pIv, iv.as_mut_ptr());
 }
 
 #[test]

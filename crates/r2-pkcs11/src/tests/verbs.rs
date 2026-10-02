@@ -320,7 +320,7 @@ fn gmac_uses_the_gcm_construction_without_ckm_aes_gmac() {
         Some(MechSpec::Gcm {
             ckm: CKM_AES_GCM,
             iv: iv.clone(),
-            aad: b"authenticate me".to_vec(),
+            aad: zeroize::Zeroizing::new(b"authenticate me".to_vec()),
             tag_bits: 128
         })
     );
@@ -362,7 +362,7 @@ fn gmac_prefers_ckm_aes_gmac_when_listed() {
         Some(MechSpec::Gcm {
             ckm: CKM_AES_GMAC,
             iv,
-            aad: Vec::new(),
+            aad: zeroize::Zeroizing::new(Vec::new()),
             tag_bits: 96
         })
     );
@@ -693,12 +693,15 @@ fn derive_peer_rules() {
     assert_eq!(err.message, "peer SPKI is not an EC/X25519/X448 key");
     // garbage after 0x30 is no SPKI
     let err = derive(&[0x30, 0x03, 0x01]).unwrap_err();
-    assert!(
-        err.message
-            .starts_with("peer is not a valid SPKI public key: "),
-        "{}",
-        err.message
+    assert_eq!(err.kind.class_name(), "ParamError");
+    assert_eq!(
+        err.message,
+        "peer is not a valid SPKI public key: Could not deserialize key data. The data may \
+         be in an incorrect format, it may be encrypted with an unsupported algorithm, or it \
+         may be an unsupported key type (e.g. EC curves with explicit parameters). Details: \
+         ASN.1 parsing error: short data (needed at least 2 additional bytes)"
     );
+    assert_eq!(err.param_name(), Some("peer"));
     // an unknown kdf
     let err = provider
         .derive(
@@ -713,6 +716,33 @@ fn derive_peer_rules() {
         .unwrap();
     let err = provider.derive(&public, &mech("ECDH", vec![])).unwrap_err();
     assert_eq!(err.message, "derive requires a private key");
+}
+
+#[test]
+fn derive_negative_out_len_is_the_tokens_value_invalid() {
+    // §11 D12(q): CKA_VALUE_LEN is a CK_ULONG — a negative out_len never reaches the token
+    let (backend, provider) = logged_in();
+    let base = ec_private(&provider, "drv-neg", Curve::P256);
+    let peer_key = openssl::ec::EcKey::generate(
+        &openssl::ec::EcGroup::from_curve_name(openssl::nid::Nid::X9_62_PRIME256V1).unwrap(),
+    )
+    .unwrap();
+    let spki = PKey::from_ec_key(peer_key)
+        .unwrap()
+        .public_key_to_der()
+        .unwrap();
+    let err = provider
+        .derive(
+            &base,
+            &mech("ECDH", vec![("peer", pbytes(&spki)), ("out_len", pint(-1))]),
+        )
+        .unwrap_err();
+    assert_eq!(err.kind.class_name(), "Pkcs11Error");
+    assert_eq!(
+        err.message,
+        "template attribute rejected by token (CKR_ATTRIBUTE_VALUE_INVALID)"
+    );
+    assert!(!backend.calls().contains(&"derive_key"));
 }
 
 #[test]
@@ -874,7 +904,7 @@ fn gcm_and_ctr_build_their_parameter_structs() {
         Some(MechSpec::Gcm {
             ckm: CKM_AES_GCM,
             iv: vec![1; 12],
-            aad: b"hdr".to_vec(),
+            aad: zeroize::Zeroizing::new(b"hdr".to_vec()),
             tag_bits: 96
         })
     );
@@ -968,6 +998,39 @@ fn oaep_falls_back_to_software_padding_when_the_token_rejects_the_params() {
     // decrypt fallback: raw RSA on the token (CKM_RSA_X_509), OAEP decoded in software
     let _ = provider.decrypt(&private, &sha256, &ct);
     assert_eq!(last_ckm(&backend), CKM_RSA_X_509);
+}
+
+#[test]
+fn oaep_software_fallback_failure_is_a_crypto_error() {
+    // §11 D12(q): pyca's ValueError escaped c2; r2 reports the memory provider's text
+    let (backend, provider) = logged_in();
+    let pkcs8 = r2_testkit::fixtures::rsa2048_pkcs8();
+    let public_spki = r2_core::formats::pkcs8_public_spki(&pkcs8).unwrap();
+    let public = provider
+        .import_key(
+            &KeyMaterial::new(KeyAlgorithm::Rsa, KeyClass::Public, public_spki),
+            "oaep-long",
+            None,
+            None,
+        )
+        .unwrap();
+    let sha256 = mech("RSA-OAEP", vec![("hash", penum("sha256"))]);
+    // k − 2·hLen − 2 = 256 − 66 = 190 bytes fit; 191 do not
+    assert_eq!(
+        provider
+            .encrypt(&public, &sha256, &[7u8; 190])
+            .unwrap()
+            .len(),
+        256
+    );
+    let err = provider.encrypt(&public, &sha256, &[7u8; 191]).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Crypto);
+    assert_eq!(
+        err.message,
+        "RSA-OAEP encryption failed: data too large for key size"
+    );
+    // the token refused the parameters first
+    assert!(backend.calls().contains(&"encrypt"));
 }
 
 #[test]

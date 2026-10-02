@@ -206,6 +206,20 @@ fn raw_bytes(spec: &MechSpec) -> Option<(u64, &[u8])> {
     }
 }
 
+/// CK_GCM_PARAMS over `iv`/`aad` (both must outlive the struct's use). `ulIvBits` is 0, as
+/// PyKCS11's `AES_GCM_Mechanism` sent it (it never sets the field; c2 parity — SoftHSM
+/// ignores it, a token reading it sees what it saw from c2).
+pub(crate) fn gcm_params(iv: &mut [u8], aad: &[u8], tag_bits: u64) -> BResult<sys::CK_GCM_PARAMS> {
+    Ok(sys::CK_GCM_PARAMS {
+        pIv: iv.as_mut_ptr(),
+        ulIvLen: len_ulong(iv.len())?,
+        ulIvBits: 0,
+        pAAD: aad.as_ptr() as *mut sys::CK_BYTE,
+        ulAADLen: len_ulong(aad.len())?,
+        ulTagBits: param_ulong(tag_bits)?,
+    })
+}
+
 /// Build the cryptoki `Mechanism` of `spec` in this frame (owned parameter copies and
 /// cryptoki-sys parameter structs live here) and run `f` with it. Structured parameters go
 /// through `VendorDefinedMechanism::new(mech_type(ckm), Some(&sys_struct))` with Sized
@@ -242,18 +256,11 @@ fn with_mechanism<R>(spec: &MechSpec, f: impl FnOnce(&Mechanism<'_>) -> BResult<
         } => {
             let mut iv_copy = iv.clone();
             let aad_copy = aad.clone();
-            let params = sys::CK_GCM_PARAMS {
-                pIv: iv_copy.as_mut_ptr(),
-                ulIvLen: len_ulong(iv_copy.len())?,
-                ulIvBits: len_ulong(iv_copy.len().saturating_mul(8))?,
-                pAAD: aad_copy.as_ptr() as *mut sys::CK_BYTE,
-                ulAADLen: len_ulong(aad_copy.len())?,
-                ulTagBits: param_ulong(*tag_bits)?,
-            };
+            let params = gcm_params(&mut iv_copy, &aad_copy, *tag_bits)?;
             let mechanism = VendorDefinedMechanism::new(mech_type(*ckm)?, Some(&params));
             let result = f(&Mechanism::VendorDefined(mechanism));
             drop(iv_copy);
-            drop(aad_copy);
+            drop(aad_copy); // Zeroizing: the authenticated data (a GMAC message) is wiped
             result
         }
         MechSpec::Ctr {

@@ -63,16 +63,30 @@ fn is_recoverable(err: &BackendError) -> bool {
     )
 }
 
-/// c2 `_coerce_attr`: raw attribute bytes → the template value of `kind` (the shape
-/// PyKCS11 decoded: BOOL any nonzero byte, ULONG native-endian CK_ULONG — also
-/// CKA_CERTIFICATE_CATEGORY, which c2 read through its byte path —, STR UTF-8 with invalid
-/// sequences dropped, BYTES verbatim).
-fn coerce(kind: AttrKind, raw: &[u8]) -> AttrValue {
+/// PyKCS11 `CK_ATTRIBUTE_SMART::GetNum`: the native-endian CK_ULONG when the value is
+/// exactly `sizeof(CK_ULONG)` bytes long, else 0.
+fn pykcs11_num(raw: &[u8]) -> u64 {
+    if raw.len() == std::mem::size_of::<std::ffi::c_ulong>() {
+        decode_ulong(raw)
+    } else {
+        0
+    }
+}
+
+/// c2 `_coerce_attr` over what PyKCS11's `getAttributeValue` decoded: BOOL is `GetBool`
+/// (true only for a single nonzero byte), ULONG is `GetNum` (see [`pykcs11_num`]) — except
+/// CKA_CERTIFICATE_CATEGORY, which PyKCS11 returns as bytes and c2 decoded natively
+/// (`int.from_bytes`), an empty value reading as unreadable (None: no row) —, STR UTF-8
+/// with invalid sequences dropped, BYTES verbatim.
+fn coerce(name: &str, kind: AttrKind, raw: &[u8]) -> Option<AttrValue> {
     match kind {
-        AttrKind::Bool => AttrValue::Bool(raw.iter().any(|b| *b != 0)),
-        AttrKind::Ulong => AttrValue::Ulong(decode_ulong(raw)),
-        AttrKind::Str => AttrValue::Str(utf8_ignore(raw)),
-        AttrKind::Bytes => AttrValue::Bytes(raw.to_vec()),
+        AttrKind::Bool => Some(AttrValue::Bool(raw.len() == 1 && raw[0] != 0)),
+        AttrKind::Ulong if name == "CKA_CERTIFICATE_CATEGORY" => {
+            (!raw.is_empty()).then(|| decode_vendor_value(AttrKind::Ulong, raw))
+        }
+        AttrKind::Ulong => Some(AttrValue::Ulong(pykcs11_num(raw))),
+        AttrKind::Str => Some(AttrValue::Str(utf8_ignore(raw))),
+        AttrKind::Bytes => Some(AttrValue::Bytes(raw.to_vec())),
     }
 }
 
@@ -95,7 +109,8 @@ impl Pkcs11Provider {
             return Ok(None);
         }
         if let Some(raw) = self.read_one_attr(handle, cka::KEY_TYPE)? {
-            return Ok(Some(crate::catalog::ckk_symbol(decode_ulong(&raw))));
+            // PyKCS11 decodes CKA_KEY_TYPE with GetNum: any readable value is an int
+            return Ok(Some(crate::catalog::ckk_symbol(pykcs11_num(&raw))));
         }
         Ok(ckk(key.algorithm)
             .and_then(crate::catalog::ckk_name)
@@ -160,12 +175,9 @@ impl Pkcs11Provider {
                 let Some(entry) = catalog_entry(name) else {
                     continue;
                 };
-                if let Some(raw) = self.read_one_attr(handle, entry.code)? {
-                    attrs.push(TemplateAttr::new(
-                        *name,
-                        entry.kind,
-                        coerce(entry.kind, &raw),
-                    ));
+                let raw = self.read_one_attr(handle, entry.code)?;
+                if let Some(value) = raw.and_then(|raw| coerce(name, entry.kind, &raw)) {
+                    attrs.push(TemplateAttr::new(*name, entry.kind, value));
                 }
             }
             attrs.extend(self.vendor_rows(handle)?);
@@ -196,12 +208,11 @@ impl Pkcs11Provider {
                         }
                     }
                     _ => {
-                        if let Some(raw) = self.read_one_attr(handle, entry.code)? {
-                            attrs.push(TemplateAttr::new(
-                                entry.name,
-                                entry.kind,
-                                coerce(entry.kind, &raw),
-                            ));
+                        let raw = self.read_one_attr(handle, entry.code)?;
+                        if let Some(value) =
+                            raw.and_then(|raw| coerce(entry.name, entry.kind, &raw))
+                        {
+                            attrs.push(TemplateAttr::new(entry.name, entry.kind, value));
                         }
                     }
                 }
