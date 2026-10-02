@@ -8,6 +8,7 @@ use secrecy::SecretString;
 
 use super::history::SecretFilteringHistory;
 use super::line::{LineIo, LineReader, ReadOutcome, SecretRead};
+use crate::parser::line_is_complete;
 
 /// Plain line reads from the global stdin handle (rules below).
 pub struct PlainReader {
@@ -15,8 +16,12 @@ pub struct PlainReader {
     /// through rpassword, and Ctrl-C is honored at the next Enter (§11 D2).
     stdin_is_tty: bool,
     /// The command history (c2's prompt_toolkit session kept its FileHistory in piped
-    /// sessions too): every command line read is saved and synced; secret lines are dropped.
+    /// sessions too): every logical command is saved and synced, like reedline's (§11 D7);
+    /// secret entries are dropped.
     history: Option<SecretFilteringHistory>,
+    /// The physical lines of a command whose quote is still open (`…> ` continuations),
+    /// joined with "\n" exactly as the REPL joins them; saved once the quote closes.
+    pending: Option<String>,
 }
 
 impl PlainReader {
@@ -24,6 +29,7 @@ impl PlainReader {
         Self {
             stdin_is_tty,
             history,
+            pending: None,
         }
     }
 
@@ -31,13 +37,23 @@ impl PlainReader {
     /// BufReader), trailing `\r`/`\n` stripped, lossy UTF-8; echo per the rules; at EOF a
     /// newline and Eof (None). The byte buffer is wiped once decoded (it may hold a secret).
     fn read_line(&mut self, prompt: &str, secret: bool) -> io::Result<Option<String>> {
+        self.read_line_from(prompt, secret, &mut io::stdin().lock())
+    }
+
+    /// `read_line` over an explicit input (the global stdin lock; tests pass a cursor).
+    fn read_line_from(
+        &mut self,
+        prompt: &str,
+        secret: bool,
+        input: &mut dyn BufRead,
+    ) -> io::Result<Option<String>> {
         {
             let mut out = io::stdout().lock();
             out.write_all(prompt.as_bytes())?;
             out.flush()?;
         }
         let mut buffer = Vec::new();
-        let read = io::stdin().lock().read_until(b'\n', &mut buffer)?;
+        let read = input.read_until(b'\n', &mut buffer)?;
         if read == 0 {
             let mut out = io::stdout().lock();
             out.write_all(b"\n")?;
@@ -72,8 +88,8 @@ impl PlainReader {
         false
     }
 
-    fn outcome(&mut self, prompt: &str) -> io::Result<ReadOutcome> {
-        let line = self.read_line(prompt, false)?;
+    fn outcome(&mut self, prompt: &str, input: &mut dyn BufRead) -> io::Result<ReadOutcome> {
+        let line = self.read_line_from(prompt, false, input)?;
         if self.interrupted_on_tty() {
             return Ok(ReadOutcome::Interrupted);
         }
@@ -88,23 +104,80 @@ impl PlainReader {
 pub(crate) fn rpassword_secret(prompt: &str) -> io::Result<SecretRead> {
     match rpassword::prompt_password(prompt) {
         Ok(secret) => Ok(SecretRead::Secret(SecretString::from(secret))),
-        Err(err) if err.kind() == io::ErrorKind::Interrupted => Ok(SecretRead::Interrupted),
+        Err(err) if err.kind() == io::ErrorKind::Interrupted => {
+            consume_raised_interrupt();
+            Ok(SecretRead::Interrupted)
+        }
         Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => Ok(SecretRead::Eof),
         Err(err) => Err(err),
     }
 }
 
-impl LineReader for PlainReader {
-    fn read_command(&mut self, prompt: &str) -> std::io::Result<super::line::ReadOutcome> {
-        let outcome = self.outcome(prompt)?;
-        if let (ReadOutcome::Line(line), Some(history)) = (&outcome, self.history.as_mut()) {
-            use reedline::History;
-            // FileBackedHistory skips empty lines and repeats of the last entry, as
-            // prompt_toolkit did; the filter answers Ok for secret lines without storing.
-            let _ = history.save(reedline::HistoryItem::from_command_line(line.clone()));
-            let _ = history.sync();
+/// rpassword answers Ctrl-C by raising SIGINT, so the ctrlc handler thread sets the
+/// interrupt flag shortly AFTER the read returned Interrupted. That interrupt is consumed
+/// here (bounded wait for the handler, then reset) so it cannot discard the operator's next
+/// plain read on a terminal.
+fn consume_raised_interrupt() {
+    for _ in 0..50 {
+        if interrupted() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    reset_interrupt();
+}
+
+impl PlainReader {
+    /// `read_command` over an explicit input (the global stdin lock; tests pass a cursor).
+    pub(crate) fn read_command_from(
+        &mut self,
+        prompt: &str,
+        input: &mut dyn BufRead,
+    ) -> io::Result<ReadOutcome> {
+        if self.stdin_is_tty {
+            // only a Ctrl-C pressed during THIS read counts: a stale one (pressed while a
+            // command ran that never checked the flag) must not swallow the next command
+            reset_interrupt();
+        }
+        let outcome = match self.outcome(prompt, input) {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                self.pending = None;
+                return Err(err);
+            }
+        };
+        match &outcome {
+            ReadOutcome::Line(line) => {
+                let entry = match self.pending.take() {
+                    Some(mut text) => {
+                        text.push('\n');
+                        text.push_str(line);
+                        text
+                    }
+                    None => line.clone(),
+                };
+                if !line_is_complete(&entry) {
+                    self.pending = Some(entry);
+                } else if let Some(history) = self.history.as_mut() {
+                    use reedline::History;
+                    // one logical entry per command (reedline escapes the newlines);
+                    // FileBackedHistory skips empty lines and repeats of the last entry, as
+                    // prompt_toolkit did; the filter answers Ok for secret entries without
+                    // storing them.
+                    let _ = history.save(reedline::HistoryItem::from_command_line(entry));
+                    let _ = history.sync();
+                }
+            }
+            // the REPL drops the buffer too
+            ReadOutcome::Interrupted | ReadOutcome::Eof => self.pending = None,
         }
         Ok(outcome)
+    }
+}
+
+impl LineReader for PlainReader {
+    fn read_command(&mut self, prompt: &str) -> std::io::Result<super::line::ReadOutcome> {
+        self.read_command_from(prompt, &mut io::stdin().lock())
     }
     fn read_param(
         &mut self,
@@ -112,7 +185,7 @@ impl LineReader for PlainReader {
         choices: &[String],
     ) -> std::io::Result<super::line::ReadOutcome> {
         let _ = choices;
-        self.outcome(prompt)
+        self.outcome(prompt, &mut io::stdin().lock())
     }
     fn read_secret(&mut self, prompt: &str) -> std::io::Result<super::line::SecretRead> {
         if self.stdin_is_tty {

@@ -651,3 +651,81 @@ fn console_width_is_richs_size_rule() {
         80
     );
 }
+
+#[test]
+fn test_prompt_secret_does_not_mask_later_prompts() {
+    // c2 regression (sticky prompt_toolkit kwargs): a PIN prompt must not leave later
+    // prompts masked — the next prompt is an ordinary (param) read returning the text
+    let h = harness(vec![line("hunter2"), line("3=0xc0fe")]);
+    assert_eq!(
+        h.io.prompt_secret("PIN").unwrap().expose_secret(),
+        "hunter2"
+    );
+    assert_eq!(h.io.prompt(&spec()).unwrap(), "3=0xc0fe");
+    let kinds: Vec<&str> = h.seen.borrow().iter().map(|s| s.0).collect();
+    assert_eq!(kinds, ["secret", "param"]);
+}
+
+#[test]
+fn test_param_completer_does_not_leak_to_later_prompts() {
+    // c2 regression: an ENUM completer stuck to the param session; r2 passes the choices
+    // per read, so the confirm after it carries none
+    let h = harness(vec![line("sha256"), line("y")]);
+    let enum_spec = ParamSpec::new("hash", ParamKind::Enum, "Hash").choices(&["sha1", "sha256"]);
+    h.io.prompt(&enum_spec).unwrap();
+    assert!(h.io.confirm("Proceed?", false).unwrap());
+    let choices: Vec<Vec<String>> = h.seen.borrow().iter().map(|s| s.2.clone()).collect();
+    assert_eq!(choices, [strings(&["sha1", "sha256"]), vec![]]);
+}
+
+// -- PlainReader: logical history entries, stale interrupts (R7 fix round 1) ---------
+
+fn history_entries(path: &std::path::Path) -> Vec<String> {
+    let history = SecretFilteringHistory::open(Some(path));
+    history
+        .search(SearchQuery::everything(SearchDirection::Forward, None))
+        .unwrap()
+        .into_iter()
+        .map(|item| item.command_line)
+        .collect()
+}
+
+#[test]
+fn plain_reader_stores_one_logical_history_entry_per_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("history");
+    let mut reader =
+        crate::io::PlainReader::new(false, Some(SecretFilteringHistory::open(Some(&path))));
+    let mut input =
+        io::Cursor::new(b"help 'a\nb'\nconfig show 'x\n\ny' --pin 1\nhelp \"never\n".to_vec());
+    let mut lines = Vec::new();
+    loop {
+        match reader.read_command_from("r2> ", &mut input).unwrap() {
+            ReadOutcome::Line(line) => lines.push(line),
+            ReadOutcome::Eof => break,
+            ReadOutcome::Interrupted => panic!("no interrupt"),
+        }
+    }
+    // the REPL still sees the physical lines; history holds the joined command once, the
+    // secret one not at all, and an unterminated quote at EOF never
+    assert_eq!(lines.len(), 6);
+    assert_eq!(history_entries(&path), ["help 'a\nb'"]);
+    let file = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(file, "help 'a<\\n>b'\n");
+}
+
+#[test]
+fn plain_reader_on_a_terminal_ignores_a_stale_interrupt() {
+    // rpassword's raise(SIGINT) or a Ctrl-C pressed while a command ran sets the flag
+    // before the next command read; that read must still return the typed command
+    let _lock = r2_testkit::global_state_lock();
+    let mut reader = crate::io::PlainReader::new(true, None);
+    r2_core::runtime::request_interrupt();
+    let mut input = io::Cursor::new(b"help\n".to_vec());
+    let outcome = reader.read_command_from("r2> ", &mut input).unwrap();
+    assert!(
+        matches!(outcome, ReadOutcome::Line(ref l) if l == "help"),
+        "{outcome:?}"
+    );
+    r2_core::runtime::reset_interrupt();
+}

@@ -222,7 +222,7 @@ Rules (summary of §4.1.2/§4.1.3):
   `r2_core::formats`); `der`/`spki`/`x509-cert`/`const-oid` in r2-core only;
   `serde_yaml_ng` and `yaml-rust2` in r2-config only; reedline, crossterm, nu-ansi-term,
   rpassword, indicatif, console in r2-console only; clap, ctrlc, tracing-subscriber,
-  file-rotate, regex in r2-cli only; `tracing` anywhere; `secrecy`/`zeroize` wherever
+  regex in r2-cli only; `tracing` anywhere; `secrecy`/`zeroize` wherever
   secrets are handled. Any `cryptoki`/`cryptoki-sys` bump must re-run the S0 cryptoki
   spike checks (unfiltered mechanism list, `MechanismType` `repr(transparent)`, `wrap_key`
   truncation, `get_attributes` decoding).
@@ -713,7 +713,7 @@ Third-party dependencies per crate (normal dependencies; versions in §4.1.4):
 | r2-pkcs11 | `cryptoki`, `cryptoki-sys`, `libloading`, `openssl`, `secrecy`, `zeroize`, `indexmap`, `tracing` |
 | r2-services | `secrecy`, `zeroize`, `indexmap`, `tracing` |
 | r2-console | `reedline`, `crossterm`, `nu-ansi-term`, `rpassword`, `indicatif`, `console`, `comfy-table`, `anstream`, `anstyle`, `unicode-width`, `secrecy`, `zeroize`, `indexmap`, `tracing` |
-| r2-cli | `clap`, `ctrlc`, `tracing`, `tracing-subscriber`, `file-rotate`, `regex` |
+| r2-cli | `clap`, `ctrlc`, `tracing`, `tracing-subscriber`, `regex` |
 | r2-testkit | `openssl`, `secrecy`, `zeroize`, `indexmap` |
 | dev (any crate) | `tempfile`, `assert_cmd`, `insta` |
 
@@ -730,7 +730,7 @@ reviews can check a new line quickly):
 | `comfy-table`, `anstyle` | `r2-core` (renderer), `r2-console` |
 | `unicode-width` | `r2-console` (r2-core's renderer measures with rich's own cell table, §4.9.2) |
 | `anstream` | `r2-console` (Sink) only |
-| `clap`, `ctrlc`, `tracing-subscriber`, `file-rotate`, `regex` | `r2-cli` only |
+| `clap`, `ctrlc`, `tracing-subscriber`, `regex` | `r2-cli` only |
 | `tracing` | any crate |
 
 `comfy-table` keeps its default `tty` feature (bold header cells and `enforce_styling`
@@ -856,7 +856,6 @@ ctrlc          = "3.5"
 clap           = { version = "4", features = ["derive"] }
 tracing        = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "registry", "std"] }
-file-rotate    = "0.8"
 regex          = "1"              # r2-cli log redaction only
 # dev
 tempfile       = "3"
@@ -4585,8 +4584,16 @@ pub fn install_line_assist(assist: Rc<dyn LineAssist>) -> AssistGuard { .. }
   ctrlc handler (the blocking read restarts and the tty discards the partial line), so
   after every plain read on a terminal: if `runtime::interrupted()`, reset the flag,
   discard the line and return Interrupted (Ctrl-C there takes effect at the next Enter —
-  §11 D2). EOF in a param prompt → UserAbort ("Aborted."); EOF at `r2>` exits 0. R7's pty
-  smoke test covers TERM=dumb.
+  §11 D2). A command read on a terminal resets the flag BEFORE it blocks (only a Ctrl-C
+  pressed during that read counts; a stale one — pressed while a command ran, or the
+  SIGINT rpassword raises for Ctrl-C at a hidden prompt — never swallows the next command),
+  and `rpassword_secret` consumes the interrupt its own `raise(SIGINT)` causes (bounded
+  wait for the ctrlc handler, then reset). History: PlainReader joins the physical lines
+  of a command whose quote is open exactly as the REPL does ("\n") and saves the logical
+  command once, when the quote closes (an entry still open at Ctrl-C/EOF is never saved),
+  through `SecretFilteringHistory` + `sync` — the same file format as TerminalIo (D7).
+  EOF in a param prompt → UserAbort ("Aborted."); EOF at `r2>` exits 0. R7's pty smoke
+  test covers TERM=dumb.
 - Completion/highlighting bridge: reedline requires `Send` extension points and
   AppContext is `!Send`, so `run_repl` installs its `LineAssist` with
   `install_line_assist` for the loop's lifetime; reedline only receives the zero-sized
@@ -4602,7 +4609,11 @@ pub fn install_line_assist(assist: Rc<dyn LineAssist>) -> AssistGuard { .. }
   `append_whitespace = false`; path-like candidates get `display_override` = last path
   component. Highlighting (`reedline::StyledText` of `nu_ansi_term::Style`s): known command
   green bold, unknown red, `provider:` refs of registered providers cyan, `--options` blue,
-  `name=value` magenta, quoted strings (incl. an open quote) yellow.
+  `name=value` magenta, quoted strings (incl. an open quote) yellow — classified as
+  `parser::bind_args` binds them: the token after an unquoted `--name` that is not one of
+  the command's `flags()` is that option's value (yellow if quoted, cyan if a registered
+  ref, else unstyled — never blue or magenta), `--` alone and `=value` with an empty name
+  (binder Parse errors) are unstyled.
 - Sink: the text is rendered per style by `r2_core::render` — Full → `render`, NoColor →
   `render_no_color`, Plain → `render_plain` — and written unchanged (never filtered or
   stripped afterwards, so content bytes reach stdout as rich wrote them, §4.9.2): Full and
@@ -5070,22 +5081,25 @@ provider (errors logged as warnings "shutdown of provider {name!r} failed: {mess
 ConsoleError before the REPL is written to stderr as "error: {message}" + " (hint:
 {hint})" when present, exit code 2. Usage errors are clap's (exit 2; texts §11 D19).
 
-Log file setup (c2 `setup_logging`, binding; file-rotate 0.8 panics on `bytes == 0`,
-`expect`s its own `create_dir_all` and swallows open errors, so r2 does both steps itself
-first): (1) `std::fs::create_dir_all(parent)` when `app.log.file` has a non-empty parent
-(c2 `log_path.parent.mkdir(parents=True, exist_ok=True)`), then (2)
-`OpenOptions::new().create(true).append(true).open(path)` (the handle is dropped; c2's
+Log file setup (c2 `setup_logging`, binding): (1) `std::fs::create_dir_all(parent)` when
+`app.log.file` has a non-empty parent (c2 `log_path.parent.mkdir(parents=True,
+exist_ok=True)`), then (2) `OpenOptions::new().create(true).append(true).open(path)` (c2's
 `RotatingFileHandler` opens the file at construction). Either failure → Config "cannot
 open log file {path}: {err}" ({path} = the expanded `app.log.file`, {err} =
 `text::py_os_error_str(err, failing path)`; hint "check app.log.file in the
-configuration") — before the subscriber is installed and before `FileRotate::new` runs.
-(3) `FileRotate::new(path, AppendCount::new(backups), limit, Compression::None, None)` with
-`limit = ContentLimit::None` when `max_bytes == 0 || backups == 0` (Python never rolls
-over in either case: the file just grows), else `ContentLimit::BytesSurpassed(max_bytes)`.
-Python rolls over BEFORE a record that would reach `max_bytes`; `BytesSurpassed` rotates
-after the write that crosses it, so a file may exceed `max_bytes` by one record (§11 D4).
-R7 tests: `max_bytes: 0` and `backups: 0` start and never rotate; an unwritable log
-directory and a log path that is a directory raise the Config error (c2
+configuration") — before the subscriber is installed. (3) Rotation is r2-cli's own port
+of Python's `RotatingFileHandler` (no rotation crate — file-rotate 0.8 listed the log
+directory with `unwrap()` and `assert!`ed on a startup snapshot of the backups, so a
+stray or concurrently rotated backup panicked inside the subscriber): before each record,
+when `max_bytes > 0`, the base path is a regular file (or absent) and current size + the
+record's character count ≥ `max_bytes`, roll over — close; when `backups > 0`, for i =
+backups−1 … 1 rename `.i` → `.i+1` if `.i` exists (removing an existing `.i+1` first),
+remove `.1` if it exists, rename the base file to `.1`; reopen in append mode (with
+`backups == 0` the file just grows). Write errors and rename/remove/open failures are
+ignored (a failed open is retried at the next record); nothing in the log path panics.
+R7 tests: `max_bytes: 0` and `backups: 0` start and never rotate; the Python rename chain
+and rollover-before-write; stray (`r2.log.01`) and concurrently rotated backups; an
+unwritable log directory and a log path that is a directory raise the Config error (c2
 test_logging_setup.py `test_unwritable_log_path_raises_config_error`), never a panic.
 
 ### 4.10 Test contracts
@@ -5735,11 +5749,13 @@ command line is read through the console-internal `LineReader` of the active `Co
   - **highlighting** via `BridgeHighlighter` (an r2 addition, §11 D9): known command green
     bold, unknown command red, `provider:` refs with a registered provider prefix cyan,
     `--option` blue, `name=value` magenta, quoted strings (including a still-open quote)
-    yellow. `with_ansi_colors` follows the §6 color policy, so `ui.color: never` and
+    yellow, each token classified as the binder binds it (an option's value is never
+    `--option`/`name=value`, §4.9.7). `with_ansi_colors` follows the §6 color policy, so `ui.color: never` and
     `NO_COLOR` govern the editor too.
   - `QuoteValidator` (multi-line, below) and reedline's default emacs keybindings.
 - **PlainIo** — writes the prompt, reads one line from stdin and echoes it when stdin is
-  not a terminal (§6).
+  not a terminal (§6); it keeps the same command history file as TerminalIo, one logical
+  entry per command (§4.9.7, D7).
 
 Unterminated quotes keep the buffer open with a `…> ` continuation prompt (paste a PEM
 across lines). In TerminalIo the `QuoteValidator` returns `Incomplete` exactly while
@@ -6917,9 +6933,10 @@ operator re-enables rows deliberately in the always-shown editor (§5.12).
   hint; PKCS#11 failures append the CKR name. OpenSSL `ErrorStack` `Display` (it embeds
   build-specific source paths and line numbers) and cryptoki `Display`/`Debug` texts are
   never shown to the operator (§5.8, §11 D11).
-- **Logging**: rotating file only (`tracing` + `tracing-subscriber` + `file-rotate`,
-  size-based with `app.log.max_bytes` and `app.log.backups` — either 0 disables rotation —,
-  parent directory created and file opened by r2 before file-rotate runs, §4.9.11; level
+- **Logging**: rotating file only (`tracing` + `tracing-subscriber` + r2-cli's port of
+  Python's `RotatingFileHandler`, size-based with `app.log.max_bytes` and `app.log.backups`
+  — either 0 disables rotation —, parent directory created and file opened by r2 first,
+  §4.9.11; level
   `app.log.level`); the
   console belongs to the renderer. `--debug` forces DEBUG and mirrors WARNING+ to stderr.
   Config unknown-key warnings go to the log, never stdout (c2 L2/L13 fold-back).
@@ -6942,7 +6959,8 @@ operator re-enables rows deliberately in the always-shown editor (§5.12).
     pipe, and without one (CI, `assert_cmd`) they fail with `ENXIO`. PlainIo is therefore
     mandatory on every OS (§11 D2).
   - **TerminalIo** = `LineIo<DegradingReader { primary: Option<ReedlineReader>,
-    plain: PlainReader }>`: the first `io::Error` from reedline (e.g. the 2-second timeout
+    plain: PlainReader }>`: the first `io::Error` from reedline (an rpassword secret-read
+    error is returned as is and never degrades the session; e.g. the 2-second timeout
     when a terminal never answers the `ESC[6n` cursor-position query — emacs shell-mode,
     some serial/remote consoles) disables raw mode, prints one stderr line
     `warning: line editor unavailable (<error>); continuing with plain input` and switches
@@ -7382,9 +7400,9 @@ names the test or harness check that pins the deviation.
   as `unexpected error: <panic message>` with hint `details logged to <log file>`, like
   c2's catch-all, but the detail text is Rust's. The log file keeps c2's path semantics
   (parent directory created, open failures as c2's Config error), rotation (`max_bytes`,
-  `backups`, either 0 = never rotate), levels and redaction. A rotated file may exceed
-  `max_bytes` by one record (file-rotate rotates after the write that crosses the limit;
-  Python's `RotatingFileHandler` rotates before it, §4.9.11). The line format and logger
+  `backups`, either 0 = never rotate), levels and redaction (rotation is a port of Python's
+  `RotatingFileHandler`, rollover before the record that would reach `max_bytes`,
+  §4.9.11). The line format and logger
   names differ (`tracing` targets such as `r2_config`/`r2_pkcs11` instead of `c2.config.*`,
   `c2.providers.*`).
 - *Reason*: runtime difference (PLAN §7.2).
@@ -7421,7 +7439,7 @@ names the test or harness check that pins the deviation.
   protocol (`r2-transport-<hex>`; c2: `c2-transport-<hex>`), and the SoftHSM wizard's
   default token label (`Token label [r2]`, `DEFAULT_TOKEN_LABEL = "r2"`; c2 offered and
   wrote `c2` — the label lands on tokens shared with c2). The history file is
-  reedline's format: one logical entry per command (a multi-line command is stored once,
+  reedline's format, in TerminalIo and PlainIo sessions alike: one logical entry per command (a multi-line command is stored once,
   with reedline's `<\n>` escaping — c2's prompt_toolkit file stored each physical line,
   with `# <timestamp>` and `+` prefixes), capped at the newest 1000 entries (c2:
   unbounded), and written by `sync` after every command. With its defaults, r2 never reads

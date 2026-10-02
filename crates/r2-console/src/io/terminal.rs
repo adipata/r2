@@ -244,7 +244,7 @@ impl DegradingReader {
                     let mut stderr = io::stderr().lock();
                     let _ = writeln!(
                         stderr,
-                        "\r\nwarning: line editor unavailable ({err}); continuing with plain input"
+                        "warning: line editor unavailable ({err}); continuing with plain input"
                     );
                     self.primary = None;
                 }
@@ -266,7 +266,12 @@ impl LineReader for DegradingReader {
         self.run(|reader| reader.read_param(prompt, choices))
     }
     fn read_secret(&mut self, prompt: &str) -> std::io::Result<super::line::SecretRead> {
-        self.run(|reader| reader.read_secret(prompt))
+        // rpassword is no line-editor failure: its error is returned as is and never
+        // degrades the session (the plain fallback would call rpassword again anyway)
+        match self.primary.as_mut() {
+            Some(primary) => primary.read_secret(prompt),
+            None => self.plain.read_secret(prompt),
+        }
     }
     fn clear_screen(&mut self) {
         if let Some(primary) = self.primary.as_mut() {

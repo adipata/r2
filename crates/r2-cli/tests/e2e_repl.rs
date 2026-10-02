@@ -257,6 +257,7 @@ fn config_path_and_origin_render_provenance() {
 }
 
 #[test]
+#[ignore = "needs the R4/R5a provider constructors (merge checklist: drop this ignore when R7 merges after R4/R5a)"]
 fn config_path_without_external_file_names_the_discovery_order() {
     let dir = tempfile::tempdir().unwrap();
     // no --config, no $R2_CONFIG, no ./r2.yaml, no user config: built-in defaults; keep the
@@ -266,12 +267,6 @@ fn config_path_without_external_file_names_the_discovery_order() {
         .output()
         .unwrap();
     let err = String::from_utf8(output.stderr).unwrap();
-    // the built-in defaults enable the memory provider (and SoftHSM autodetect): skipped
-    // while those constructors are R0 stubs, like test_main_end_to_end_with_real_providers
-    if output.status.code() == Some(1) && err.contains("not implemented") {
-        eprintln!("SKIP: provider constructors not merged yet: {err}");
-        return;
-    }
     assert_eq!(output.status.code(), Some(0), "{err}");
     let out = String::from_utf8(output.stdout).unwrap();
     assert!(out.contains(
@@ -366,6 +361,18 @@ fn log_files_follow_the_python_rules() {
 }
 
 #[test]
+fn history_file_stores_a_multi_line_command_once() {
+    // a quoted multi-line paste read at `…> ` is ONE logical history entry (§11 D7)
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), "");
+    let (out, _, code) = session(dir.path(), &config, b"help 'con\nfig'\nhelp\nexit\n");
+    assert_eq!(code, 0);
+    assert!(out.contains("r2> help 'con\n\u{2026}> fig'\n"), "{out}");
+    let history = std::fs::read_to_string(dir.path().join("history")).unwrap();
+    assert_eq!(history, "help 'con<\\n>fig'\nhelp\nexit\n");
+}
+
+#[test]
 fn history_file_drops_secret_lines() {
     let dir = tempfile::tempdir().unwrap();
     let config = write_config(dir.path(), "");
@@ -382,9 +389,10 @@ fn history_file_drops_secret_lines() {
 }
 
 #[test]
+#[ignore = "needs the R4/R5a provider constructors (merge checklist: drop this ignore when R7 merges after R4/R5a)"]
 fn test_main_end_to_end_with_real_providers() {
-    // c2 skipped this while L4/L5 were absent; r2 skips while the R4/R5a constructors are
-    // still R0 stubs (the binary then reports the stub's panic as a startup error).
+    // c2 skipped this while L4/L5 were absent; r2 runs it unconditionally once R4/R5a are
+    // merged (the built-in defaults construct MemoryProvider and probe for SoftHSM).
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("r2.yaml");
     std::fs::write(
@@ -400,10 +408,6 @@ fn test_main_end_to_end_with_real_providers() {
     )
     .unwrap();
     let (out, err, code) = session(dir.path(), &path, b"help\nconfig path\nexit\n");
-    if code == 1 && err.contains("not implemented") {
-        eprintln!("SKIP: provider constructors not merged yet: {err}");
-        return;
-    }
     assert_eq!(code, 0, "{err}");
     assert!(out.contains(&format!("config file: {}", path.display())));
 }

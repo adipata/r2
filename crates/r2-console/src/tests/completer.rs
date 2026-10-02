@@ -481,6 +481,25 @@ fn suggestions_never_append_whitespace_and_paths_show_their_last_component() {
     assert_eq!(suggestions[0].display_override, None);
 }
 
+struct Flagged;
+impl Command for Flagged {
+    fn name(&self) -> &'static str {
+        "flagged"
+    }
+    fn summary(&self) -> &'static str {
+        "test double"
+    }
+    fn usage(&self) -> &'static str {
+        "flagged [--force]"
+    }
+    fn flags(&self) -> &'static [&'static str] {
+        &["force"]
+    }
+    fn run(&self, _ctx: &AppContext, _args: &BoundArgs) -> r2_core::Result<Flow> {
+        Ok(Flow::Continue)
+    }
+}
+
 #[test]
 fn highlighting_styles_follow_the_grammar() {
     use nu_ansi_term::{Color, Style};
@@ -517,6 +536,53 @@ fn highlighting_styles_follow_the_grammar() {
         (Style::new().fg(Color::Red), "nope".to_owned())
     );
     assert_eq!(styled.buffer[2], (Style::new(), "zz:k".to_owned()));
+    // the binder's view: the value of a value-taking option is never name=value or an
+    // option, a flag takes no value, and "=x" / "--" are no name=value / option
+    let styles = |line: &str| -> Vec<(Style, String)> {
+        assist
+            .highlight(line)
+            .buffer
+            .into_iter()
+            .filter(|(_, text)| text != " ")
+            .collect()
+    };
+    assert_eq!(
+        styles("help --label a=b --out --x mem:k"),
+        [
+            (Style::new().fg(Color::Green).bold(), "help".to_owned()),
+            (Style::new().fg(Color::Blue), "--label".to_owned()),
+            (Style::new(), "a=b".to_owned()),
+            (Style::new().fg(Color::Blue), "--out".to_owned()),
+            (Style::new(), "--x".to_owned()),
+            (Style::new().fg(Color::Cyan), "mem:k".to_owned()),
+        ]
+    );
+    assert_eq!(
+        styles("help =x -- k=v"),
+        [
+            (Style::new().fg(Color::Green).bold(), "help".to_owned()),
+            (Style::new(), "=x".to_owned()),
+            (Style::new(), "--".to_owned()),
+            (Style::new().fg(Color::Magenta), "k=v".to_owned()),
+        ]
+    );
+    let mut with_flag = table();
+    with_flag.insert("flagged", Rc::new(Flagged) as Rc<dyn Command>);
+    let flagged = ConsoleAssist::new(Rc::clone(&ctx), Rc::new(with_flag));
+    let styled: Vec<(Style, String)> = flagged
+        .highlight("flagged --force k=v")
+        .buffer
+        .into_iter()
+        .filter(|(_, text)| text != " ")
+        .collect();
+    assert_eq!(
+        styled,
+        [
+            (Style::new().fg(Color::Green).bold(), "flagged".to_owned()),
+            (Style::new().fg(Color::Blue), "--force".to_owned()),
+            (Style::new().fg(Color::Magenta), "k=v".to_owned()),
+        ]
+    );
     // a still-open quote is a string to the end of the buffer
     let styled = assist.highlight("help 'abc\ndef");
     assert_eq!(styled.raw_string(), "help 'abc\ndef");

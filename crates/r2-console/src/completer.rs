@@ -251,12 +251,23 @@ impl LineAssist for ConsoleAssist {
                 (tokenize(before).unwrap_or_default(), Some(open))
             }
         };
+        // the binder's view (parser::bind_args): an unquoted `--name` that is not one of the
+        // command's flags takes the NEXT token as its value; `name=value` needs a name
+        let flags: &[&str] = tokens
+            .first()
+            .and_then(|first| self.commands.get(first.text.as_str()))
+            .map_or(&[], |command| command.flags());
+        let mut option_value = false;
         let mut at = 0;
         for (index, token) in tokens.iter().enumerate() {
             if token.pos > at {
                 styled.push((Style::new(), line[at..token.pos].to_owned()));
             }
             let raw = &line[token.pos..token.end];
+            let is_value = std::mem::take(&mut option_value);
+            let option = (index > 0 && !is_value && !token.quoted)
+                .then(|| token.text.strip_prefix("--"))
+                .flatten();
             let style = if index == 0 {
                 // dispatch looks up the token TEXT (a quoted command name runs too)
                 if self.commands.contains_key(token.text.as_str()) {
@@ -266,9 +277,20 @@ impl LineAssist for ConsoleAssist {
                 }
             } else if token.quoted {
                 Style::new().fg(Color::Yellow)
-            } else if raw.starts_with("--") {
-                Style::new().fg(Color::Blue)
-            } else if raw.contains('=') {
+            } else if let Some(name) = option {
+                if name.is_empty() {
+                    // "empty option name" (a Parse error in the binder)
+                    Style::new()
+                } else {
+                    option_value = !flags.contains(&name);
+                    Style::new().fg(Color::Blue)
+                }
+            } else if !is_value
+                && token
+                    .text
+                    .split_once('=')
+                    .is_some_and(|(name, _)| !name.is_empty())
+            {
                 Style::new().fg(Color::Magenta)
             } else if self.is_provider_ref(raw) {
                 Style::new().fg(Color::Cyan)

@@ -111,33 +111,27 @@ fn run(args: &Args, io: Option<Rc<dyn ConsoleIo>>, build_providers: BuildProvide
     }
 }
 
-/// Shuts every provider down when the REPL is left (c2's `finally`); errors are logged as
-/// warnings. While unwinding it does nothing (a provider may still be borrowed).
-struct ShutdownGuard(Rc<AppContext>);
-impl Drop for ShutdownGuard {
-    fn drop(&mut self) {
-        if std::thread::panicking() {
-            return;
-        }
-        for provider in self.0.providers.all() {
-            let name = provider.name().to_owned();
-            match catch_unwind(AssertUnwindSafe(|| provider.shutdown())) {
-                Ok(Ok(())) => {}
-                Ok(Err(err)) => tracing::warn!(
+/// Shuts every provider down when the REPL is left (c2's `finally`, which ran on an
+/// exception too); errors are logged as warnings, a panicking shutdown is caught and logged.
+fn shutdown_providers(ctx: &AppContext) {
+    for provider in ctx.providers.all() {
+        let name = provider.name().to_owned();
+        match catch_unwind(AssertUnwindSafe(|| provider.shutdown())) {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => tracing::warn!(
+                target: "r2::app",
+                "shutdown of provider {} failed: {}",
+                py_repr(&name),
+                err.message
+            ),
+            Err(_) => {
+                let report = r2_core::runtime::take_panic_report();
+                tracing::error!(
                     target: "r2::app",
                     "shutdown of provider {} failed: {}",
                     py_repr(&name),
-                    err.message
-                ),
-                Err(_) => {
-                    let report = r2_core::runtime::take_panic_report();
-                    tracing::error!(
-                        target: "r2::app",
-                        "shutdown of provider {} failed: {}",
-                        py_repr(&name),
-                        report.as_deref().unwrap_or("panic")
-                    );
-                }
+                    report.as_deref().unwrap_or("panic")
+                );
             }
         }
     }
@@ -155,17 +149,17 @@ fn session(
     let startup = || -> r2_core::Result<_> {
         let providers = build_providers(config)?;
         let operations = build_operation_registry(&config.custom_mechanisms)?;
+        let template_editor = create_template_editor(Rc::clone(&io), config);
         let commands = all_commands()?;
-        Ok((providers, operations, commands))
+        Ok((providers, operations, template_editor, commands))
     };
-    let (providers, operations, commands) = match startup() {
+    let (providers, operations, template_editor, commands) = match startup() {
         Ok(parts) => parts,
         Err(err) => {
             tracing::error!(target: "r2::app", "startup failed: {}", err.message);
             return startup_error(&err);
         }
     };
-    let template_editor = create_template_editor(Rc::clone(&io), config);
     let count = providers.all().len();
     let ctx = Rc::new(AppContext {
         config: Rc::new(loaded),
@@ -178,9 +172,29 @@ fn session(
     ctx.io.print(Renderable::Text(format!(
         "r2 {VERSION} — type 'help' for commands"
     )));
-    let _shutdown = ShutdownGuard(Rc::clone(&ctx));
-    r2_console::run_repl(&ctx, debug, commands);
+    repl_then_shutdown(&ctx, debug, commands);
     0
+}
+
+/// `run_repl`, then the providers' shutdown — also when a panic escapes the REPL
+/// (outside its per-command boundary): the shutdown runs after every command frame and
+/// borrow has been unwound, then the panic continues to run()'s startup-panic handler
+/// with its own report.
+fn repl_then_shutdown(ctx: &Rc<AppContext>, debug: bool, commands: Rc<r2_console::CommandTable>) {
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        r2_console::run_repl(ctx, debug, commands);
+    }));
+    let report = outcome
+        .is_err()
+        .then(r2_core::runtime::take_panic_report)
+        .flatten();
+    shutdown_providers(ctx);
+    if let Err(payload) = outcome {
+        if let Some(report) = report {
+            r2_core::runtime::record_panic_report(report);
+        }
+        std::panic::resume_unwind(payload);
+    }
 }
 
 #[cfg(test)]
@@ -308,6 +322,68 @@ mod tests {
                 .calls()
                 .contains(&vec!["shutdown".to_owned()])
         );
+    }
+
+    /// A panic payload whose Drop panics: run_repl catches the command's panic, and the
+    /// payload's drop then panics OUTSIDE the per-command boundary (c2: an exception out
+    /// of run_repl, still inside `finally`).
+    struct ExplodingPayload;
+    impl Drop for ExplodingPayload {
+        fn drop(&mut self) {
+            panic!("renderer exploded");
+        }
+    }
+    struct Escape;
+    impl Command for Escape {
+        fn name(&self) -> &'static str {
+            "escape"
+        }
+        fn summary(&self) -> &'static str {
+            "panics past the REPL"
+        }
+        fn usage(&self) -> &'static str {
+            "escape"
+        }
+        fn run(&self, _ctx: &AppContext, _args: &BoundArgs) -> r2_core::Result<Flow> {
+            std::panic::panic_any(ExplodingPayload)
+        }
+    }
+
+    #[test]
+    fn providers_are_shut_down_when_a_panic_escapes_the_repl() {
+        let _lock = global_state_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = write_isolated_config(dir.path(), "");
+        let loaded = load_config(Some(&config_path)).unwrap();
+        logging::configure(&loaded.config.app.log, false, None).unwrap();
+        panic::install();
+        let stub = StubProviders::default();
+        let config = loaded.config.clone();
+        let io = Rc::new(ScriptedIo::new(["escape", "exit"]));
+        let ctx = Rc::new(AppContext {
+            config: Rc::new(loaded),
+            providers: crate::bootstrap::build_with(&config, &stub).unwrap(),
+            operations: build_operation_registry(&config.custom_mechanisms).unwrap(),
+            io: Rc::clone(&io) as Rc<dyn ConsoleIo>,
+            template_editor: create_template_editor(Rc::clone(&io) as Rc<dyn ConsoleIo>, &config),
+        });
+        let mut commands: CommandTable = (*all_commands().unwrap()).clone();
+        commands.insert("escape", Rc::new(Escape));
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            repl_then_shutdown(&ctx, false, Rc::new(commands))
+        }));
+        let _ = std::panic::take_hook();
+        let payload = outcome.unwrap_err();
+        assert_eq!(panic::payload_text(payload.as_ref()), "renderer exploded");
+        // the providers were shut down before the panic continued to run()'s handler,
+        // whose report survived the shutdown
+        assert!(
+            stub.memory_instances.borrow()[0]
+                .calls()
+                .contains(&vec!["shutdown".to_owned()])
+        );
+        let report = r2_core::runtime::take_panic_report().unwrap();
+        assert!(report.starts_with("renderer exploded at "), "{report}");
     }
 
     #[test]

@@ -6,15 +6,16 @@
 //! values never reach disk. The subscriber is installed once; `setup_logging` replaces its
 //! sinks and level (idempotent re-setup, as c2's handler replacement). Record layout:
 //! "{time} {LEVEL:<7} {target}: {message}" (c2's format with tracing targets, §11 D4).
+//! Rotation is a port of Python's `RotatingFileHandler` (rollover BEFORE the record that
+//! would reach `max_bytes`; rename chain `.n-1`→`.n` … base→`.1`); it never panics and
+//! ignores I/O errors, so a stray or concurrently rotated backup can never take the
+//! process down.
 use std::fmt::Write as _;
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, Once, OnceLock, PoisonError};
 
-use file_rotate::compression::Compression;
-use file_rotate::suffix::AppendCount;
-use file_rotate::{ContentLimit, FileRotate};
 use r2_config::model::{LogLevel, LogSection};
 use r2_core::error::ConsoleError;
 use r2_core::text::py_os_error_str;
@@ -32,8 +33,92 @@ pub(crate) type Mirror = Box<dyn Write + Send>;
 
 struct LogState {
     level: LevelFilter,
-    file: FileRotate<AppendCount>,
+    file: RotatingFile,
     mirror: Option<Mirror>,
+}
+
+/// Python `logging.handlers.RotatingFileHandler(path, maxBytes, backupCount)` — the parts
+/// c2 used. Every I/O error is swallowed (Python's `handleError` printed a report and went
+/// on); a failed open is retried at the next record.
+pub(crate) struct RotatingFile {
+    path: PathBuf,
+    max_bytes: u64,
+    backups: u64,
+    file: Option<File>,
+}
+
+impl RotatingFile {
+    fn open_append(path: &Path) -> io::Result<File> {
+        OpenOptions::new().create(true).append(true).open(path)
+    }
+
+    /// `shouldRollover`: only a regular (or not yet existing) base file rolls over, and only
+    /// when `max_bytes > 0` and the current size plus the record (Python counts the
+    /// formatted message's characters) reaches `max_bytes`.
+    fn should_rollover(&mut self, record: &str) -> bool {
+        if self.max_bytes == 0 {
+            return false;
+        }
+        if std::fs::metadata(&self.path).is_ok_and(|meta| !meta.is_file()) {
+            return false;
+        }
+        let Some(file) = self.file.as_mut() else {
+            return false;
+        };
+        let Ok(size) = file.metadata().map(|meta| meta.len()) else {
+            return false;
+        };
+        let chars = u64::try_from(record.chars().count()).unwrap_or(u64::MAX);
+        size.saturating_add(chars) >= self.max_bytes
+    }
+
+    fn numbered(&self, index: u64) -> PathBuf {
+        let mut name = self.path.clone().into_os_string();
+        name.push(format!(".{index}"));
+        PathBuf::from(name)
+    }
+
+    /// `doRollover`: close; when `backups > 0`, shift `.i` → `.i+1` for i = backups-1..1
+    /// (an existing destination is removed first), remove `.1`, rename base → `.1`; reopen.
+    fn rollover(&mut self) {
+        self.file = None;
+        if self.backups > 0 {
+            for index in (1..self.backups).rev() {
+                let source = self.numbered(index);
+                if source.exists() {
+                    let target = self.numbered(index + 1);
+                    if target.exists() {
+                        let _ = std::fs::remove_file(&target);
+                    }
+                    let _ = std::fs::rename(&source, &target);
+                }
+            }
+            let first = self.numbered(1);
+            if first.exists() {
+                let _ = std::fs::remove_file(&first);
+            }
+            if self.path.exists() {
+                let _ = std::fs::rename(&self.path, &first);
+            }
+        }
+        self.file = Self::open_append(&self.path).ok();
+    }
+
+    /// `emit`: (re)open if needed, roll over if the record would reach the limit, write.
+    pub(crate) fn write_record(&mut self, record: &str) {
+        if self.file.is_none() {
+            self.file = Self::open_append(&self.path).ok();
+        }
+        if self.should_rollover(record) {
+            self.rollover();
+        }
+        if let Some(file) = self.file.as_mut()
+            && (file.write_all(record.as_bytes()).is_err() || file.flush().is_err())
+        {
+            // reopen at the next record (e.g. the file was removed underneath us)
+            self.file = None;
+        }
+    }
 }
 
 static STATE: Mutex<Option<LogState>> = Mutex::new(None);
@@ -135,8 +220,7 @@ impl<S: Subscriber> Layer<S> for R2Layer {
         if *metadata.level() > state.level {
             return;
         }
-        let _ = state.file.write_all(line.as_bytes());
-        let _ = state.file.flush();
+        state.file.write_record(&line);
         if *metadata.level() <= Level::WARN
             && let Some(mirror) = state.mirror.as_mut()
         {
@@ -170,7 +254,7 @@ fn mkdir_parents(path: &Path) -> Result<(), (io::Error, PathBuf)> {
 }
 
 /// Steps (1)+(2) of §4.9.11, then (3): the rotating file.
-fn open_log_file(section: &LogSection) -> r2_core::Result<FileRotate<AppendCount>> {
+fn open_log_file(section: &LogSection) -> r2_core::Result<RotatingFile> {
     let path = section.file.as_path();
     let fail = |err: &io::Error, failing: &Path| {
         ConsoleError::config(format!(
@@ -185,25 +269,15 @@ fn open_log_file(section: &LogSection) -> r2_core::Result<FileRotate<AppendCount
     {
         mkdir_parents(parent).map_err(|(err, failing)| fail(&err, &failing))?;
     }
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .map_err(|err| fail(&err, path))?;
-    let limit = match usize::try_from(section.max_bytes) {
-        // Python never rolls over when either is 0: the file just grows
-        _ if section.max_bytes == 0 || section.backups == 0 => ContentLimit::None,
-        Ok(bytes) => ContentLimit::BytesSurpassed(bytes),
-        Err(_) => ContentLimit::None,
-    };
-    let backups = usize::try_from(section.backups).unwrap_or(usize::MAX);
-    Ok(FileRotate::new(
-        path,
-        AppendCount::new(backups),
-        limit,
-        Compression::None,
-        None,
-    ))
+    let file = RotatingFile::open_append(path).map_err(|err| fail(&err, path))?;
+    // Python never rolls over when maxBytes is 0; with backupCount 0 a rollover only
+    // closes and reopens the file, which just grows
+    Ok(RotatingFile {
+        path: path.to_path_buf(),
+        max_bytes: section.max_bytes,
+        backups: u64::from(section.backups),
+        file: Some(file),
+    })
 }
 
 /// Configure (or re-configure) the log sinks; `mirror` receives WARNING+ under `debug`.
@@ -389,8 +463,83 @@ mod tests {
         assert!(dir.path().join("cc.log.1").exists());
         assert!(dir.path().join("cc.log.2").exists());
         assert!(!dir.path().join("cc.log.3").exists());
-        let current = std::fs::metadata(dir.path().join("cc.log")).unwrap().len();
-        assert!(current <= 4096 + 300); // may exceed by one record (§11 D4)
+        // Python rolls over BEFORE the record that would reach maxBytes
+        for name in ["cc.log", "cc.log.1", "cc.log.2"] {
+            let size = std::fs::metadata(dir.path().join(name)).unwrap().len();
+            assert!(size < 4096, "{name}: {size}");
+        }
+    }
+
+    fn rotating(dir: &Path, max_bytes: u64, backups: u64) -> RotatingFile {
+        let path = dir.join("cc.log");
+        RotatingFile {
+            file: RotatingFile::open_append(&path).ok(),
+            path,
+            max_bytes,
+            backups,
+        }
+    }
+
+    #[test]
+    fn rollover_matches_python_rotating_file_handler() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = rotating(dir.path(), 10, 2);
+        // "aaaa\n" (5) + "bbbb\n" (5) reaches 10: rolled over before the second record
+        file.write_record("aaaa\n");
+        file.write_record("bbbb\n");
+        file.write_record("cccc\n");
+        file.write_record("dddd\n");
+        let text = |name: &str| std::fs::read_to_string(dir.path().join(name)).unwrap();
+        assert_eq!(text("cc.log"), "dddd\n");
+        assert_eq!(text("cc.log.1"), "cccc\n");
+        assert_eq!(text("cc.log.2"), "bbbb\n");
+        assert!(!dir.path().join("cc.log.3").exists());
+    }
+
+    #[test]
+    fn stray_or_concurrently_rotated_backups_never_panic() {
+        // file-rotate 0.8 asserted on its startup view of the backups; Python just renames
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("cc.log.01"), "stray").unwrap();
+        let mut first = rotating(dir.path(), 10, 3);
+        let mut second = rotating(dir.path(), 10, 3);
+        for round in 0..6 {
+            first.write_record(&format!("first{round}\n"));
+            second.write_record(&format!("second{round}\n"));
+        }
+        assert!(dir.path().join("cc.log.3").exists());
+        assert!(!dir.path().join("cc.log.4").exists());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("cc.log.01")).unwrap(),
+            "stray"
+        );
+        // the base file vanishing underneath is reopened at the next record
+        std::fs::remove_file(dir.path().join("cc.log")).unwrap();
+        first.write_record("again\n");
+        first.write_record("again\n");
+        assert!(dir.path().join("cc.log").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unlistable_log_directory_starts_normally() {
+        // c2's RotatingFileHandler never lists the directory (file-rotate 0.8 panicked)
+        use std::os::unix::fs::PermissionsExt;
+        let _lock = global_state_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path().join("logs");
+        std::fs::create_dir(&logs).unwrap();
+        std::fs::write(logs.join("cc.log"), "").unwrap();
+        std::fs::set_permissions(&logs, std::fs::Permissions::from_mode(0o300)).unwrap();
+        let section = LogSection {
+            file: logs.join("cc.log"),
+            ..section(dir.path(), LogLevel::Info)
+        };
+        let result = configure(&section, false, None);
+        tracing::info!("still logging");
+        std::fs::set_permissions(&logs, std::fs::Permissions::from_mode(0o700)).unwrap();
+        result.unwrap();
+        assert!(read(&logs).contains("still logging"));
     }
 
     #[test]

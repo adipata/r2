@@ -54,7 +54,6 @@ ctrlc          = "3.5"
 clap           = { version = "4", features = ["derive"] }
 tracing        = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "registry", "std"] }
-file-rotate    = "0.8"
 regex          = "1"              # r2-cli log redaction only
 # dev
 tempfile       = "3"

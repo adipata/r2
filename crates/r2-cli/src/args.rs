@@ -11,7 +11,11 @@ use clap::{ArgAction, Parser};
     name = "r2",
     version,
     about = "Interactive cryptographic operator console.",
-    disable_version_flag = true
+    disable_version_flag = true,
+    // argparse parity: unique long-option prefixes (`allow_abbrev=True`) and a repeated
+    // option overrides the earlier one (last wins).
+    infer_long_args = true,
+    args_override_self = true
 )]
 pub(crate) struct Args {
     /// show program's version number and exit
@@ -56,6 +60,25 @@ mod tests {
         // an empty --config counts as absent
         assert_eq!(parse(&["--config", ""]).unwrap().config_path(), None);
         assert_eq!(parse(&["--config="]).unwrap().config_path(), None);
+    }
+
+    #[test]
+    fn long_option_prefixes_and_repeats_behave_like_argparse() {
+        // argparse allow_abbrev=True: unique prefixes are accepted
+        assert!(parse(&["--deb"]).unwrap().debug);
+        for argv in [&["--conf", "/x"][..], &["--conf=/x"]] {
+            assert_eq!(
+                parse(argv).unwrap().config_path(),
+                Some(PathBuf::from("/x")),
+                "{argv:?}"
+            );
+        }
+        let err = parse(&["--vers"]).unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
+        // a repeated option: the last one wins, store_true may repeat
+        let args = parse(&["--config", "a", "--config", "b"]).unwrap();
+        assert_eq!(args.config_path(), Some(PathBuf::from("b")));
+        assert!(parse(&["--debug", "--debug"]).unwrap().debug);
     }
 
     #[test]
