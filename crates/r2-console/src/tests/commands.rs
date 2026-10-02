@@ -289,6 +289,47 @@ fn test_config_show_origin_renders_all_six_sections() {
 }
 
 #[test]
+fn config_show_origin_folds_a_long_path_keeping_it_whole() {
+    // §11 D1: a word longer than its column is folded onto further cell lines (c2/rich
+    // cropped it to "…"); the cell content itself is the full path
+    let source = PathBuf::from(
+        "/home/operator/projects/hsm-console/configs/production/eu-west/r2-operator.yaml",
+    );
+    let mut origins: IndexMap<String, String> = CONFIG_SECTIONS
+        .iter()
+        .map(|s| ((*s).to_owned(), "default".to_owned()))
+        .collect();
+    origins.insert("app".to_owned(), source.display().to_string());
+    let io = scripted();
+    let ctx = CtxBuilder::new(Rc::clone(&io) as Rc<dyn ConsoleIo>)
+        .source_path(source.clone())
+        .origins(origins)
+        .build();
+    run_line(&ctx, "config show --origin").unwrap();
+    let renderable = &io.renderables()[0];
+    let Renderable::Table(table) = renderable else {
+        panic!("not a table");
+    };
+    assert_eq!(
+        table.rows[0],
+        ["app", source.display().to_string().as_str()]
+    );
+    let cfg = r2_core::render::RenderConfig {
+        width: 60,
+        ..r2_core::render::RenderConfig::CAPTURE
+    };
+    let shown = r2_core::render::render_plain(renderable, &cfg);
+    assert!(!shown.contains('…'), "{shown}");
+    let origin_column: String = shown
+        .lines()
+        .skip_while(|line| !line.trim_start().starts_with("app "))
+        .take_while(|line| !line.trim_start().starts_with("ui "))
+        .map(|line| line.split_whitespace().last().unwrap_or(""))
+        .collect();
+    assert_eq!(origin_column, source.display().to_string(), "{shown}");
+}
+
+#[test]
 fn config_show_origin_appends_unknown_sections_and_defaults_missing_ones() {
     // c2 `_show_origin`: missing sections → "default"; extra origin keys follow
     let mut origins = IndexMap::new();

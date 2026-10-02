@@ -4589,7 +4589,10 @@ pub fn install_line_assist(assist: Rc<dyn LineAssist>) -> AssistGuard { .. }
   one that arrives while the read blocks resets the flag, writes "\n" (no echo), keeps the
   line read in a one-slot stash and returns Interrupted — the next read returns the stashed
   line (echoed after its prompt) before touching stdin, so no script line is lost (c2's
-  KeyboardInterrupt left the unread pipe data in place). A command read on a terminal resets the flag BEFORE it blocks (only a Ctrl-C
+  KeyboardInterrupt left the unread pipe data in place). The line read by an interrupted
+  secret read (`read_secret`, piped) is never stashed: it is zeroized and discarded, so a
+  PIN or password can never come back as a command (echoed, saved to the history,
+  dispatched). A command read on a terminal resets the flag BEFORE it blocks (only a Ctrl-C
   pressed during that read counts; a stale one — pressed while a command ran, or the
   SIGINT rpassword raises for Ctrl-C at a hidden prompt — never swallows the next command),
   and `rpassword_secret` consumes the interrupt its own `raise(SIGINT)` causes (bounded
@@ -7345,8 +7348,11 @@ names the test or harness check that pins the deviation.
   `box.SIMPLE_HEAD`): same columns, same cell content (control codes stripped as rich did),
   but no outer edge spaces or blank edge rows, the header rule spans the computed width, a
   table title is an r2-rendered, centered italic line, and comfy-table measures cells with
-  unicode-width (column widths may differ where that differs from rich's cell table).
-  Printed text, the caret echo and panels (error panel, hex dump, any `PanelData`) are an
+  unicode-width (column widths may differ where that differs from rich's cell table). A
+  word longer than its column is folded onto further lines of the cell, its content kept
+  whole; c2's rich columns (default `overflow="ellipsis"`) cropped it to the column width
+  minus one and appended `…` (e.g. a long config path in `config show --origin`; text with
+  spaces word-wraps in both). Printed text, the caret echo and panels (error panel, hex dump, any `PanelData`) are an
   own port of rich 15's Text/Panel layout (§4.9.2) and equal rich's output at every console
   width of 2 or more; residuals: cell widths are rich's Unicode 17.0.0 table (rich's
   `UNICODE_VERSION` environment override is not honoured), and below width 2 (never
@@ -7364,7 +7370,7 @@ names the test or harness check that pins the deviation.
   anstream falls back to wincon colours.
 - *Reason*: different renderer (decision PLAN §3/§13).
 - *Verified by*: `insta` snapshots; the parity harness compares content after normalizing
-  table glyphs; the R1 renderer tests assert rich-identical text for error, hex and generic
+  table glyphs (and folded over-long words against rich's `…` crop); the R1 renderer tests assert rich-identical text for error, hex and generic
   panels, printed text (content ESC/NUL/DEL/OSC bytes included), caret layouts and
   `cell_len` (vectors generated with rich 15,
   `crates/r2-core/tests/support/gen_rich_panels.py`); `resolve_color` unit tests over the

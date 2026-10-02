@@ -82,6 +82,11 @@ impl LineReader for ScriptedReader {
             Step::Fail => Err(io::Error::from_raw_os_error(5)),
         }
     }
+    fn clear_screen(&mut self) {
+        self.seen
+            .borrow_mut()
+            .push(("clear_screen", String::new(), Vec::new()));
+    }
 }
 
 /// A LineIo over a scripted reader, its captured output and the reader's log.
@@ -546,12 +551,17 @@ fn clear_writes_the_sequence_unless_plain() {
     let plain = harness(vec![]);
     plain.io.clear();
     assert_eq!(plain.text(), "");
+    // nor does the reader repaint (reedline would write its own clear sequence)
+    assert!(plain.seen.borrow().is_empty());
     let full = harness_with(vec![], SinkStyle::Full);
     full.io.clear();
     assert_eq!(full.text(), "\u{1b}[2J\u{1b}[H");
+    assert_eq!(full.seen.borrow().len(), 1);
+    assert_eq!(full.seen.borrow()[0].0, "clear_screen");
     let no_color = harness_with(vec![], SinkStyle::NoColor);
     no_color.io.clear();
     assert_eq!(no_color.text(), "\u{1b}[2J\u{1b}[H");
+    assert_eq!(no_color.seen.borrow()[0].0, "clear_screen");
 }
 
 #[test]
@@ -787,5 +797,53 @@ fn piped_sigint_before_a_read_aborts_it_without_consuming_input() {
     assert!(
         matches!(second, ReadOutcome::Line(ref l) if l == "answer"),
         "{second:?}"
+    );
+}
+
+#[test]
+fn piped_sigint_during_a_secret_read_discards_the_secret() {
+    // the line of an interrupted hidden read (PIN, password) is wiped, never stashed: the
+    // next command read must not return it, echo it, dispatch it or save it to the history
+    let _lock = r2_testkit::global_state_lock();
+    r2_core::runtime::reset_interrupt();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("history");
+    let mut reader =
+        crate::io::PlainReader::new(false, Some(SecretFilteringHistory::open(Some(&path))));
+    let mut input = InterruptedRead(io::Cursor::new(b"hunter2\n".to_vec()));
+    let secret = reader.read_secret_from("PIN: ", &mut input).unwrap();
+    assert!(
+        matches!(secret, SecretRead::Interrupted),
+        "interrupted secret read"
+    );
+    assert!(!r2_core::runtime::interrupted());
+    let mut rest = io::Cursor::new(b"help\n".to_vec());
+    let next = reader.read_command_from("r2> ", &mut rest).unwrap();
+    assert!(
+        matches!(next, ReadOutcome::Line(ref l) if l == "help"),
+        "{next:?}"
+    );
+    assert_eq!(history_entries(&path), ["help"]);
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("hunter2"));
+}
+
+#[test]
+fn history_file_with_invalid_utf8_keeps_being_appended() {
+    // c2's FileHistory decoded with errors="replace" and kept appending; reedline's sync
+    // refused the file, which silently disabled history for good
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("history");
+    std::fs::write(&path, b"help\n\xff\xfebad\n").unwrap();
+    let mut reader =
+        crate::io::PlainReader::new(false, Some(SecretFilteringHistory::open(Some(&path))));
+    let mut input = io::Cursor::new(b"config path\nexit\n".to_vec());
+    while let ReadOutcome::Line(_) = reader.read_command_from("r2> ", &mut input).unwrap() {}
+    assert_eq!(
+        history_entries(&path),
+        ["help", "\u{fffd}\u{fffd}bad", "config path", "exit"]
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "help\n\u{fffd}\u{fffd}bad\nconfig path\nexit\n"
     );
 }

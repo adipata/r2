@@ -38,19 +38,16 @@ impl PlainReader {
         }
     }
 
-    /// Prompt to stdout, one byte-level line from the global stdin handle (never a second
-    /// BufReader), trailing `\r`/`\n` stripped, lossy UTF-8; echo per the rules; at EOF a
-    /// newline and Eof. The byte buffer is wiped once decoded (it may hold a secret).
-    fn read_line(&mut self, prompt: &str, secret: bool) -> io::Result<ReadOutcome> {
-        self.read_line_from(prompt, secret, &mut io::stdin().lock())
-    }
-
-    /// `read_line` over an explicit input (the global stdin lock; tests pass a cursor).
+    /// Prompt to stdout, one byte-level line from `input` (the global stdin lock — never a
+    /// second BufReader; tests pass a cursor), trailing `\r`/`\n` stripped, lossy UTF-8;
+    /// echo per the rules; at EOF a newline and Eof. The byte buffer is wiped once decoded
+    /// (it may hold a secret).
     ///
     /// Piped stdin (not a terminal): a SIGINT (the ctrlc handler's flag) set before the read
     /// reports Interrupted without reading; one that arrived while the read blocked reports
     /// Interrupted too, and the line read is kept (`stashed`) and returned, echoed, by the
-    /// next read — c2's KeyboardInterrupt left the unread pipe data in place (§11 D2).
+    /// next read — c2's KeyboardInterrupt left the unread pipe data in place (§11 D2). The
+    /// line of an interrupted secret read is discarded (zeroized), never stashed.
     fn read_line_from(
         &mut self,
         prompt: &str,
@@ -87,7 +84,11 @@ impl PlainReader {
         let mut out = io::stdout().lock();
         if !self.stdin_is_tty && interrupted() {
             reset_interrupt();
-            self.stashed = line;
+            // a secret read's line is wiped and dropped, never stashed: a later command
+            // read would echo it, save it to the history and dispatch it (§4.9.7, §5.1)
+            if !secret {
+                self.stashed = line;
+            }
             out.write_all(b"\n")?;
             out.flush()?;
             return Ok(ReadOutcome::Interrupted);
@@ -220,8 +221,19 @@ impl LineReader for PlainReader {
             // the tty driver would echo a plain-read secret
             return rpassword_secret(prompt);
         }
-        // piped: one plain line, never echoed (rpassword would open /dev/tty)
-        Ok(match self.read_line(prompt, true)? {
+        self.read_secret_from(prompt, &mut io::stdin().lock())
+    }
+}
+
+impl PlainReader {
+    /// Piped `read_secret` over an explicit input (the global stdin lock; tests pass a
+    /// cursor): one plain line, never echoed (rpassword would open /dev/tty).
+    pub(crate) fn read_secret_from(
+        &mut self,
+        prompt: &str,
+        input: &mut dyn BufRead,
+    ) -> io::Result<SecretRead> {
+        Ok(match self.read_line_from(prompt, true, input)? {
             ReadOutcome::Line(line) => SecretRead::Secret(SecretString::from(line)),
             ReadOutcome::Interrupted => SecretRead::Interrupted,
             ReadOutcome::Eof => SecretRead::Eof,

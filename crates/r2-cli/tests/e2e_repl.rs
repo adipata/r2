@@ -270,10 +270,16 @@ fn config_path_without_external_file_names_the_discovery_order() {
     let err = String::from_utf8(output.stderr).unwrap();
     assert_eq!(output.status.code(), Some(0), "{err}");
     let out = String::from_utf8(output.stdout).unwrap();
-    assert!(out.contains(
-        "config file: (none — running on built-in defaults)\n\
-         discovery order: --config PATH, $R2_CONFIG, ./r2.yaml, <user config dir>/r2/r2.yaml\n"
-    ));
+    // piped output is 80 columns wide: the line wraps exactly where c2/rich wraps it (the
+    // trailing blank before the break is kept, as rich does)
+    assert!(
+        out.contains(
+            "config file: (none — running on built-in defaults)\n\
+             discovery order: --config PATH, $R2_CONFIG, ./r2.yaml, <user config \n\
+             dir>/r2/r2.yaml\n"
+        ),
+        "{out}"
+    );
 }
 
 #[test]

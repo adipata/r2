@@ -23,22 +23,61 @@ pub struct SecretFilteringHistory {
 impl SecretFilteringHistory {
     /// `FileBackedHistory::with_file(1000, path)` (parent directory created); an unusable
     /// path — or none — falls back to the in-memory `FileBackedHistory::new(1000)` (c2:
-    /// "never let a bad history path block startup").
+    /// "never let a bad history path block startup"), with a warning when a path was given.
+    /// An existing file that is not valid UTF-8 (reedline's `sync` would refuse it for good)
+    /// is first rewritten decoded with U+FFFD replacements — c2's FileHistory decoded with
+    /// `errors="replace"` and kept appending.
     pub(crate) fn open(path: Option<&Path>) -> Self {
         let file = path.and_then(|path| {
             if let Some(parent) = path.parent()
                 && !parent.as_os_str().is_empty()
-                && std::fs::create_dir_all(parent).is_err()
+                && let Err(err) = std::fs::create_dir_all(parent)
             {
+                warn_unusable(path, &err);
                 return None;
             }
-            FileBackedHistory::with_file(HISTORY_CAPACITY, path.to_path_buf()).ok()
+            repair_utf8(path);
+            match FileBackedHistory::with_file(HISTORY_CAPACITY, path.to_path_buf()) {
+                Ok(history) => Some(history),
+                Err(err) => {
+                    warn_unusable(path, &err);
+                    None
+                }
+            }
         });
         let inner = match file {
             Some(history) => history,
             None => FileBackedHistory::new(HISTORY_CAPACITY).unwrap_or_default(),
         };
         Self { inner }
+    }
+}
+
+fn warn_unusable(path: &Path, err: &dyn std::fmt::Display) {
+    tracing::warn!(
+        target: "r2::console",
+        "history file {} unusable ({err}); history is not saved this session",
+        path.display()
+    );
+}
+
+/// Rewrites an existing history file that is not valid UTF-8 with the invalid bytes
+/// replaced by U+FFFD (Python `errors="replace"`). Unreadable files are left alone.
+fn repair_utf8(path: &Path) {
+    let Ok(bytes) = std::fs::read(path) else {
+        return;
+    };
+    if std::str::from_utf8(&bytes).is_ok() {
+        return;
+    }
+    let repaired = String::from_utf8_lossy(&bytes);
+    match std::fs::write(path, repaired.as_bytes()) {
+        Ok(()) => tracing::warn!(
+            target: "r2::console",
+            "history file {} was not valid UTF-8; invalid bytes replaced",
+            path.display()
+        ),
+        Err(err) => warn_unusable(path, &err),
     }
 }
 

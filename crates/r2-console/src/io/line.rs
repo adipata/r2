@@ -390,11 +390,12 @@ impl<R: LineReader> r2_core::io::ConsoleIo for LineIo<R> {
         })
     }
     fn clear(&self) {
-        // rich `Console.clear()`: nothing when not a terminal (or a dumb one).
+        // rich `Console.clear()`: nothing when not a terminal (or a dumb one) — the reader's
+        // repaint (reedline writes its own clear sequence) included.
         if self.sink.style != SinkStyle::Plain {
             self.quiet(|| self.sink.write("\u{1b}[2J\u{1b}[H"));
+            self.quiet(|| self.reader.borrow_mut().clear_screen());
         }
-        self.quiet(|| self.reader.borrow_mut().clear_screen());
     }
     fn busy(&self, message: &str, f: &mut dyn FnMut()) {
         let nested = self
