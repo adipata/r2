@@ -302,7 +302,9 @@ operator input line
   cryptoki's `log`-crate records are dropped (§4.1.3).
 - **Shutdown** (`exit`/`quit`, Ctrl-D at `r2>`, end of piped input) runs every provider's
   `shutdown()` from `r2-cli`; transport keys and other temporaries are released by `Drop`
-  guards on success, error and unwind paths alike (`panic = "unwind"` in release builds).
+  guards on success and error paths alike (`panic = "unwind"` in release builds); on the
+  unwind path a guard makes no provider call (§4 unwind safety), so session objects such as
+  transport keys die with their session (logout, provider shutdown).
 
 ## 4. FROZEN CONTRACTS (normative)
 
@@ -7985,9 +7987,21 @@ merges).**
     Python's `int()`/`float()`: surrounding whitespace, sign, base prefix) accept ASCII
     digits only (CPython's `int()` also accepts other Unicode decimal digits); `select`
     answers and template-editor row numbers are gated by `text::py_isdigit` (c2
-    `str.isdigit()`), which is ASCII-only too: CPython's `isdigit()` also accepts e.g.
-    superscript digits, for which c2's following `int()` then raised (unexpected-error
-    path) and r2 answers "invalid choice …" / "… is not a row number";
+    `str.isdigit()`), which is ASCII-only too: c2 also accepted other Unicode decimal
+    digits there (e.g. Arabic-Indic `٣`, `+٣`, `-٣` selected, toggled, enabled or disabled
+    row 3), and CPython's `isdigit()` also passes non-decimal digits such as superscripts,
+    for which c2's following `int()` then raised (unexpected-error path); r2 refuses both
+    with "invalid choice …" / "… is not a row number";
+  - a template-editor ULONG value (§5.12 `<n>=<value>` / `add CKA_X=<value>`) above
+    18446744073709551615 is refused in the editor with Param `<name>: <value!r> does not fit
+    a 64-bit CK_ULONG` (hint `the largest value is 18446744073709551615`; editing continues)
+    where c2 stored the Python int (`AttrValue::Ulong` is a `u64`, §4.7) — any well-formed
+    integer text counts, also beyond i128 (decimal text of more than 4300 digits keeps c2's
+    `<name>: invalid integer …`, CPython's `int(str)` digit limit; hex is unlimited); a
+    negative one keeps c2's `<name> must not be negative`; a template-editor row token of
+    more than 4300 digits (leading zeros included, so also one whose value is a valid row)
+    is Param `row <n> is out of range …` (`<n>`: the digits without leading zeros, `0` if
+    none remain) and changes nothing, where c2's `int()` raised (unexpected-error path);
   - `text::py_os_error_str` always renders the POSIX `[Errno n] …` form (CPython on Windows
     prints `[WinError n] …` for some calls);
   - PKCS#11 ULONG attribute values ≥ 2^63 read back from a token (notably
