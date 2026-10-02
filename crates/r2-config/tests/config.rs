@@ -1089,6 +1089,43 @@ mod schema_errors {
         );
     }
 
+    /// PyYAML's reader rejects a NUL (and other non-printable characters) before parsing;
+    /// the text after it is not silently dropped.
+    #[test]
+    fn non_printable_character_is_a_yaml_error() {
+        let iso = Isolated::new();
+        let bad = write(
+            &iso.path().join("nul.yaml"),
+            "ui: {hex_group: 5}\n\u{0}\nui: {hex_group: 9}\n",
+        );
+        let err = config_err(load_config(Some(&bad)));
+        assert_eq!(
+            err.message,
+            format!(
+                "invalid YAML in config file {}: unacceptable character #x0000: special \
+                 characters are not allowed\n  in \"<unicode string>\", position 19",
+                bad.display()
+            )
+        );
+    }
+
+    /// A block-scalar template value on the last line of a file without a final newline
+    /// has no trailing break (PyYAML), with or without one.
+    #[test]
+    fn block_scalar_at_end_of_file_keeps_pyyaml_value() {
+        for text in [
+            "templates:\n  pkcs11:\n    data:\n      CKA_LABEL: |\n        hello",
+            "templates:\n  pkcs11:\n    data:\n      CKA_LABEL: |-\n        hello\n",
+        ] {
+            let config = config_from_yaml(Some(text)).unwrap();
+            assert_eq!(
+                config.templates.pkcs11_raw["data"]["CKA_LABEL"],
+                Value::String("hello".to_owned()),
+                "{text:?}"
+            );
+        }
+    }
+
     #[test]
     fn library_existence_is_not_checked() {
         let config = config_from_yaml(Some(

@@ -15,13 +15,15 @@ use r2_core::text::{is_py_space, py_bytes_repr, py_repr};
 use serde_yaml_ng::value::{Tag, TaggedValue};
 pub use serde_yaml_ng::{Mapping, Number, Value};
 use yaml_rust2::parser::{Event, Parser, Tag as EventTag};
-use yaml_rust2::scanner::TScalarStyle;
+use yaml_rust2::scanner::{Marker, TScalarStyle};
 
 /// Load one YAML document with PyYAML `safe_load` semantics (§4.8.4). Err = Generic whose
 /// message is the parser's text; callers embed `err.message` in their own c2 message
 /// ("invalid YAML in config file {path}: {text}", "invalid YAML in template file {path}:
 /// {text}", …) with their own kind.
 pub fn parse(text: &str) -> Result<Value> {
+    // PyYAML's `Reader` rejects non-printable characters before anything else is read.
+    check_printable(text)?;
     // PyYAML's scanner skips a byte order mark at the start of the stream.
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     // PyYAML (YAML 1.1) treats NEL as a line break everywhere and its `scan_line_break`
@@ -36,6 +38,23 @@ pub fn parse(text: &str) -> Result<Value> {
     match root {
         None => Ok(Value::Null),
         Some(node) => Constructor::default().construct(&node, 0),
+    }
+}
+/// PyYAML `Reader.check_printable`: the first character outside `[\t\n\r\x20-\x7E\x85
+/// \xA0-\uD7FF\uE000-\uFFFD\U00010000-\U0010FFFF]` fails with PyYAML's `ReaderError` text
+/// (`position` = character index in the text, a BOM included).
+fn check_printable(text: &str) -> Result<()> {
+    let printable = |c: char| {
+        matches!(c, '\t' | '\n' | '\r' | '\x20'..='\x7e' | '\u{85}' | '\u{a0}'..='\u{fffd}')
+            || c >= '\u{10000}'
+    };
+    match text.chars().enumerate().find(|(_, c)| !printable(*c)) {
+        None => Ok(()),
+        Some((position, ch)) => Err(err(format!(
+            "unacceptable character #x{:04x}: special characters are not allowed\n  \
+             in \"<unicode string>\", position {position}",
+            u32::from(ch)
+        ))),
     }
 }
 /// LS/PS (U+2028/U+2029) are line breaks to PyYAML but kept as the break character itself
@@ -788,6 +807,9 @@ const MAX_DEPTH: usize = 400;
 /// Limit on constructed values (alias expansion copies shared nodes; a "billion laughs"
 /// document is rejected instead of exhausting memory).
 const MAX_NODES: usize = 1_000_000;
+/// Limit on scalar text copied by alias expansion (64 MiB): a few aliases of a large scalar
+/// would otherwise exhaust memory long before `MAX_NODES` values.
+const MAX_COPIED_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug)]
 enum NodeKind {
@@ -816,17 +838,130 @@ fn full_tag(tag: Option<EventTag>) -> Option<String> {
     tag.map(|t| format!("{}{}", t.handle, t.suffix))
 }
 
+/// Line view of the text for the two places where yaml-rust2 (YAML 1.2) and PyYAML load a
+/// block scalar (`|`, `>`) that runs to the end of the text differently: PyYAML keeps only
+/// the line breaks it actually read, while yaml-rust2 (a) appends a break when the last
+/// line of a clip/keep scalar has content (or spaces up to the indentation) and no break
+/// after it, and (b) returns the header's own break for a clip scalar, or a keep scalar
+/// without empty lines, that has no content line before the end of the text.
+struct BlockScalarEof<'a> {
+    lines: Vec<&'a str>,
+    /// Does the text end with a line break?
+    final_break: bool,
+    /// `min_indent[i]`: the smallest indentation of lines `i..` (0-based), where a non-final
+    /// line made only of spaces counts as unbounded (yaml-rust2 skips it inside the scalar)
+    /// and the final line counts its leading spaces.
+    min_indent: Vec<usize>,
+    /// `blank_from[i]`: lines `i..` are all made only of spaces.
+    blank_from: Vec<bool>,
+}
+
+impl<'a> BlockScalarEof<'a> {
+    fn new(text: &'a str) -> Self {
+        let lines: Vec<&str> = text
+            .split("\r\n")
+            .flat_map(|l| l.split(['\r', '\n']))
+            .collect();
+        let last = lines.len().saturating_sub(1);
+        let mut min_indent = vec![usize::MAX; lines.len() + 1];
+        let mut blank_from = vec![true; lines.len() + 1];
+        for (i, line) in lines.iter().enumerate().rev() {
+            let lead = line.bytes().take_while(|b| *b == b' ').count();
+            let blank = lead == line.len();
+            let indent = if i != last && blank { usize::MAX } else { lead };
+            min_indent[i] = min_indent[i + 1].min(indent);
+            blank_from[i] = blank_from[i + 1] && blank;
+        }
+        Self {
+            lines,
+            final_break: text.ends_with(['\n', '\r']),
+            min_indent,
+            blank_from,
+        }
+    }
+
+    /// PyYAML's value for the block scalar event `value` at `mark`.
+    fn fix(&self, value: &mut String, mark: Marker) -> Result<()> {
+        let line = mark.line(); // 1-based: `line` indexes the lines after it
+        if value.bytes().all(|b| b == b'\n') {
+            // No content line: at the end of the text, yaml-rust2's mark is the indicator.
+            if !self.blank_from.get(line).copied().unwrap_or(false) {
+                return Ok(());
+            }
+            let Some(header) = line.checked_sub(1).and_then(|i| self.lines.get(i)) else {
+                return Ok(());
+            };
+            let mut chars = header.chars().skip(mark.col());
+            if !matches!(chars.next(), Some('|' | '>')) {
+                return Ok(());
+            }
+            let keep = chars.take(2).any(|c| c == '+');
+            // PyYAML: the empty lines after the header for keep, else nothing.
+            let breaks = if keep {
+                self.lines.len().saturating_sub(line + 1)
+            } else {
+                0
+            };
+            *value = "\n".repeat(breaks);
+            return Ok(());
+        }
+        let indent = mark.col();
+        if indent == 0 {
+            // YAML 1.2 lets a top-level block scalar have unindented content; to PyYAML
+            // (minimum indentation 1) such a line ends the scalar.
+            return Err(err(format!(
+                "unindented block scalar content at line {line}, column 1"
+            )));
+        }
+        if !self.final_break
+            && self.min_indent.get(line).is_some_and(|min| *min >= indent)
+            && value.ends_with('\n')
+        {
+            value.pop();
+        }
+        Ok(())
+    }
+}
+
 struct Composer<'a> {
     parser: Parser<std::str::Chars<'a>>,
     anchors: HashMap<usize, Rc<Node>>,
+    text: &'a str,
+    /// Built on the first block scalar.
+    block_eof: Option<BlockScalarEof<'a>>,
+    mark: Option<Marker>,
 }
 
 impl Composer<'_> {
+    /// Kept out of line: `compose_node` recurses up to `MAX_DEPTH` deep.
+    #[inline(never)]
+    fn scalar_node(
+        &mut self,
+        mut text: String,
+        style: TScalarStyle,
+        tag: Option<EventTag>,
+    ) -> Result<Node> {
+        if matches!(style, TScalarStyle::Literal | TScalarStyle::Folded)
+            && let Some(mark) = self.mark
+        {
+            let source = self.text;
+            self.block_eof
+                .get_or_insert_with(|| BlockScalarEof::new(source))
+                .fix(&mut text, mark)?;
+        }
+        Ok(Node {
+            kind: NodeKind::Scalar {
+                text,
+                plain: style == TScalarStyle::Plain,
+            },
+            tag: full_tag(tag),
+        })
+    }
+
     fn next(&mut self) -> Result<Event> {
-        self.parser
-            .next_token()
-            .map(|(event, _)| event)
-            .map_err(|e| err(e.to_string()))
+        let (event, mark) = self.parser.next_token().map_err(|e| err(e.to_string()))?;
+        self.mark = Some(mark);
+        Ok(event)
     }
 
     fn compose_node(&mut self, event: Event, depth: usize) -> Result<Rc<Node>> {
@@ -841,16 +976,9 @@ impl Composer<'_> {
                     err("found undefined alias (recursive aliases are not supported)")
                 });
             }
-            Event::Scalar(text, style, anchor, tag) => (
-                Node {
-                    kind: NodeKind::Scalar {
-                        text,
-                        plain: style == TScalarStyle::Plain,
-                    },
-                    tag: full_tag(tag),
-                },
-                anchor,
-            ),
+            Event::Scalar(text, style, anchor, tag) => {
+                (self.scalar_node(text, style, tag)?, anchor)
+            }
             Event::SequenceStart(anchor, tag) => {
                 let mut items = Vec::new();
                 loop {
@@ -903,6 +1031,9 @@ fn compose(text: &str) -> Result<Option<Rc<Node>>> {
     let mut composer = Composer {
         parser: Parser::new_from_str(text),
         anchors: HashMap::new(),
+        text,
+        block_eof: None,
+        mark: None,
     };
     if composer.next()? != Event::StreamStart {
         return Err(err("did not find expected <stream-start>"));
@@ -936,6 +1067,11 @@ const MAP_TAG: &str = "tag:yaml.org,2002:map";
 #[derive(Default)]
 struct Constructor {
     nodes: usize,
+    /// Scalar nodes constructed at least once (by address): a second construction is an
+    /// alias copy.
+    scalars_seen: std::collections::HashSet<usize>,
+    /// Bytes of scalar text copied by alias expansion.
+    copied_bytes: usize,
 }
 
 fn no_constructor(tag: &str) -> ConsoleError {
@@ -1186,6 +1322,22 @@ impl Constructor {
         Ok(())
     }
 
+    /// A scalar node constructed a second time is an alias copy: charge its text.
+    #[inline(never)]
+    fn charge_copy(&mut self, node: &Node, text: &str) -> Result<()> {
+        if self.scalars_seen.insert(std::ptr::from_ref(node).addr()) {
+            return Ok(());
+        }
+        self.copied_bytes = self.copied_bytes.saturating_add(text.len());
+        if self.copied_bytes > MAX_COPIED_BYTES {
+            return Err(err(format!(
+                "document too large: more than {MAX_COPIED_BYTES} bytes of scalar text \
+                 copied by alias expansion"
+            )));
+        }
+        Ok(())
+    }
+
     fn construct(&mut self, node: &Node, depth: usize) -> Result<Value> {
         self.count()?;
         if depth > MAX_DEPTH {
@@ -1195,7 +1347,10 @@ impl Constructor {
         }
         let tag = node.tag.as_deref();
         match &node.kind {
-            NodeKind::Scalar { text, plain } => self.construct_scalar(text, *plain, tag),
+            NodeKind::Scalar { text, plain } => {
+                self.charge_copy(node, text)?;
+                self.construct_scalar(text, *plain, tag)
+            }
             NodeKind::Seq(items) => match tag {
                 None | Some("!") | Some(SEQ_TAG) => {
                     let mut out = Vec::with_capacity(items.len());
@@ -2365,6 +2520,39 @@ mod tests {
         // a small nested merge still loads
         let ok = parse(&format!("x: {}", level(2))).unwrap();
         assert_eq!(py_value_repr(&ok), "{'x': {'a': 1}}");
+    }
+
+    /// §11 D17 (e): scalar text copied by alias expansion is bounded too (a 100 KB scalar
+    /// aliased 11,110 times is far below the value budget but would need over 1 GB).
+    #[test]
+    fn aliased_large_scalar_hits_the_byte_budget() {
+        let mut doc = format!("a: &a '{}'\n", "x".repeat(100_000));
+        let mut prev = "a".to_owned();
+        for i in 0..4 {
+            let name = format!("n{i}");
+            doc.push_str(&format!(
+                "{name}: &{name} [{}]\n",
+                vec![format!("*{prev}"); 10].join(", ")
+            ));
+            prev = name;
+        }
+        let e = parse(&doc).unwrap_err();
+        assert!(
+            e.message
+                .starts_with("document too large: more than 67108864 bytes"),
+            "{}",
+            e.message
+        );
+        // a few hundred copies still load
+        let ok = format!(
+            "a: &a '{}'\nb: [{}]\n",
+            "x".repeat(100_000),
+            vec!["*a"; 600].join(", ")
+        );
+        let Value::Mapping(map) = parse(&ok).unwrap() else {
+            panic!("not a mapping");
+        };
+        assert_eq!(map.len(), 2);
     }
 
     /// Numeric keys are deduplicated through an index, not a scan (40,000 keys load fast;

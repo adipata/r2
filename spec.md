@@ -3730,8 +3730,17 @@ the same types in r2 and every r2-written file is byte-identical to c2's:
     `<<` merge keys follow PyYAML `flatten_mapping` (a mapping or a sequence of mappings;
     the node's own keys win; among merge sources the earlier wins; merged keys come first in
     order); a sequence/mapping used as a key → "found unhashable key".
+  - First, PyYAML's `Reader.check_printable`: the first character outside
+    `[\t\n\r\x20-\x7E\x85\xA0-\uD7FF\uE000-\uFFFD\U00010000-\U0010FFFF]` (C0 controls
+    but TAB/LF/CR, DEL, C1 controls but NEL, U+FFFE/U+FFFF) → "unacceptable character
+    #x{cp:04x}: special characters are not allowed\n  in \"<unicode string>\", position
+    {char index}" (PyYAML's text verbatim; a NUL never truncates the text).
   - NEL (U+0085) is a line break everywhere (PyYAML's `scan_line_break` reads it as
     `\n`); a literal LS/PS (U+2028/U+2029) is an error (§11 D17 (f)).
+  - Block scalars (`|`, `>`) keep only the line breaks PyYAML reads: one whose last line
+    runs to the end of a text without a final line break gets no trailing `\n`
+    (`a: |\n  x` → "x"), and one without content lines at the end of the text is "" (keep
+    `|+`: its empty lines' breaks), where yaml-rust2 (YAML 1.2) adds a break.
   - Anchors/aliases are resolved by copying the anchored value (recursive alias = error;
     limits and residual differences in §11 D17 (e)); more than one
     document → "expected a single document in the stream"; empty text or an empty
@@ -7460,7 +7469,10 @@ merges).**
   <text>` / `invalid YAML in template file <path>: <text>` differs (construction errors —
   unknown tag, unhashable key, several documents — use PyYAML's wording); (b) inputs that
   only one of the two parsers rejects (exotic or malformed syntax: tabs in indentation,
-  YAML-1.2-only escapes, directives) may load in one and fail in the other; (c) an integer
+  YAML-1.2-only escapes, directives) may load in one and fail in the other — among them,
+  a top-level block scalar with unindented content is rejected (`unindented block scalar
+  content at line <l>, column 1`; PyYAML's minimum indentation is 1, so such a line ends
+  the scalar, and YAML 1.2 would load it as content); (c) an integer
   literal outside -2^63..=2^64-1 is a parse error `integer out of range: <text>`, where
   Python's int is unbounded; (d) the explicit collection tags `!!set`, `!!omap` and
   `!!pairs` (which PyYAML's SafeLoader constructs as `set` / list of pairs) are rejected
@@ -7469,8 +7481,10 @@ merges).**
   collection that contains its own alias) is an error, a duplicate anchor name silently
   rebinds (PyYAML: `found duplicate anchor`), and a document is rejected beyond a nesting
   depth of 400 (PyYAML hits CPython's recursion limit, a crash in c2, between 400 and 500)
-  or beyond 1,000,000 values after alias expansion (PyYAML shares the aliased object, so a
-  "billion laughs" document loads there); consequently `yaml::dump` never emits the
+  or beyond 1,000,000 values after alias expansion, or beyond 64 MiB (67,108,864 bytes) of
+  scalar text copied by alias expansion (`document too large: …`; PyYAML shares the
+  aliased object, so a "billion laughs" document, or many aliases of a large scalar,
+  loads there); consequently `yaml::dump` never emits the
   `&id001`/`*id001` anchors that PyYAML writes for a collection object shared twice — this
   is visible only when the wizard's structural rewrite (§5.13) re-dumps a user config that
   aliases a mapping or list (r2 writes the copies); nested `<<` merge lists count against
@@ -7484,7 +7498,8 @@ merges).**
   see scalar styles (§4.8.4).
 - *Verified by*: R2 loader tests (typing vectors generated with PyYAML, the cases above:
   `yaml::tests::load_r2_errors`, `yaml::tests::alias_expansion_rules`,
-  `yaml::tests::nested_merges_hit_the_value_budget`), R14 template-file
+  `yaml::tests::nested_merges_hit_the_value_budget`,
+  `yaml::tests::aliased_large_scalar_hits_the_byte_budget`), R14 template-file
   tests, the R13 config interop check.
 
 **D18 — Numeric range and load-time typing guards.**
