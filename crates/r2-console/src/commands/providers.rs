@@ -330,6 +330,11 @@ fn select_token(
     }
     if let Some(slot_text) = slot_opt {
         let Some(slot) = py_int(slot_text, 10) else {
+            if let Some(normalized) = overflowing_int_text(slot_text) {
+                // c2 `int()` is unbounded: a well-formed integer outside i128 parses, and
+                // no CK_SLOT_ID can equal it → "no token with slot {n}" (c2 parity).
+                return match_token(&tokens, provider.name(), Wanted::Overflow(&normalized));
+            }
             return Err(ConsoleError::param(
                 format!("invalid slot {}", py_repr(slot_text)),
                 "slot",
@@ -377,6 +382,27 @@ fn select_token(
 enum Wanted<'a> {
     Label(&'a str),
     Slot(i128),
+    /// A well-formed integer outside i128 (its Python `str(int(text))` form): never matches.
+    Overflow(&'a str),
+}
+
+/// For text that `py_int(text, 10)` rejected: `Some(str(int(text)))` when the text is
+/// still a well-formed Python decimal int literal (it overflowed i128), else None. Zeroing
+/// every ASCII digit keeps the grammar (whitespace, sign, `_` placement) and cannot
+/// overflow, so `py_int` on the zeroed text decides well-formedness.
+fn overflowing_int_text(text: &str) -> Option<String> {
+    let zeroed: String = text
+        .chars()
+        .map(|c| if c.is_ascii_digit() { '0' } else { c })
+        .collect();
+    py_int(&zeroed, 10)?;
+    let digits: String = text.chars().filter(char::is_ascii_digit).collect();
+    let digits = digits.trim_start_matches('0');
+    if digits.is_empty() {
+        return None; // zero never overflows; unreachable in practice
+    }
+    let sign = if text.contains('-') { "-" } else { "" };
+    Some(format!("{sign}{digits}"))
 }
 
 fn match_token(
@@ -387,6 +413,7 @@ fn match_token(
     let found = tokens.iter().find(|token| match wanted {
         Wanted::Label(label) => token.label == label,
         Wanted::Slot(slot) => i128::from(token.slot_id) == slot,
+        Wanted::Overflow(_) => false,
     });
     if let Some(token) = found {
         return Ok(token.clone());
@@ -394,6 +421,7 @@ fn match_token(
     let wanted = match wanted {
         Wanted::Label(label) => format!("label '{label}'"),
         Wanted::Slot(slot) => format!("slot {slot}"),
+        Wanted::Overflow(digits) => format!("slot {digits}"),
     };
     let known: Vec<String> = tokens
         .iter()

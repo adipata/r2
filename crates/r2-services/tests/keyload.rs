@@ -501,3 +501,69 @@ fn test_editor_titles_and_data_import() {
     assert_eq!(infos[0].key_class, KeyClass::Data);
     assert!(infos[0].key_ref.key_id.is_none());
 }
+
+// ---------------------------------------------------------------------------------------
+// §11 D13: Ctrl-C between batched provider calls
+// ---------------------------------------------------------------------------------------
+
+/// Raises the Ctrl-C flag after the first `import_key` (the REPL's ctrlc handler would).
+struct InterruptAfterFirstImport;
+
+impl r2_testkit::FakeHooks for InterruptAfterFirstImport {
+    fn import_key(
+        &self,
+        next: &dyn Provider,
+        material: &KeyMaterial,
+        label: &str,
+        template: Option<&KeyTemplate>,
+        key_id: Option<&[u8]>,
+    ) -> Option<r2_core::Result<r2_core::keys::KeyInfo>> {
+        let result = next.import_key(material, label, template, key_id);
+        r2_core::runtime::request_interrupt();
+        Some(result)
+    }
+}
+
+/// Resets the process-global Ctrl-C flag even when an assertion fails.
+struct ResetInterrupt;
+
+impl Drop for ResetInterrupt {
+    fn drop(&mut self) {
+        r2_core::runtime::reset_interrupt();
+    }
+}
+
+#[test]
+fn import_materials_checks_interrupt_between_imports() {
+    let _lock = r2_testkit::global_state_lock();
+    let _reset = ResetInterrupt;
+    r2_core::runtime::reset_interrupt();
+    let materials = keyload::parse_materials(
+        &p12_bundle(),
+        "auto",
+        Some(&secret("pw")),
+        &ScriptedIo::empty(),
+    )
+    .unwrap();
+    assert_eq!(materials.len(), 2);
+    let provider = FakeProvider::new("hsm")
+        .with_type_name("pkcs11")
+        .with_hooks(std::rc::Rc::new(InterruptAfterFirstImport));
+    let editor = RecordingEditor::new();
+    let templates = make_templates();
+    let err = keyload::import_materials(
+        &provider,
+        &materials,
+        "bundle",
+        None,
+        &seeding(&editor, &templates),
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::UserAbort);
+    assert_eq!(err.message, "interrupted");
+    // exactly one object created: the private key; the certificate was never imported
+    let keys = provider.list_keys().unwrap();
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0].key_class, KeyClass::Private);
+    assert_eq!(editor.titles().len(), 1);
+}

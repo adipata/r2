@@ -289,6 +289,52 @@ fn test_login_non_integer_slot() {
 }
 
 #[test]
+fn login_slot_beyond_i128_is_an_unknown_slot() {
+    // c2 `int()` is unbounded: a well-formed integer too large for any slot parses and
+    // then matches no token (Provider "no token with slot …", Python's str(int) form).
+    for (text, shown) in [
+        (
+            "99999999999999999999999999999999999999999",
+            "99999999999999999999999999999999999999999",
+        ),
+        (
+            " -0_0999999999999999999999999999999999999999999 ",
+            "-999999999999999999999999999999999999999999",
+        ),
+    ] {
+        let (_hsm, registry) = logged_out_hsm();
+        let err = run_line(
+            &ctx_with(&scripted(&[]), registry, None),
+            &format!("login hsm --slot '{text}'"),
+        )
+        .unwrap_err();
+        assert!(err.kind.is_provider(), "{text}: {:?}", err.kind);
+        assert_eq!(err.message, format!("no token with slot {shown} on 'hsm'"));
+        assert!(
+            err.hint
+                .as_deref()
+                .is_some_and(|hint| hint.starts_with("present tokens: ")),
+            "{:?}",
+            err.hint
+        );
+    }
+    // malformed long text (double `_`) and non-ASCII digits (§11 D18) stay Param
+    for text in ["9999999999999999999999999999999999999999__9", "\u{663}"] {
+        let (_hsm, registry) = logged_out_hsm();
+        let err = run_line(
+            &ctx_with(&scripted(&[]), registry, None),
+            &format!("login hsm --slot '{text}'"),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.message,
+            format!("invalid slot {}", r2_core::text::py_repr(text))
+        );
+        assert_eq!(err.hint.as_deref(), Some("--slot takes an integer"));
+    }
+}
+
+#[test]
 fn login_slot_is_python_int() {
     // c2 `int(slot_opt)`: surrounding whitespace, a sign and leading zeros are accepted
     let (hsm, registry) = logged_out_hsm();

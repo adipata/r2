@@ -7847,7 +7847,9 @@ merges).**
   - a custom-mechanism parameter declared `required: false` without a default is ABSENT
     when not given, so the packer default applies (c2 stored `None` and the packer raised
     `custom mechanism parameter <name!r> must be …`, §4.6.3);
-  - numeric text read through `text::py_int` (template-editor ULONG values, `param_int`)
+  - numeric text read through `text::py_int` (template-editor ULONG values, `param_int`,
+    `login --slot` — a non-ASCII-digit slot is Param `invalid slot …` where c2 selected that
+    slot; an over-i128 slot keeps c2's Provider `no token with slot <n> …`)
     and an explicit `!!int`/`!!float` YAML scalar (`yaml::parse`, which otherwise follows
     Python's `int()`/`float()`: surrounding whitespace, sign, base prefix) accept ASCII
     digits only (CPython's `int()` also accepts other Unicode decimal digits); `select`
@@ -7859,7 +7861,7 @@ merges).**
     prints `[WinError n] …` for some calls).
 - *Reason*: `u64`/`i64`/`u32` types at the API boundary; typed config.
 - *Verified by*: R1 parse_ref/text tests, R2 decoder tests, R3 packer tests, R7 resolver
-  tests, R10 editor tests, R14 template-file tests.
+  tests, R8 providers_cmd tests, R10 editor tests, R14 template-file tests.
 
 **D19 — Command-line parser texts (clap).**
 - *Description*: `r2 --help`, the usage line and argument-error texts are clap's (c2:

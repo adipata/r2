@@ -138,7 +138,12 @@ pub fn import_materials(
         other => other,
     };
     let mut infos = Vec::with_capacity(materials.len());
-    for material in materials {
+    for (index, material) in materials.iter().enumerate() {
+        if index > 0 {
+            // §11 D13: step boundary between batched provider calls (a PKCS#12 is key +
+            // cert + chain); c2's KeyboardInterrupt stopped between imports.
+            r2_core::runtime::check_interrupt()?;
+        }
         let template = if is_pkcs11 {
             Some(seeding.edit(
                 material.key_class,

@@ -23,6 +23,7 @@ use r2_provider::{AttrEditOutcome, AuthState, GenerateRequest, Provider};
 use r2_services::templatefile::{EditorSeeding, build_seed};
 use r2_services::{certops, keyexport, keyload};
 use secrecy::{ExposeSecret, SecretString};
+use zeroize::Zeroizing;
 
 use crate::cmdutil::{
     completed_args, parse_key_id, parse_seed_templates, positional, previous_token, prompt_label,
@@ -861,14 +862,20 @@ impl Command for LoadCommand {
         } else {
             let hint = positional(args, 1, "aes|rsa|ec|cert|generic|data|auto", LOAD_USAGE)?;
             check_hint(hint)?;
-            let token = match args.positionals.get(2) {
-                Some(token) => token.clone(),
+            // The pasted text IS the key material in text form: keep it wiped on drop.
+            let pasted: Zeroizing<String>;
+            let token: &str = match args.positionals.get(2) {
+                Some(token) => token,
                 // §5.1 interactive fallback: multiline paste prompt
-                None => ctx
-                    .io
-                    .prompt_multiline("Paste key material (hex / base64 / PEM)")?,
+                None => {
+                    pasted = Zeroizing::new(
+                        ctx.io
+                            .prompt_multiline("Paste key material (hex / base64 / PEM)")?,
+                    );
+                    &pasted
+                }
             };
-            (decode_data(&token)?.0, hint)
+            (decode_data(token)?.0, hint)
         };
 
         let password = args
@@ -1003,7 +1010,7 @@ impl Command for ExportCommand {
         let cert_ref = args.opt("cert");
         let (provider, key) = ctx.providers.resolve_ref(reference)?;
 
-        let (payload, resolved): (Vec<u8>, &str) = if fmt == "p12" {
+        let (payload, resolved): (Zeroizing<Vec<u8>>, &str) = if fmt == "p12" {
             if public {
                 return Err(
                     ConsoleError::generic("--public cannot be combined with --format p12")
@@ -1034,7 +1041,7 @@ impl Command for ExportCommand {
             };
             let payload =
                 certops::export_pkcs12(provider.as_ref(), &key, &password, cert_der.as_deref())?;
-            (payload, "p12")
+            (Zeroizing::new(payload), "p12")
         } else {
             if cert_ref.is_some() {
                 return Err(ConsoleError::param(
@@ -1042,9 +1049,8 @@ impl Command for ExportCommand {
                     "cert",
                 ));
             }
-            let (payload, resolved) =
-                keyexport::export_bytes(provider.as_ref(), &key, fmt, public, password.as_ref())?;
-            (payload.to_vec(), resolved)
+            // plaintext PKCS#8 / raw secret bytes: stays Zeroizing (§4.4, D3)
+            keyexport::export_bytes(provider.as_ref(), &key, fmt, public, password.as_ref())?
         };
 
         check_interrupt()?; // §11 D13: step boundary before writing output
