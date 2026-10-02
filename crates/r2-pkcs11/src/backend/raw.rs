@@ -2,7 +2,8 @@
 //! unsafe shim 2, spec §4.1.3 / §4.5.5) — and the thread-local registry of shared modules.
 //!
 //! RawFns covers what cryptoki 0.12.1 cannot do soundly (S0 spike gaps G1/G3/G4/G5): the
-//! UNFILTERED `C_GetMechanismList`, byte-level one-attribute `C_GetAttributeValue`, crypto
+//! UNFILTERED `C_GetMechanismList`, `C_GetTokenInfo` without cryptoki's `utcTime`
+//! parsing (it fails on tokens with CKF_CLOCK_ON_TOKEN and a non-digit clock), byte-level one-attribute `C_GetAttributeValue`, crypto
 //! calls with a runtime-length raw mechanism parameter, and `C_WrapKey` with output
 //! truncation. dlopen is refcounted, so the second open maps the module cryptoki already
 //! loaded and initialized.
@@ -21,11 +22,11 @@ use cryptoki::context::{CInitializeArgs, CInitializeFlags, Pkcs11};
 use cryptoki::error::{Error, RvError};
 use cryptoki_sys::{
     CK_ATTRIBUTE, CK_BYTE, CK_FUNCTION_LIST, CK_MECHANISM, CK_OBJECT_HANDLE, CK_RV,
-    CK_SESSION_HANDLE, CK_SLOT_ID, CK_ULONG, CK_UNAVAILABLE_INFORMATION,
+    CK_SESSION_HANDLE, CK_SLOT_ID, CK_TOKEN_INFO, CK_ULONG, CK_UNAVAILABLE_INFORMATION,
 };
 use zeroize::Zeroizing;
 
-use super::{BResult, BackendError, Ckr, RawAttr};
+use super::{BResult, BackendError, Ckr, RawAttr, RawTokenInfo};
 use crate::ckr::rv;
 
 /// A CK_RV of RawFns as a backend error (widening, `crate::ulong_to_u64`).
@@ -89,6 +90,28 @@ fn raw_template(template: &[RawAttr]) -> BResult<Vec<CK_ATTRIBUTE>> {
             })
         })
         .collect()
+}
+
+/// A blank-padded CK_UTF8CHAR field: lossy UTF-8, trailing ' ' and '\0' trimmed.
+fn padded(field: &[CK_BYTE]) -> String {
+    String::from_utf8_lossy(field)
+        .trim_end_matches(['\0', ' '])
+        .to_string()
+}
+
+/// Decode a raw CK_TOKEN_INFO (PyKCS11 `getTokenInfo` parity): only the four text
+/// fields and CKF_TOKEN_INITIALIZED are read; `utcTime` is never parsed.
+pub(crate) fn decode_token_info(slot: u64, info: &CK_TOKEN_INFO) -> RawTokenInfo {
+    RawTokenInfo {
+        slot_id: slot,
+        label: padded(&info.label),
+        manufacturer: padded(&info.manufacturerID),
+        model: padded(&info.model),
+        serial: padded(&info.serialNumber),
+        initialized: crate::ulong_to_u64(info.flags)
+            & crate::ulong_to_u64(cryptoki_sys::CKF_TOKEN_INITIALIZED)
+            != 0,
+    }
 }
 
 /// Which single-part crypto function a raw call runs.
@@ -162,6 +185,21 @@ impl RawFns {
         )?;
         codes.truncate(usize::try_from(filled).unwrap_or(0));
         Ok(codes.into_iter().map(crate::ulong_to_u64).collect())
+    }
+
+    /// C_GetTokenInfo into a raw CK_TOKEN_INFO, decoded by [`decode_token_info`].
+    pub(crate) fn token_info(&self, slot: u64) -> BResult<RawTokenInfo> {
+        let f = entry!(self, C_GetTokenInfo);
+        let slot_id = CK_SLOT_ID::try_from(slot).map_err(|_| {
+            BackendError::Ckr(Ckr {
+                code: rv::CKR_SLOT_ID_INVALID,
+                function: "C_GetTokenInfo",
+            })
+        })?;
+        let mut info = CK_TOKEN_INFO::default();
+        // SAFETY: `info` is a valid, writable CK_TOKEN_INFO out-parameter.
+        check(unsafe { f(slot_id, &mut info) }, "C_GetTokenInfo")?;
+        Ok(decode_token_info(slot, &info))
     }
 
     /// One attribute, byte level. Ok(None) = sensitive, type-invalid or unavailable.

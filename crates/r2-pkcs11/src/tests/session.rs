@@ -532,3 +532,41 @@ fn unsettable_env_entries_are_errors_not_panics() {
     );
     assert_eq!(provider.status().auth, AuthState::LoggedIn);
 }
+
+// ---- raw CK_TOKEN_INFO decoding (§4.5.5: never cryptoki's get_token_info) ----
+
+fn padded<const N: usize>(text: &str, pad: u8) -> [u8; N] {
+    let mut field = [pad; N];
+    field[..text.len()].copy_from_slice(text.as_bytes());
+    field
+}
+
+#[test]
+fn raw_token_info_ignores_a_blank_utc_time() {
+    // A token with CKF_CLOCK_ON_TOKEN and a blank clock: cryptoki's TokenInfo conversion
+    // fails on it (ParseInt), PyKCS11 lists it normally — so must r2.
+    let info = cryptoki_sys::CK_TOKEN_INFO {
+        label: padded("R2TEST", b' '),
+        manufacturerID: padded("SoftHSM project", b' '),
+        model: padded("SoftHSM v2\0", b' '),
+        serialNumber: padded("fe2447789e9c5c09", b'\0'),
+        flags: cryptoki_sys::CKF_CLOCK_ON_TOKEN | cryptoki_sys::CKF_TOKEN_INITIALIZED,
+        utcTime: [b' '; 16],
+        ..Default::default()
+    };
+    let raw = crate::backend::raw::decode_token_info(7, &info);
+    assert_eq!(raw.slot_id, 7);
+    assert_eq!(raw.label, "R2TEST");
+    assert_eq!(raw.manufacturer, "SoftHSM project");
+    assert_eq!(raw.model, "SoftHSM v2");
+    assert_eq!(raw.serial, "fe2447789e9c5c09");
+    assert!(raw.initialized);
+    let garbage = cryptoki_sys::CK_TOKEN_INFO {
+        flags: cryptoki_sys::CKF_CLOCK_ON_TOKEN,
+        utcTime: *b"\xffxx-garbage\0\0\0\0\0",
+        ..Default::default()
+    };
+    let raw = crate::backend::raw::decode_token_info(0, &garbage);
+    assert!(!raw.initialized);
+    assert_eq!(raw.label, "");
+}

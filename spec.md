@@ -119,7 +119,7 @@ against a vendored, statically linked OpenSSL (§9); source builds via cargo.
 | `ConsoleError` / `ErrorKind` | r2's single error type: `{ kind, message, hint }`, where the `ErrorKind` variant replaces c2's exception subclass and carries its extra fields (§4.2). Every fallible public fn returns `r2_core::Result<T>` |
 | backend seam | The crate-private `trait Backend` inside `r2-pkcs11`: ~25 raw-shaped PKCS#11 calls (u64 CKM codes, `(CK_ATTRIBUTE_TYPE, bytes)` templates, `MechSpec` mechanisms, raw CKR errors). Implemented by `CryptokiBackend` (real) and `FakeBackend` (tests) |
 | CKR choke point | The single place (`CryptokiBackend` + r2-pkcs11's `crate::ckr::translate`) where every cryptoki/RawFns failure becomes a `Ckr { code, function }` value (names looked up in PyKCS11's table, §4.5.5) and is translated per §5.2 |
-| `RawFns` | r2-pkcs11's narrow `unsafe` shim: a second `dlopen` of the same module plus its `CK_FUNCTION_LIST`, used only where the safe cryptoki API is unsound or lossy (unfiltered mechanism list, single-attribute reads, raw-parameter crypto, truncating `C_WrapKey`) |
+| `RawFns` | r2-pkcs11's narrow `unsafe` shim: a second `dlopen` of the same module plus its `CK_FUNCTION_LIST`, used only where the safe cryptoki API is unsound or lossy (unfiltered mechanism list, token info without `utcTime` parsing, single-attribute reads, raw-parameter crypto, truncating `C_WrapKey`) |
 | `MechSpec` | r2-owned enum describing one PKCS#11 mechanism invocation; mapped to cryptoki per the normative table in §5.8–§5.10 |
 | TerminalIo / PlainIo | The two `ConsoleIo` implementations, chosen once by `r2_console::io::open_console_io`: `LineIo<DegradingReader>` (reedline + rpassword on an interactive terminal; a terminal that stops answering degrades to plain reads inside it) and `LineIo<PlainReader>` (line reads from stdin when stdin or stdout is not a terminal, or `TERM=dumb`). See §6 |
 | `LineReader` / `LineIo` | Console-internal reader trait (`Line` / `Interrupted` / `Eof` outcomes) and the one generic type holding all prompt/select/confirm logic over it |
@@ -237,7 +237,7 @@ Compile-time and lint enforcement of c2's CLAUDE.md conventions (workspace lints
 | env mutation only before `C_Initialize` | `disallowed-methods`: `std::env::set_var`/`remove_var`, with exactly one audited production `#[allow]` site in `r2-pkcs11` (`crate::env::apply_env`; edition 2024 makes it `unsafe`; the single-thread invariant is the safety argument; the site asserts no spinner is active) and one test-only site, `r2_testkit::env` (`set_env` + `EnvGuard`, used under `global_state_lock()`; c2 `monkeypatch.setenv`/`delenv`) |
 | no bare `except`; every raised error is a `ConsoleError` | every fallible public fn returns `r2_core::Result<T>`; `clippy::unwrap_used` / `expect_used` = deny outside tests (test exemption mechanism: §4.1.3); panics that still occur are caught per command (§5.1, §11 D4) |
 | mypy strict | the compiler; `#![forbid(unsafe_code)]` in every crate except `r2-pkcs11` and the dev-only `r2-testkit` (`#![deny(unsafe_code)]` + audited `#[allow]`s) |
-| PyKCS11 only in `providers/pkcs11/` | crate graph above; `disallowed-methods` for the lossy cryptoki APIs: `Pkcs11::get_mechanism_list` (drops unknown CKMs), `Session::get_attributes` (fails whole calls / omits refusals), `Session::wrap_key` (no truncation) — use the `RawFns` equivalents |
+| PyKCS11 only in `providers/pkcs11/` | crate graph above; `disallowed-methods` for the lossy cryptoki APIs: `Pkcs11::get_mechanism_list` (drops unknown CKMs), `Pkcs11::get_token_info` (parses `utcTime`; fails on a token with CKF_CLOCK_ON_TOKEN and a non-digit clock), `Session::get_attributes` (fails whole calls / omits refusals), `Session::wrap_key` (no truncation) — use the `RawFns` equivalents |
 | pyca hazards (S0 OpenSSL spike) | `disallowed-methods`: `PKey`/`Rsa`/`EcKey::private_key_from_pem` (prompt on the TTY), every `*_from_pem_passphrase` and `PKey::private_key_from_pkcs8_passphrase` (panic on NUL), `openssl::aes::wrap_key`/`unwrap_key` (deprecated, RFC 3394 only), `openssl::memcmp::eq` (panics on a length mismatch; allowed only inside `r2_core::crypto::ct_eq`) |
 | terminal hazards (S0 terminal spike) | `disallowed-methods`: `std::io::IsTerminal::is_terminal` — it must not decide the TerminalIo/PlainIo switch (it accepts msys/mintty pipes on Windows); `crossterm::tty::IsTty` does. One allowed site: the mintty/msys warning in `r2_console::io::open_console_io` |
 | skeleton stubs are temporary | `clippy::todo` / `unimplemented` = allow until R13, deny from R13 (allow, not warn: `-D warnings` would fail on the skeleton's stubs) |
@@ -2571,7 +2571,8 @@ pub(crate) fn obj(handle: u64) -> BResult<ObjectHandle> { .. }
 
 R5a-internal (prose only, not materialized by R0, §4.1.1): `backend/raw.rs` holds
 `RawFns` — second `dlopen` of the module + its `CK_FUNCTION_LIST`, with at least
-`mechanism_list(slot) -> BResult<Vec<u64>>`, `get_attr(session, object, type) ->
+`mechanism_list(slot) -> BResult<Vec<u64>>`, `token_info(slot) -> BResult<RawTokenInfo>`,
+`get_attr(session, object, type) ->
 BResult<Option<Zeroizing<Vec<u8>>>>` and the truncating `wrap(...) -> BResult<Vec<u8>>` and
 raw-parameter crypto calls — and the thread-local registry of `Rc<SharedModule { ctx:
 cryptoki::context::Pkcs11, raw: RawFns }>`.
@@ -2614,6 +2615,12 @@ PKCS#11 environment and lifecycle rules (S0 spike 1, binding for R5a):
 - Capability discovery folds `RawFns::mechanism_list(slot) -> Vec<u64>`;
   `Pkcs11::get_mechanism_list` MUST NOT be used (it drops every CKM without a TryFrom
   arm, incl. all vendor CKMs).
+- Token info is a raw `C_GetTokenInfo` through `RawFns::token_info(slot)`, which reads
+  only label, manufacturerID, model, serialNumber (lossy UTF-8, trailing spaces and NULs
+  trimmed) and `CKF_TOKEN_INITIALIZED`; `Pkcs11::get_token_info` MUST NOT be used — its
+  `TokenInfo` conversion parses `utcTime` whenever CKF_CLOCK_ON_TOKEN is set and fails on
+  a blank or non-digit clock, which would make `slots`/`login`/session recovery fail on
+  such a token, while PyKCS11 never parses `utcTime` (c2 parity).
 - Attribute reads are one attribute per call through `RawFns::get_attr` (None =
   the size pass answered CKR_ATTRIBUTE_SENSITIVE, CKR_ATTRIBUTE_TYPE_INVALID or
   CKR_ARGUMENTS_BAD — PyKCS11 `getAttributeValue`/`_fragmented` parity — or returned
@@ -2824,6 +2831,7 @@ pub(crate) trait Backend {
     /// (§4.5.5; TokenInit::set_env_and_reset).
     fn is_sole_module_user(&self) -> bool;
     fn slots_with_token(&self) -> BResult<Vec<u64>>;
+    /// Raw C_GetTokenInfo (RawFns; `utcTime` never parsed).
     fn token_info(&self, slot: u64) -> BResult<RawTokenInfo>;
     /// Unfiltered C_GetMechanismList (RawFns).
     fn mechanism_list(&self, slot: u64) -> BResult<Vec<u64>>;
@@ -3449,7 +3457,12 @@ apply):
   - BYTES needs Bytes, else "template attribute {name} expects bytes, got {T}" (hint "use a
     0x… hex value");
   - STR needs Str (or a Symbol, which is a string in c2), else "template attribute {name}
-    expects a string, got {T}".
+    expects a string, got {T}". At encoding (c2 `_entry_value`), a non-vendor STR value
+    starting with CKO_/CKK_/CKC_/CKM_ is resolved like a ULONG symbol, whatever the
+    attribute: an unknown name → the same Param "unknown PKCS#11 constant {v!r}" (also for
+    the CKA_LABEL row the injected label later overwrites); a known one is stored as its
+    decimal text (PyKCS11 `SetString(str(int))`), e.g. CKA_APPLICATION `CKM_SHA256` →
+    `592`.
   Vendor (`custom_attributes`) values are byte-encoded explicitly after that check: BOOL →
   1 byte, ULONG → native-endian CK_ULONG — Ulong ONLY: a symbol or string fails with c2's
   "vendor ULONG attribute expects an integer, got {value!r}" (vendor ULONGs never resolve
@@ -5953,8 +5966,9 @@ error (0x%08X)` (code with `CKR_VENDOR_DEFINED` masked off) for vendor codes, el
 (`CKF_SERIAL_SESSION | CKF_RW_SESSION`, `open_rw_session`), held in
 `RefCell<Option<Session>>` beside the provider's `Rc<SharedModule>`; `login` enumerates
 tokens (`get_slots_with_token()` = `getSlotList(tokenPresent=True)`, plus
-`get_token_info`; label, serial, model and manufacturer are trimmed of trailing spaces
-**and** NULs — c2 `_strip_padding`; cryptoki trims spaces only), selects by token-label
+a raw `C_GetTokenInfo` through `RawFns::token_info`, never cryptoki's `get_token_info`,
+which fails on a non-digit `utcTime` — §4.5.5; label, serial, model and manufacturer are
+trimmed of trailing spaces **and** NULs — c2 `_strip_padding`), selects by token-label
 arg / `--slot` (`Slot::try_from(u64)`) / config default (`slot`, `token_label`) /
 `select()` prompt, opens the session and `C_Login(CKU_USER)`
 (`Session::login(UserType::User, Some(&AuthPin))`, the PIN passing through as a

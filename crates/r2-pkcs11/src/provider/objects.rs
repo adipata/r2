@@ -440,6 +440,12 @@ impl Pkcs11Provider {
             }
             AttrValue::Ulong(n) => self.ulong(*n, "object creation"),
             AttrValue::Bool(b) => Ok(bool_bytes(*b)),
+            // c2 resolves every non-vendor str value that looks like a constant name,
+            // whatever the attribute's kind: unknown → Param; known → the int, which
+            // PyKCS11 stores in a string attribute as `str(int)`.
+            AttrValue::Str(text) if attributes::is_symbol(text) => {
+                Ok(bytes(self.resolve_symbol(text)?.to_string().as_bytes()))
+            }
             AttrValue::Str(text) => Ok(bytes(text.as_bytes())),
             AttrValue::Bytes(data) => Ok(bytes(data)),
         }

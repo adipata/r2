@@ -652,7 +652,7 @@ tests/unit/pkcs11/test_provider_edit.py::TestUpdateKey::test_vendor_attribute_en
 tests/unit/pkcs11/test_provider_edit.py::TestUpdateKey::test_keep_pin_recovery_retries_whole_edit_once,1,R5b,todo,,
 tests/unit/pkcs11/test_provider_edit.py::TestUpdateKey::test_recovery_after_rename_landed_re_resolves_new_identity,1,R5b,todo,,
 tests/unit/pkcs11/test_provider_edit.py::TestCkrMapping::test_attribute_read_only_maps_to_friendly_pkcs11_error,1,R5b,todo,,
-tests/unit/pkcs11/test_provider_objects.py::TestTemplateConversion::test_enabled_only_and_disabled_omitted,1,R5a,ported,r2-pkcs11 tests::objects::enabled_only_and_disabled_omitted,
+tests/unit/pkcs11/test_provider_objects.py::TestTemplateConversion::test_enabled_only_and_disabled_omitted,1,R5a,ported,r2-pkcs11 tests::objects::enabled_only_and_disabled_omitted ; r2-pkcs11 tests::objects::str_attr_unknown_constant_is_a_param_error ; r2-pkcs11 tests::objects::str_attr_known_constant_stored_as_decimal_text,c2 _entry_value resolves CKO_/CKK_/CKC_/CKM_ str values of any non-vendor attr (STR rows too; known -> decimal text)
 tests/unit/pkcs11/test_provider_objects.py::TestTemplateConversion::test_locked_class_mismatch_rejected,1,R5a,ported,r2-pkcs11 tests::objects::locked_class_mismatch_rejected,
 tests/unit/pkcs11/test_provider_objects.py::TestTemplateConversion::test_locked_key_type_mismatch_rejected,1,R5a,ported,r2-pkcs11 tests::objects::locked_key_type_mismatch_rejected,
 tests/unit/pkcs11/test_provider_objects.py::TestTemplateConversion::test_import_defaults_exportable_when_template_silent,1,R5a,ported,r2-pkcs11 tests::objects::import_defaults_exportable_when_template_silent,
@@ -714,7 +714,7 @@ tests/unit/pkcs11/test_provider_session.py::TestInitialize::test_wrong_library_p
 tests/unit/pkcs11/test_provider_session.py::TestInitialize::test_idempotent,1,R5a,ported,r2-pkcs11 tests::session::idempotent,
 tests/unit/pkcs11/test_provider_session.py::TestInitialize::test_instance_env_applied_before_load,1,R5a,ported,r2-pkcs11 tests::session::instance_env_applied_before_load,
 tests/unit/pkcs11/test_provider_session.py::TestInitialize::test_shutdown_safe_when_never_initialized,1,R5a,ported,r2-pkcs11 tests::session::shutdown_safe_when_never_initialized,
-tests/unit/pkcs11/test_provider_session.py::TestLogin::test_status_and_token_enumeration,1,R5a,ported,r2-pkcs11 tests::session::status_and_token_enumeration,
+tests/unit/pkcs11/test_provider_session.py::TestLogin::test_status_and_token_enumeration,1,R5a,ported,r2-pkcs11 tests::session::status_and_token_enumeration ; r2-pkcs11 tests::session::raw_token_info_ignores_a_blank_utc_time,raw C_GetTokenInfo: utcTime never parsed (PyKCS11 parity)
 tests/unit/pkcs11/test_provider_session.py::TestLogin::test_login_logout_cycle,1,R5a,ported,r2-pkcs11 tests::session::login_logout_cycle,
 tests/unit/pkcs11/test_provider_session.py::TestLogin::test_wrong_pin,1,R5a,ported,r2-pkcs11 tests::session::wrong_pin,
 tests/unit/pkcs11/test_provider_session.py::TestLogin::test_pin_locked,1,R5a,ported,r2-pkcs11 tests::session::pin_locked,

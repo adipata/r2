@@ -497,20 +497,9 @@ impl super::Backend for CryptokiBackend {
     }
 
     fn token_info(&self, slot: u64) -> BResult<RawTokenInfo> {
-        let module = self.module()?;
-        let info = module
-            .ctx
-            .get_token_info(Self::slot(slot)?)
-            .map_err(|e| convert(e, "C_GetTokenInfo"))?;
-        let trim = |text: &str| text.trim_end_matches(['\0', ' ']).to_string();
-        Ok(RawTokenInfo {
-            slot_id: slot,
-            label: trim(info.label()),
-            manufacturer: trim(info.manufacturer_id()),
-            model: trim(info.model()),
-            serial: trim(info.serial_number()),
-            initialized: info.token_initialized(),
-        })
+        // Raw C_GetTokenInfo: cryptoki's TokenInfo conversion parses `utcTime` when
+        // CKF_CLOCK_ON_TOKEN is set and fails on a non-digit clock (PyKCS11 never does).
+        self.module()?.raw.token_info(slot)
     }
 
     fn mechanism_list(&self, slot: u64) -> BResult<Vec<u64>> {

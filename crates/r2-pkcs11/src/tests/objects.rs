@@ -187,6 +187,49 @@ fn str_constant_row_converts_for_ulong_attrs() {
 }
 
 #[test]
+fn str_attr_unknown_constant_is_a_param_error() {
+    // c2 `_entry_value` resolves ANY non-vendor str value with a CKO_/CKK_/CKC_/CKM_
+    // prefix, whatever the attribute's kind — even the CKA_LABEL row the injected label
+    // later overwrites.
+    for name in ["CKA_LABEL", "CKA_APPLICATION"] {
+        let (_backend, provider) = logged_in();
+        let template = tpl(vec![str_attr(name, "CKM_NOPE")]);
+        let err = provider
+            .import_key(&data(), "conv-s", Some(&template), None)
+            .unwrap_err();
+        assert!(matches!(err.kind, ErrorKind::Param { .. }), "{name}");
+        assert_eq!(err.message, "unknown PKCS#11 constant 'CKM_NOPE'");
+        assert_eq!(param_name(&err), Some("CKM_NOPE"));
+        assert_eq!(
+            err.hint.as_deref(),
+            Some("ULONG template values may be ints or CKO_/CKK_/CKC_/CKM_ names")
+        );
+    }
+}
+
+#[test]
+fn str_attr_known_constant_stored_as_decimal_text() {
+    // Known name → int, which PyKCS11 writes into a string attribute as `str(int)`.
+    let (backend, provider) = logged_in();
+    let template = tpl(vec![
+        str_attr("CKA_LABEL", "CKM_AES_CBC"),
+        str_attr("CKA_APPLICATION", "CKM_SHA256"),
+    ]);
+    provider
+        .import_key(&data(), "conv-z", Some(&template), None)
+        .unwrap();
+    // the identity row names the object; the injected label is that text, verbatim
+    let obj = object_of(&backend, "CKM_AES_CBC");
+    assert_eq!(obj[&CKA_APPLICATION], b"592");
+    let (backend, provider) = logged_in();
+    let template = tpl(vec![str_attr("CKA_APPLICATION", "CKO_DATA")]);
+    provider
+        .import_key(&data(), "conv-w", Some(&template), None)
+        .unwrap();
+    assert_eq!(object_of(&backend, "conv-w")[&CKA_APPLICATION], b"0");
+}
+
+#[test]
 fn import_defaults_exportable_when_template_silent() {
     let (backend, provider) = logged_in();
     let info = provider.import_key(&aes(), "conv-4", None, None).unwrap();
