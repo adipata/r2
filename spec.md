@@ -4581,8 +4581,11 @@ pub type TerminalIo = LineIo<DegradingReader>;
 
 ```rust
 // crates/r2-console/src/io/history.rs
-/// c2 parity: the line contains "--pin" or "--password" (§11 D8 records the open decision
-/// on inline key material).
+/// Never stored in the history: lines containing "--pin" or "--password" (c2), and — §11 D8,
+/// adopted — lines carrying inline key material: anything containing `-----BEGIN`, any
+/// quoted token spanning several physical lines, and `load` with an inline data positional
+/// (≥ 3 positionals after binding with no flags; an untokenizable line starting with `load`
+/// counts as secret). `load --file …` and every other command line are kept.
 pub fn is_secret_line(line: &str) -> bool { .. }
 /// reedline History wrapper over `FileBackedHistory` (rules below).
 pub struct SecretFilteringHistory { /* inner: reedline::FileBackedHistory */ }
@@ -5888,12 +5891,13 @@ read_command("…> ") }` — which is the continuation mechanism for PlainIo and
 and a no-op for TerminalIo; both paths hand the dispatcher the identical buffer (S0: a
 28-line PEM arrives byte-identical through bracketed paste, keystroke paste and pipe).
 
-Lines containing `--pin` or `--password` are **not** persisted to history:
+Lines containing `--pin` or `--password`, and lines carrying inline key material (§11 D8:
+`-----BEGIN`, multi-line quoted pastes, `load` with inline data), are **not** persisted to
+history:
 `SecretFilteringHistory::save` answers `Ok(HistoryItem { id: None, .. })` for them (never
 `Err` — reedline `.expect()`s the result), `update` re-checks the edited line, and because
 the hinter and Up-arrow search the same history object such lines are never offered as
-hints or recalls either. (§11 D8 records the open decision on also filtering inline key
-material.) Param, select, confirm and multiline (`| `) answers are read by a second
+hints or recalls either. Param, select, confirm and multiline (`| `) answers are read by a second
 reedline instance with its own in-memory history (`FileBackedHistory::new(100)`; Up
 recalls earlier answers within the session, as c2's param session did), a
 `ChoiceCompleter` for ENUM/BOOL choices (opened with Tab; c2 completed while typing — §11
@@ -7635,9 +7639,9 @@ names the test or harness check that pins the deviation.
   protocol (`r2-transport-<hex>`; c2: `c2-transport-<hex>`), and the SoftHSM wizard's
   default token label (`Token label [r2]`, `DEFAULT_TOKEN_LABEL = "r2"`; c2 offered and
   wrote `c2` — the label lands on tokens shared with c2). The history file is
-  reedline's format, in TerminalIo and PlainIo sessions alike: one logical entry per command (a multi-line command is stored once,
-  with reedline's `<\n>` escaping — c2's prompt_toolkit file stored each physical line,
-  with `# <timestamp>` and `+` prefixes), capped at the newest 1000 entries (c2:
+  reedline's format, in TerminalIo and PlainIo sessions alike: one logical entry per command (c2's prompt_toolkit file stored each
+  physical line, with `# <timestamp>` and `+` prefixes; a multi-line command — always a
+  quoted multi-line token — is not stored at all, §11 D8), capped at the newest 1000 entries (c2:
   unbounded), and written by `sync` after every command. With its defaults, r2 never reads
   or writes c2's config, state, log or history files; tokens and data files are shared
   freely. A c2 config renamed to `r2.yaml` that still names c2 paths (`app.history_file`,
@@ -7648,24 +7652,21 @@ names the test or harness check that pins the deviation.
   backend (S0 terminal spike).
 - *Verified by*: R2 discovery tests, R7 history tests, `config show --defaults` snapshot.
 
-**D8 — History filter for inline key material — OPEN (user decision pending; option A
-ships until the user decides).**
-- *Issue*: c2@408d6f2 persists inline key material to its history file — e.g. the raw AES
-  key of `load mem aes 00112233…` and every physical line of a quoted PEM paste; only
-  `--pin`/`--password` lines are dropped (verified, S0 terminal spike).
-- *Option A (parity, the default until decided)*: filter `--pin`/`--password` only; no
-  deviation.
-- *Option B (recommended by S0)*: additionally drop entries that carry inline key data — a
-  `load` with a positional data value, any entry containing a quoted multi-line token, any
-  entry containing `-----BEGIN`. Cheap (`is_secret_line` grows) and consistent with c2's own
-  "never echo key bytes" rule; observable only in the history file and in hints/recalls.
-- *Implementation rule*: the predicate lives in one function (`is_secret_line`), so
-  switching is a one-function change. If B is chosen, this entry becomes an adopted
-  deviation.
-- *Status at R13 sign-off (2026-10-02)*: still OPEN — the decision belongs to the user and
-  was not taken by any loop. r2 SHIPS OPTION A (c2 parity: only `--pin`/`--password` lines
-  are kept out of the history) until the user decides; nothing else depends on the
-  outcome.
+**D8 — History filter for inline key material (adopted, option B — user decision
+2026-10-02).**
+- *Description*: c2@408d6f2 persisted inline key material to its history file — e.g. the
+  raw AES key of `load mem aes 00112233…` and every physical line of a quoted PEM paste;
+  only `--pin`/`--password` lines were dropped (verified, S0 terminal spike). r2 also keeps
+  out of the history (file, Up-arrow recall and hints) every entry that carries inline key
+  data: any entry containing `-----BEGIN`, any entry with a quoted token spanning several
+  physical lines, and a `load` with an inline data positional (plaintext material or a
+  `--kek` blob). `load --file …` and all other commands are stored as in c2. The
+  predicate is `is_secret_line` (§4.9.7).
+- *Reason*: consistent with c2's own "never log or echo key bytes" rule; the history file
+  was the one place key material reached disk in plain text. Observable only in the
+  history file and in hints/recalls (such a command must be retyped).
+- *Verified by*: `r2-console tests::io::history_filter_drops_inline_key_material`,
+  `tests::io::test_history_filters_pin_and_password_lines`.
 
 **D9 — Line-editor UX (reedline instead of prompt_toolkit).**
 - *Description*: the command line is highlighted (§5.1 colors; c2 had no highlighting).

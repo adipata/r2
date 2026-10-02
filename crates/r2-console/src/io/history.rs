@@ -10,10 +10,32 @@ use reedline::{
 /// Command-history capacity (c2: unbounded — §11 D7).
 pub(crate) const HISTORY_CAPACITY: usize = 1000;
 
-/// c2 parity: the line contains "--pin" or "--password" (§11 D8 records the open decision
-/// on inline key material).
+/// Lines never stored in the history (on disk or in the session list):
+/// - c2's rule: the line contains "--pin" or "--password";
+/// - §11 D8 (option B, adopted): lines carrying inline key material — anything containing
+///   `-----BEGIN`, any quoted token spanning several physical lines (a pasted PEM/base64
+///   block), and a `load` command with an inline data positional
+///   (`load <provider> <hint> <data>`, plaintext or a `--kek` blob). `load --file …` stays.
 pub fn is_secret_line(line: &str) -> bool {
-    line.contains("--pin") || line.contains("--password")
+    if line.contains("--pin") || line.contains("--password") || line.contains("-----BEGIN") {
+        return true;
+    }
+    let Ok(tokens) = crate::parser::tokenize(line) else {
+        // Not a parseable command line: keep it only when it cannot be a `load`.
+        return line.trim_start().starts_with("load");
+    };
+    if tokens.iter().any(|t| t.quoted && t.text.contains('\n')) {
+        return true;
+    }
+    if tokens.first().is_none_or(|t| t.quoted || t.text != "load") {
+        return false;
+    }
+    // `load` has no boolean flags: every `--opt` consumes its value, `name=value` tokens are
+    // mechanism parameters, and positionals are provider, hint and inline data.
+    match crate::parser::bind_args(&tokens[1..], &[], line) {
+        Ok(args) => args.positionals.len() >= 3,
+        Err(_) => true,
+    }
 }
 /// reedline History wrapper over `FileBackedHistory` (rules below).
 pub struct SecretFilteringHistory {

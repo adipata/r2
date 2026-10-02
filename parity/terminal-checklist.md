@@ -13,7 +13,7 @@ r2 commit in the table at the end.
 | 4 | Ctrl-C at a PIN / password prompt | as 3, press Ctrl-C at the prompt | `Aborted.`, the REPL continues; the next command is not aborted |
 | 5 | Ctrl-C while editing a command / Ctrl-D on an empty line | type a partial command, Ctrl-C; then Ctrl-D | the line is discarded; Ctrl-D leaves r2 with status 0 |
 | 6 | Tab completion and the dropdown menu | `enc<Tab>`, `encrypt mem:<Tab>`, `load mem --file <Tab>` | commands, refs and paths complete (§11 D9) |
-| 7 | History | Up after a few commands; a `--pin`/`--password` line is never recalled | recall works, secrets are not stored (§11 D8 option A) |
+| 7 | History | Up after a few commands; a `--pin`/`--password` line, a `load` with inline data and a pasted PEM are never recalled (§11 D8) | recall works, secrets are not stored (§11 D8 option A) |
 | 8 | Glyphs | `keys`, `help`, an error | box drawing and panel borders render (TrueType console font) |
 | 9 | Spinner | `login` on a slow PKCS#11 module (or SoftHSM keygen of RSA-4096) with stderr on the terminal | braille spinner on stderr, cleared before the next prompt (§11 D10) |
 | 10 | `TERM=dumb` / piped stdin | `TERM=dumb r2`, and `printf 'providers\nexit\n' \| r2` | plain prompts, no double echo; piped session exits 0 (§11 D2) |

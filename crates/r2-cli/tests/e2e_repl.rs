@@ -433,15 +433,16 @@ fn log_files_follow_the_python_rules() {
 }
 
 #[test]
-fn history_file_stores_a_multi_line_command_once() {
-    // a quoted multi-line paste read at `…> ` is ONE logical history entry (§11 D7)
+fn history_file_drops_a_multi_line_command() {
+    // a quoted multi-line paste read at `…> ` is one logical command (§11 D7) and, carrying
+    // a multi-line quoted token, is never stored (§11 D8 option B)
     let dir = tempfile::tempdir().unwrap();
     let config = write_config(dir.path(), "");
     let (out, _, code) = session(dir.path(), &config, b"help 'con\nfig'\nhelp\nexit\n");
     assert_eq!(code, 0);
     assert!(out.contains("r2> help 'con\n\u{2026}> fig'\n"), "{out}");
     let history = std::fs::read_to_string(dir.path().join("history")).unwrap();
-    assert_eq!(history, "help 'con<\\n>fig'\nhelp\nexit\n");
+    assert_eq!(history, "help\nexit\n");
 }
 
 #[test]

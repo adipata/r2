@@ -461,7 +461,40 @@ fn test_history_filters_pin_and_password_lines() {
     assert!(stored.contains("keys mem"));
     assert!(is_secret_line("x --pin"));
     assert!(is_secret_line("x --password=y"));
-    assert!(!is_secret_line("load mem aes 00112233")); // §11 D8 option A (parity)
+    assert!(is_secret_line("load mem aes 00112233")); // §11 D8 option B
+}
+
+/// §11 D8 option B: inline key material never reaches the history; everything else does.
+#[test]
+fn history_filter_drops_inline_key_material() {
+    for secret in [
+        "load mem aes 00112233445566778899aabbccddeeff",
+        "load mem aes 00112233 --label k",
+        "load --label k mem generic 0xdeadbeef",
+        "load mem data 48656c6c6f --label note",
+        "load softhsm aes 0011 --kek kw-key --mech kwp",
+        "load softhsm aes --kek k iv=00 0011",
+        "load mem auto \"-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\"",
+        "load mem auto \"MIIEvQIBADANBgkqhkiG9w0BAQEFAASC\nBKcwggSjAgEAAoIBAQ\"",
+        "encrypt mem:k gcm \"0011\n2233\"",
+        "-----BEGIN CERTIFICATE-----",
+        "load mem aes \"unterminated",
+    ] {
+        assert!(is_secret_line(secret), "{secret:?} must not be stored");
+    }
+    for kept in [
+        "load mem --file key.pem --label k",
+        "load mem --file blob.bin --kek k aes",
+        "load mem aes",
+        "load mem",
+        "keys mem",
+        "encrypt mem:k gcm deadbeef",
+        "sign mem:mac hmac hash=sha256 \"hello world\"",
+        "help load",
+        "loader mem aes 0011",
+    ] {
+        assert!(!is_secret_line(kept), "{kept:?} must be stored");
+    }
 }
 
 #[test]
@@ -481,20 +514,18 @@ fn history_save_answers_ok_and_update_never_smuggles_a_secret() {
         ..item
     });
     assert_eq!(history.load(id).unwrap().command_line, "keys mem");
-    // multi-line commands are one logical entry with reedline's escaping (§11 D7)
+    // a multi-line command (a quoted multi-line token) is never stored (§11 D8 option B)
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("h");
     {
         let mut history = SecretFilteringHistory::open(Some(&path));
-        history
+        let saved = history
             .save(HistoryItem::from_command_line("load mem aes \"x\ny\""))
             .unwrap();
+        assert_eq!(saved.id, None);
         history.sync().unwrap();
     }
-    assert_eq!(
-        std::fs::read_to_string(&path).unwrap(),
-        "load mem aes \"x<\\n>y\"\n"
-    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap_or_default(), "");
 }
 
 #[test]
@@ -701,7 +732,7 @@ fn history_entries(path: &std::path::Path) -> Vec<String> {
 }
 
 #[test]
-fn plain_reader_stores_one_logical_history_entry_per_command() {
+fn plain_reader_reads_multi_line_commands_but_never_stores_them() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("history");
     let mut reader =
@@ -716,12 +747,12 @@ fn plain_reader_stores_one_logical_history_entry_per_command() {
             ReadOutcome::Interrupted => panic!("no interrupt"),
         }
     }
-    // the REPL still sees the physical lines; history holds the joined command once, the
-    // secret one not at all, and an unterminated quote at EOF never
+    // the REPL still sees the physical lines; none is stored: the multi-line commands carry
+    // a multi-line quoted token (§11 D8 option B), one also `--pin`, and an unterminated
+    // quote at EOF never completes
     assert_eq!(lines.len(), 6);
-    assert_eq!(history_entries(&path), ["help 'a\nb'"]);
-    let file = std::fs::read_to_string(&path).unwrap();
-    assert_eq!(file, "help 'a<\\n>b'\n");
+    assert!(history_entries(&path).is_empty());
+    assert_eq!(std::fs::read_to_string(&path).unwrap_or_default(), "");
 }
 
 #[test]
