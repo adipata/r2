@@ -7807,13 +7807,18 @@ merges).**
     noexec mounts), so a util executable only by another user, or on a noexec mount, is
     picked where c2 kept searching `PATH`, and then fails to start (above).
   - (s) a §5.16 template file (`--template`, R14) that is not valid UTF-8 (`Path.read_text`
-    raised `UnicodeDecodeError`), or whose YAML construction raised a plain `ValueError`
-    (an impossible timestamp such as `2001-02-30`, a malformed explicit
-    `!!int`/`!!float`/`!!bool` scalar): c2's `load_template_file` caught only `OSError` and
-    `yaml.YAMLError`, so the command crashed into the unexpected-error path. r2 raises
-    DataIo `cannot read <path>: <CPython UnicodeDecodeError text>` resp. Param (`template`)
-    `invalid YAML in template file <path>: <Python's ValueError text>` (hint `template files
-    are class-keyed YAML (spec §5.16)`), before any prompt.
+    raised `UnicodeDecodeError`), or whose YAML construction raised a non-`YAMLError`
+    exception (`ValueError` for an impossible timestamp such as `2001-02-30` or a malformed
+    explicit `!!int`/`!!float` scalar; `KeyError` for a malformed `!!bool`;
+    `AttributeError` for a malformed `!!timestamp`; `IndexError` for an empty `!!int`):
+    c2's `load_template_file` caught only `OSError` and `yaml.YAMLError`, so the command
+    crashed into the unexpected-error path. r2 raises DataIo `cannot read <path>: <CPython
+    UnicodeDecodeError text>` resp. Param (`template`) `invalid YAML in template file
+    <path>: <text>` (hint `template files are class-keyed YAML (spec §5.16)`), before any
+    prompt, where `<text>` is Python's `ValueError` text where c2 had one (`day is out of
+    range for month`, `invalid literal for int() with base 10: 'x'`, `could not convert
+    string to float: 'abc'`) and otherwise the §4.8.4 loader's own text (`invalid boolean
+    value '<v>'`, `invalid timestamp '<v>'`, `invalid literal for int() with base 10: ''`).
 - *Reason*: every expected failure must be a `ConsoleError`; OpenSSL would reject the CN
   with a different text anyway.
 - *Verified by*: R8 certops test (a), R6 keyparse/x509info/formats fixtures (b, h, i, j:
@@ -7846,7 +7851,7 @@ merges).**
   `util_spawn_failure_is_an_error`, `append_io_errors_are_config_errors`,
   `decline_works_on_a_provider_without_token_init_and_accept_refuses_it`), R14 templatefile
   test (s: `non_utf8_file_is_an_unreadable_file`,
-  `value_errors_of_the_yaml_constructor_are_invalid_yaml`).
+  `construction_errors_of_the_yaml_loader_are_invalid_yaml`).
 
 **D13 — Ctrl-C while a command runs is honored at step boundaries.**
 - *Description*: c2's `KeyboardInterrupt` surfaced at the next Python bytecode after the
@@ -7931,7 +7936,10 @@ merges).**
   content at line <l>, column 1`; PyYAML's minimum indentation is 1, so such a line ends
   the scalar, and YAML 1.2 would load it as content); (c) an integer
   literal outside -2^63..=2^64-1 is a parse error `integer out of range: <text>`, where
-  Python's int is unbounded; (d) the explicit collection tags `!!set`, `!!omap` and
+  Python's int is unbounded — likewise a template-file dump (§5.16) of a ULONG row whose
+  c2 `int(bytes)` value lies outside that range (no provider produces one) writes it as a
+  quoted string where PyYAML wrote a plain int, and that row then reloads as `<name> expects
+  an integer or CKO_/CKK_/CKC_/CKM_ constant`; (d) the explicit collection tags `!!set`, `!!omap` and
   `!!pairs` (which PyYAML's SafeLoader constructs as `set` / list of pairs) are rejected
   with `could not determine a constructor for the tag 'tag:yaml.org,2002:set'` (resp.
   `omap`, `pairs`); (e) aliases are expanded into copies: a recursive alias (an anchored
@@ -7950,14 +7958,19 @@ merges).**
   character U+2028 at line <l>, column <c>` (PyYAML treats both as line breaks, keeping the
   character itself in folded content; yaml-rust2 treats them as ordinary characters, so the
   same text would load to a different value). NEL (U+0085), PyYAML's third extra break, is
-  normalized to `\n` before parsing and loads exactly like PyYAML.
+  normalized to `\n` before parsing, so it loads like PyYAML wherever a line break would;
+  inside a quoted scalar the continuation line it starts must be indented per YAML 1.2,
+  which is (b) (`"a<NEL>b"` → `invalid indentation in quoted scalar …`; PyYAML folded it
+  to `a b`).
 - *Reason*: no maintained Rust YAML 1.1 parser exists; the event parser is the only way to
   see scalar styles (§4.8.4).
 - *Verified by*: R2 loader tests (typing vectors generated with PyYAML, the cases above:
   `yaml::tests::load_r2_errors`, `yaml::tests::alias_expansion_rules`,
   `yaml::tests::nested_merges_hit_the_value_budget`,
   `yaml::tests::aliased_large_scalar_hits_the_byte_budget`), R14 template-file
-  tests, the R13 config interop check.
+  tests (f's NEL rule: `nel_is_a_line_break_and_quoted_continuations_must_be_indented`;
+  c's dump note: `dump_encodes_values_like_c2_encode_value`), the R13 config interop
+  check.
 
 **D18 — Numeric range and load-time typing guards.**
 - *Description*: Rust's fixed-width integers and typed config make r2 reject some values

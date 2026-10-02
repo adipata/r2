@@ -647,8 +647,8 @@ fn non_utf8_file_is_an_unreadable_file() {
 }
 
 #[test]
-fn value_errors_of_the_yaml_constructor_are_invalid_yaml() {
-    // §11 D12 (s): c2 let PyYAML's plain ValueError escape (not a yaml.YAMLError)
+fn construction_errors_of_the_yaml_loader_are_invalid_yaml() {
+    // §11 D12 (s): c2 let PyYAML's non-YAMLError construction exceptions escape
     for (text, detail) in [
         (
             "aes:\n  CKA_START_DATE: 2001-02-30\n",
@@ -657,6 +657,27 @@ fn value_errors_of_the_yaml_constructor_are_invalid_yaml() {
         (
             "aes:\n  CKA_VALUE_LEN: !!int x\n",
             "invalid literal for int() with base 10: 'x'",
+        ),
+        (
+            "aes:\n  CKA_VALUE_LEN: !!int \"1:x\"\n",
+            "invalid literal for int() with base 10: 'x'",
+        ),
+        (
+            "aes:\n  CKA_VALUE_LEN: !!float \"abc\"\n",
+            "could not convert string to float: 'abc'",
+        ),
+        // c2 crashed with KeyError / AttributeError / IndexError here: the yaml loader's text
+        (
+            "aes:\n  CKA_TOKEN: !!bool \"abc\"\n",
+            "invalid boolean value 'abc'",
+        ),
+        (
+            "aes:\n  CKA_START_DATE: !!timestamp \"abc\"\n",
+            "invalid timestamp 'abc'",
+        ),
+        (
+            "aes:\n  CKA_VALUE_LEN: !!int \"\"\n",
+            "invalid literal for int() with base 10: ''",
         ),
     ] {
         let dir = tempfile::tempdir().unwrap();
@@ -893,6 +914,23 @@ fn dump_encodes_values_like_c2_encode_value() {
         "data:\n  CKA_TOKEN: false\n  CKA_PRIVATE: true\n  CKA_ID: 0x\n  CKA_VALUE_LEN: CKM_X\n  \
          CKA_MODULUS_BITS: 1\n  CKA_LABEL: 'False'\n  CKA_APPLICATION: '7'\n  CKA_URL: \
          b\"a'\"\n  CKA_OBJECT_ID: '0xab'\n"
+    );
+    // c2 `int(b"99999999999999999999")` is a plain int; r2 has no YAML int outside
+    // -2^63..=2^64-1 (§11 D17 (c)), so the row is written quoted and reloads as a mismatch
+    let big = KeyTemplate::new(vec![attr(
+        "CKA_VALUE_LEN",
+        AttrKind::Ulong,
+        AttrValue::Bytes(b"99999999999999999999".to_vec()),
+    )]);
+    templatefile::dump_template_file(&path, "aes", &big).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "aes:\n  CKA_VALUE_LEN: '99999999999999999999'\n"
+    );
+    let err = templatefile::load_seed_file(&path, &no_custom()).unwrap_err();
+    assert_eq!(
+        err.message,
+        "CKA_VALUE_LEN expects an integer or CKO_/CKK_/CKC_/CKM_ constant"
     );
     // an empty template is an empty mapping
     templatefile::dump_template_file(&path, "aes", &KeyTemplate::default()).unwrap();
@@ -1374,4 +1412,25 @@ fn seeding_helpers_compile_against_the_frozen_surface() {
     // keep the Provider import used when the ignored cases are compiled out of a run
     let provider = hsm();
     assert_eq!(provider.type_name(), "pkcs11");
+}
+
+#[test]
+fn nel_is_a_line_break_and_quoted_continuations_must_be_indented() {
+    // §11 D17 (f): NEL is normalized to `\n` before parsing, so it loads like PyYAML
+    // wherever a line break would …
+    let sections = load_text("aes:\u{85}  CKA_TOKEN: true\u{85}").unwrap();
+    assert_eq!(
+        rows(&sections["aes"]),
+        vec![("CKA_TOKEN".into(), AttrKind::Bool, AttrValue::Bool(true))]
+    );
+    // … but inside a quoted scalar the continuation line it starts must be indented per
+    // YAML 1.2 (D17 (b)); PyYAML folded it (c2: CKA_LABEL='a b')
+    let err = load_err("aes:\n  CKA_LABEL: \"a\u{85}b\"\n");
+    assert_eq!(param_name(&err), "template");
+    assert!(
+        err.message
+            .ends_with("invalid indentation in quoted scalar at byte 18 line 2 column 14"),
+        "{}",
+        err.message
+    );
 }

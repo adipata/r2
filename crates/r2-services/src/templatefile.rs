@@ -87,8 +87,11 @@ pub fn dump_template_file(
     }
     let mut root = Mapping::new();
     root.insert(Value::String(class_key.to_owned()), Value::Mapping(section));
-    // the text carries CKA_VALUE / private components in hex (§5.16): wiped on drop
-    let text = Zeroizing::new(yaml::dump(&Value::Mapping(root)));
+    // the tree and the text carry CKA_VALUE / private components in hex (§5.16): both are
+    // wiped on drop
+    let root = WipedValue(Value::Mapping(root));
+    let text = Zeroizing::new(yaml::dump(&root.0));
+    drop(root);
     write_output(path, text.as_bytes())
 }
 
@@ -132,15 +135,15 @@ pub fn load_seed_file(
     // Python text mode: universal newlines.
     let text = Zeroizing::new(text.replace("\r\n", "\n"));
     let text = Zeroizing::new(text.replace('\r', "\n"));
-    let raw = yaml::parse(&text).map_err(|err| {
+    let raw = WipedValue(yaml::parse(&text).map_err(|err| {
         ConsoleError::param(
             format!("invalid YAML in template file {shown}: {}", err.message),
             "template",
         )
         .with_hint("template files are class-keyed YAML (spec §5.16)")
-    })?;
+    })?);
     let section_hint = format!("valid sections: {}", TEMPLATE_CLASS_KEYS.join(", "));
-    let map = match raw {
+    let map = match &raw.0 {
         Value::Mapping(map) if !map.is_empty() => map,
         _ => {
             return Err(ConsoleError::param(
@@ -151,7 +154,7 @@ pub fn load_seed_file(
         }
     };
     let mut sections = SeedTemplates::new();
-    for (raw_key, section) in &map {
+    for (raw_key, section) in map {
         let section_key = py_str(raw_key);
         if !matches!(raw_key, Value::String(_)) || !TEMPLATE_CLASS_KEYS.contains(&&*section_key) {
             return Err(ConsoleError::param(
@@ -237,7 +240,7 @@ fn encode_value(attr: &TemplateAttr) -> r2_core::Result<Value> {
         // c2 `bool(attr.value)` (Python truthiness for a value of another type)
         AttrKind::Bool => Value::Bool(truthy(&attr.value)),
         AttrKind::Bytes => match &attr.value {
-            AttrValue::Bytes(bytes) => Value::String(format!("0x{}", hex_lower(bytes))),
+            AttrValue::Bytes(bytes) => Value::String(format!("0x{}", hex_lower(bytes).as_str())),
             _ => Value::String("0x".to_owned()),
         },
         AttrKind::Ulong => match &attr.value {
@@ -267,6 +270,11 @@ fn encode_value(attr: &TemplateAttr) -> r2_core::Result<Value> {
     })
 }
 
+/// c2 `int(bytes)` of a ULONG row as a YAML int. r2's YAML ints span -2^63..=2^64-1 (§11
+/// D17 (c)), so a value outside that range (only reachable from ASCII-digit bytes) is
+/// written as a quoted string where PyYAML wrote a plain int; reloading that row fails
+/// "expects an integer or CKO_/CKK_/CKC_/CKM_ constant" (c2's file loaded and failed only
+/// at conversion). No provider produces such a row.
 fn int_value(n: i128) -> Value {
     if let Ok(v) = u64::try_from(n) {
         Value::Number(Number::from(v))
@@ -287,13 +295,42 @@ fn truthy(value: &AttrValue) -> bool {
     }
 }
 
-fn hex_lower(bytes: &[u8]) -> String {
+/// Lowercase hex of (possibly secret) attribute bytes, wiped on drop.
+fn hex_lower(bytes: &[u8]) -> Zeroizing<String> {
     use std::fmt::Write as _;
-    let mut out = String::with_capacity(bytes.len() * 2);
+    let mut out = Zeroizing::new(String::with_capacity(bytes.len() * 2));
     for byte in bytes {
         let _ = write!(out, "{byte:02x}");
     }
     out
+}
+
+/// A YAML tree that may hold key material in hex (a dumped section, a parsed file): every
+/// string in it — keys included — is zeroized when the guard drops, on every return path.
+/// (Copies inside `yaml::dump`/`yaml::parse` themselves are outside r2-services' reach.)
+struct WipedValue(Value);
+
+impl Drop for WipedValue {
+    fn drop(&mut self) {
+        wipe(&mut self.0);
+    }
+}
+
+fn wipe(value: &mut Value) {
+    use zeroize::Zeroize as _;
+    match value {
+        Value::String(text) => text.zeroize(),
+        Value::Sequence(items) => items.iter_mut().for_each(wipe),
+        Value::Mapping(map) => {
+            // keys are immutable inside a Mapping: take it apart
+            for (mut key, mut item) in std::mem::take(map) {
+                wipe(&mut key);
+                wipe(&mut item);
+            }
+        }
+        Value::Tagged(tagged) => wipe(&mut tagged.value),
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
 }
 
 /// c2 `_kind_of`: CKA_CATALOG first, then templates.custom_attributes.
@@ -526,5 +563,33 @@ fn utf8_error_text(bytes: &[u8], error: &std::str::Utf8Error) -> String {
             };
             format!("'utf-8' codec can't decode byte 0x{first:02x} in position {start}: {reason}")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wipe_zeroizes_every_string_in_the_tree() {
+        let tagged = yaml::parse("!!binary aGk=").unwrap();
+        let mut value = Value::Sequence(vec![
+            Value::String("0xdeadbeef".to_owned()),
+            Value::Sequence(vec![Value::String("0x01".to_owned()), Value::Bool(true)]),
+            tagged,
+        ]);
+        wipe(&mut value);
+        let Value::Sequence(items) = &value else {
+            panic!("not a sequence")
+        };
+        assert_eq!(items[0], Value::String(String::new()));
+        assert_eq!(
+            items[1],
+            Value::Sequence(vec![Value::String(String::new()), Value::Bool(true)])
+        );
+        // a mapping is taken apart (keys are immutable in place) and left empty
+        let mut map = yaml::parse("aes: {CKA_VALUE: '0x00ff'}").unwrap();
+        wipe(&mut map);
+        assert_eq!(map, Value::Mapping(Mapping::new()));
     }
 }
