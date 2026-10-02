@@ -319,7 +319,6 @@ fn test_copy_output_uses_table_vocabulary() {
 // ---------------------------------------------------------------------------------------
 
 #[test]
-#[ignore = "needs R14 (merge checklist)"]
 fn copy_template_seeds_the_real_destination_editor() {
     // the file section (extractable, non-sensitive) seeds the REAL checklist editor;
     // accepting it unchanged proves the seed drove the copy

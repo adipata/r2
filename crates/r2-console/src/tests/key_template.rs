@@ -555,7 +555,6 @@ fn template_file_seeds_a_memory_editor_never() {
 // ---------------------------------------------------------------------------------------
 
 #[test]
-#[ignore = "needs R10 (merge checklist)"]
 fn test_copy_template_seeds_destination_editor() {
     // §5.16: the file section (extractable, non-sensitive) seeds the REAL checklist editor;
     // accepting it unchanged proves the seed drove the copy.
@@ -580,7 +579,6 @@ fn test_copy_template_seeds_destination_editor() {
 }
 
 #[test]
-#[ignore = "needs R10 (merge checklist)"]
 fn test_copy_template_memory_destination_raises() {
     let dir = tempfile::tempdir().unwrap();
     let path = template_file(dir.path(), "aes:\n  CKA_TOKEN: true\n");

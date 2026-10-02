@@ -1276,7 +1276,6 @@ fn test_import_pkcs12_picks_section_per_material() {
 }
 
 #[test]
-#[ignore = "needs R15 (merge checklist)"]
 fn test_load_wrapped_seed_templates_reach_the_editor() {
     use r2_core::params::Params;
     use r2_services::wrapload::{self, UnwrapJob};
@@ -1377,7 +1376,6 @@ fn transfer_copy(sections: &SeedTemplates) -> Vec<KeyTemplate> {
 }
 
 #[test]
-#[ignore = "needs R10 (merge checklist)"]
 fn test_wrap_route_editor_seeded_from_matching_section() {
     let mut sections = SeedTemplates::new();
     sections.insert("aes".into(), policy_template(false, true));
@@ -1398,7 +1396,6 @@ fn test_wrap_route_editor_seeded_from_matching_section() {
 }
 
 #[test]
-#[ignore = "needs R10 (merge checklist)"]
 fn test_wrap_route_missing_section_falls_back_to_defaults() {
     let mut sections = SeedTemplates::new();
     sections.insert("rsa_private".into(), policy_template(true, false));

@@ -718,7 +718,6 @@ fn rsa_public_kek_wraps_on_the_token_softhsm() {
 }
 
 #[test]
-#[ignore = "needs R14 (merge checklist): --template seeding (templatefile::build_seed)"]
 fn test_load_wrapped_aes_under_an_aes_kek_with_template_file_softhsm() {
     // c2's literal form: the §5.16 template file gives the KEK CKA_WRAP/CKA_UNWRAP. Runs
     // with the editor that accepts the seed unchanged, so only the file sets attributes.
@@ -749,7 +748,6 @@ fn test_load_wrapped_aes_under_an_aes_kek_with_template_file_softhsm() {
 }
 
 #[test]
-#[ignore = "needs R14 (merge checklist): --template seeding (templatefile::build_seed)"]
 fn test_load_wrapped_aes_under_an_rsa_kek_with_template_file_softhsm() {
     // c2's literal form of the RSA rung: the rsa_private/rsa_public sections of the
     // template file give the pair CKA_UNWRAP/CKA_WRAP; the aes section keeps the
@@ -798,7 +796,6 @@ fn test_load_wrapped_aes_under_an_rsa_kek_with_template_file_softhsm() {
 }
 
 #[test]
-#[ignore = "needs R14 (merge checklist): --template seeding (templatefile::build_seed)"]
 fn test_sensitive_key_exports_wrapped_but_not_plain_with_template_file_softhsm() {
     // c2's literal form: `sensitive.yaml` replaces the default aes rows, so the generated
     // key is SENSITIVE+EXTRACTABLE with nothing else from the §7 defaults.
