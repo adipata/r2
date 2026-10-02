@@ -1580,6 +1580,10 @@ impl Provider for Unhooked<'_> {
     fn mechanisms(&self) -> BTreeSet<String> {
         self.0.base_mechanisms()
     }
+    // c2 `super().supports(m)` resolves `self.mechanisms()` virtually: the HOOKED surface.
+    fn supports(&self, mechanism: &str) -> bool {
+        Provider::mechanisms(self.0).contains(mechanism)
+    }
     fn list_keys(&self) -> Result<Vec<KeyInfo>> {
         self.0.base_list_keys()
     }
@@ -1690,11 +1694,13 @@ impl TokenInit for Unhooked<'_> {
 /// recorded unless the hook delegates). `next` is a borrowed un-hooked view of the same
 /// fake, so a hook can observe and delegate (c2 `super().method(...)`); `next.as_any()`
 /// returns the FakeProvider itself. Dispatch rules (c2 virtual-dispatch parity):
-/// FakeProvider's own internal calls — `set_env_and_reset` → `shutdown`, `unwrap_key` →
-/// the import path, capability checks → `mechanisms()`, also when they happen inside a
-/// `next.*` call — go through the HOOKED surface (a hook overriding `shutdown` sees the
-/// shutdown that `set_env_and_reset` triggers); no RefCell borrow is held while a hook or
-/// `next` runs.
+/// FakeProvider's own internal calls — `set_env_and_reset` → `shutdown`, capability checks
+/// → `mechanisms()` (incl. `supports`), also when they happen inside a `next.*` call — go
+/// through the HOOKED surface (a hook overriding `shutdown` sees the shutdown that
+/// `set_env_and_reset` triggers); `unwrap_key` stores the unwrapped key through the fake's
+/// internal store path (c2 `_store_key`: the duplicate guard runs, no `import_key` call is
+/// made or recorded, an `import_key` hook is not consulted); no RefCell borrow is held
+/// while a hook or `next` runs.
 #[allow(unused_variables)]
 pub trait FakeHooks {
     fn initialize(&self, next: &dyn Provider) -> Option<Result<()>> {

@@ -17,6 +17,7 @@ use r2_ops::{
     OperationRegistry, OperationSpec, ParamKind, ParamSpec, ParamStruct, ParamValue, Verb,
     register_builtins,
 };
+use r2_provider::Provider;
 use r2_provider::mechanism::CANONICAL_MECHANISMS;
 use r2_testkit::FakeProvider;
 
@@ -155,9 +156,26 @@ fn test_full_builtin_id_set() {
     for op_id in EXPECTED_BUILTIN_IDS {
         assert_eq!(reg.get(op_id).unwrap().id, op_id);
     }
-    // c2 inspected `reg._specs`; r2 enumerates every spec reachable through available_for
-    // with probe keys covering every verb/algorithm/class/curve combination.
+    // c2 inspected `reg._specs`; r2 has no iteration API, so it enumerates every spec
+    // reachable through available_for with probe keys covering every
+    // verb/algorithm/class/curve combination, against probe providers of both presented
+    // types ("memory", "pkcs11") whose mechanism set is the canonical one widened by every
+    // mechanism the table uses. Residual gap: a stray row restricted to a specific
+    // provider *name* (`providers`) or using a mechanism no expected row uses would not be
+    // reached.
     let provider = FakeProvider::new("fake");
+    let mut mechanisms = provider.mechanisms();
+    mechanisms.extend(
+        EXPECTED_BUILTIN_IDS
+            .iter()
+            .map(|op_id| reg.get(op_id).unwrap().mechanism.clone()),
+    );
+    let probes = [
+        FakeProvider::new("fake").with_mechanisms(mechanisms.clone()),
+        FakeProvider::new("fake")
+            .with_type_name("pkcs11")
+            .with_mechanisms(mechanisms),
+    ];
     let algorithms = [
         KeyAlgorithm::Aes,
         KeyAlgorithm::Rsa,
@@ -171,12 +189,14 @@ fn test_full_builtin_id_set() {
     let mut curves: Vec<Option<Curve>> = Curve::KNOWN.into_iter().map(Some).collect();
     curves.push(None);
     let mut reachable = BTreeSet::new();
-    for verb in Verb::ALL {
-        for algorithm in algorithms {
-            for key_class in KeyClass::ALL {
-                for curve in &curves {
-                    let probe = key(algorithm, key_class, curve.clone());
-                    reachable.extend(id_set(&reg.available_for(verb, &probe, &provider)));
+    for probe_provider in &probes {
+        for verb in Verb::ALL {
+            for algorithm in algorithms {
+                for key_class in KeyClass::ALL {
+                    for curve in &curves {
+                        let probe = key(algorithm, key_class, curve.clone());
+                        reachable.extend(id_set(&reg.available_for(verb, &probe, probe_provider)));
+                    }
                 }
             }
         }

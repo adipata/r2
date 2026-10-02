@@ -249,6 +249,88 @@ fn internal_capability_checks_use_the_hooked_mechanisms() {
     assert_eq!(error.message, "mem does not support mechanism AES-CMAC");
 }
 
+/// Records what `next.supports` sees from inside `initialize`; optionally empties
+/// `mechanisms()`; refuses every `import_key`.
+#[derive(Default)]
+struct Gate {
+    no_mechanisms: bool,
+    next_supports: RefCell<Option<bool>>,
+    import_hook_calls: RefCell<usize>,
+}
+
+impl FakeHooks for Gate {
+    fn initialize(&self, next: &dyn Provider) -> Option<Result<()>> {
+        *self.next_supports.borrow_mut() = Some(next.supports("AES-CBC"));
+        None
+    }
+    fn mechanisms(&self, _next: &dyn Provider) -> Option<BTreeSet<String>> {
+        self.no_mechanisms.then(BTreeSet::new)
+    }
+    fn import_key(
+        &self,
+        _next: &dyn Provider,
+        _material: &KeyMaterial,
+        _label: &str,
+        _template: Option<&KeyTemplate>,
+        _key_id: Option<&[u8]>,
+    ) -> Option<Result<KeyInfo>> {
+        *self.import_hook_calls.borrow_mut() += 1;
+        Some(Err(ConsoleError::provider("import refused by hook")))
+    }
+}
+
+#[test]
+fn next_supports_uses_the_hooked_mechanisms() {
+    // `next` is the un-hooked view, but its `supports` resolves the HOOKED mechanisms()
+    // (c2 `super().supports(m)` → `self.mechanisms()`).
+    for (no_mechanisms, expected) in [(false, true), (true, false)] {
+        let gate = Rc::new(Gate {
+            no_mechanisms,
+            ..Gate::default()
+        });
+        let fake = FakeProvider::new("mem").with_hooks(gate.clone());
+        fake.initialize().unwrap();
+        assert_eq!(*gate.next_supports.borrow(), Some(expected));
+        assert_eq!(fake.supports("AES-CBC"), expected);
+    }
+}
+
+#[test]
+fn unwrap_key_does_not_consult_the_import_key_hook() {
+    let gate = Rc::new(Gate::default());
+    let fake = FakeProvider::new("mem").with_hooks(gate.clone());
+    // the hook refuses imports; seed the wrapping key through the store backdoor
+    let secret = fake.store_key_unchecked(&aes(), "kek", None, None);
+    assert_eq!(
+        err(fake.import_key(&aes(), "x", None, None)).message,
+        "import refused by hook"
+    );
+    assert_eq!(*gate.import_hook_calls.borrow(), 1);
+    let blob = fake
+        .wrap_key(
+            &secret,
+            &mech("AES-KEY-WRAP"),
+            &secret,
+            &WrapOptions::default(),
+        )
+        .unwrap();
+    fake.clear_calls();
+    let request = UnwrapRequest::new(KeyAlgorithm::Generic, KeyClass::Secret, "u");
+    let unwrapped = fake
+        .unwrap_key(&secret, &mech("AES-KEY-WRAP"), &blob, &request)
+        .unwrap();
+    assert_eq!(unwrapped.key_ref.label, "u");
+    // c2 `_store_key`: no import_key hook call, no import_key recorded
+    assert_eq!(*gate.import_hook_calls.borrow(), 1);
+    assert!(fake.calls().iter().all(|c| c[0] != "import_key"));
+    assert_eq!(fake.calls().len(), 1);
+    assert_eq!(fake.calls()[0][0], "unwrap_key");
+    // the duplicate guard still runs on the internal store path
+    let error = err(fake.unwrap_key(&secret, &mech("AES-KEY-WRAP"), &blob, &request));
+    assert_eq!(*gate.import_hook_calls.borrow(), 1);
+    assert_ne!(error.message, "import refused by hook");
+}
+
 #[test]
 fn set_env_and_reset_runs_the_hooked_shutdown() {
     let spy = Rc::new(Spy::default());

@@ -24,21 +24,33 @@ pub fn rsa_raw_modexp(modulus: &[u8], exponent: &[u8], data: &[u8]) -> Result<Ze
             data.len()
         )));
     }
-    let m = bignum(data)?;
-    if m >= n {
+    // `m` may be ciphertext and `exponent` the private exponent d (decrypt/sign), and
+    // openssl's BigNum Drop is BN_free (no wipe): every BigNum holding them, and the
+    // result, is cleared on every path by `Cleared`.
+    let m = Cleared(bignum(data)?);
+    if m.0 >= n {
         return Err(ConsoleError::crypto(
             "RSA-RAW input is not numerically smaller than the modulus",
         ));
     }
-    let e = bignum(exponent)?;
+    let e = Cleared(bignum(exponent)?);
+    let mut out = Cleared(BigNum::new().map_err(|_| crypto_failure())?);
     let mut ctx = BigNumContext::new().map_err(|_| crypto_failure())?;
-    let mut out = BigNum::new().map_err(|_| crypto_failure())?;
-    out.mod_exp(&m, &e, &n, &mut ctx)
+    out.0
+        .mod_exp(&m.0, &e.0, &n, &mut ctx)
         .map_err(|_| crypto_failure())?;
     let width = i32::try_from(k).map_err(|_| crypto_failure())?;
-    let bytes = out.to_vec_padded(width).map_err(|_| crypto_failure())?;
-    out.clear();
+    let bytes = out.0.to_vec_padded(width).map_err(|_| crypto_failure())?;
     Ok(Zeroizing::new(bytes))
+}
+
+/// Clears (BN_clear) the wrapped BigNum on drop; `clear` never fails or panics.
+struct Cleared(BigNum);
+
+impl Drop for Cleared {
+    fn drop(&mut self) {
+        self.0.clear();
+    }
 }
 
 fn bignum(bytes: &[u8]) -> Result<BigNum> {
