@@ -335,6 +335,58 @@ fn login_slot_beyond_i128_is_an_unknown_slot() {
 }
 
 #[test]
+fn login_slot_honours_python_int_digit_limit() {
+    // CPython 3.12 `int(str)` raises ValueError beyond 4300 digits (leading zeros and the
+    // digits between `_` count; sign and whitespace do not) → c2 ParamError.
+    let over = [
+        "0".repeat(4301),
+        format!("{}1", "0".repeat(4300)),
+        "1".repeat(4301),
+        format!("{}1", "1_".repeat(4300)),
+        format!(" -{} ", "1".repeat(4301)),
+    ];
+    for text in &over {
+        let (hsm, registry) = logged_out_hsm();
+        let err = run_line(
+            &ctx_with(&scripted(&["1234"]), registry, None),
+            &format!("login hsm --slot '{text}'"),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.kind,
+            ErrorKind::Param {
+                param_name: "slot".into()
+            },
+            "{} digits",
+            text.len()
+        );
+        assert_eq!(
+            err.message,
+            format!("invalid slot {}", r2_core::text::py_repr(text))
+        );
+        assert_eq!(err.hint.as_deref(), Some("--slot takes an integer"));
+        assert_eq!(auth(&hsm), AuthState::LoggedOut);
+    }
+    // exactly 4300 digits still parses: zeros select slot 0, ones match no token
+    let (hsm, registry) = logged_out_hsm();
+    run_line(
+        &ctx_with(&scripted(&["1234"]), registry, None),
+        &format!("login hsm --slot ' +{}'", "0".repeat(4300)),
+    )
+    .unwrap();
+    assert_eq!(auth(&hsm), AuthState::LoggedIn);
+    let ones = "1".repeat(4300);
+    let (_hsm, registry) = logged_out_hsm();
+    let err = run_line(
+        &ctx_with(&scripted(&[]), registry, None),
+        &format!("login hsm --slot -{ones}"),
+    )
+    .unwrap_err();
+    assert!(err.kind.is_provider(), "{:?}", err.kind);
+    assert_eq!(err.message, format!("no token with slot -{ones} on 'hsm'"));
+}
+
+#[test]
 fn login_slot_is_python_int() {
     // c2 `int(slot_opt)`: surrounding whitespace, a sign and leading zeros are accepted
     let (hsm, registry) = logged_out_hsm();

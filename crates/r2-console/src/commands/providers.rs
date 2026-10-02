@@ -329,17 +329,24 @@ fn select_token(
         return match_token(&tokens, provider.name(), Wanted::Label(label));
     }
     if let Some(slot_text) = slot_opt {
+        let invalid = || {
+            ConsoleError::param(format!("invalid slot {}", py_repr(slot_text)), "slot")
+                .with_hint("--slot takes an integer")
+        };
+        // CPython 3.12 `int(str)` refuses more than 4300 digits (leading zeros and `_`
+        // separators' digits count; sign, `_` and whitespace do not) with ValueError.
+        if is_well_formed_int(slot_text)
+            && slot_text.chars().filter(char::is_ascii_digit).count() > PY_INT_MAX_STR_DIGITS
+        {
+            return Err(invalid());
+        }
         let Some(slot) = py_int(slot_text, 10) else {
             if let Some(normalized) = overflowing_int_text(slot_text) {
                 // c2 `int()` is unbounded: a well-formed integer outside i128 parses, and
                 // no CK_SLOT_ID can equal it → "no token with slot {n}" (c2 parity).
                 return match_token(&tokens, provider.name(), Wanted::Overflow(&normalized));
             }
-            return Err(ConsoleError::param(
-                format!("invalid slot {}", py_repr(slot_text)),
-                "slot",
-            )
-            .with_hint("--slot takes an integer"));
+            return Err(invalid());
         };
         return match_token(&tokens, provider.name(), Wanted::Slot(slot));
     }
@@ -386,16 +393,27 @@ enum Wanted<'a> {
     Overflow(&'a str),
 }
 
-/// For text that `py_int(text, 10)` rejected: `Some(str(int(text)))` when the text is
-/// still a well-formed Python decimal int literal (it overflowed i128), else None. Zeroing
-/// every ASCII digit keeps the grammar (whitespace, sign, `_` placement) and cannot
-/// overflow, so `py_int` on the zeroed text decides well-formedness.
-fn overflowing_int_text(text: &str) -> Option<String> {
+/// CPython's default `sys.int_info.default_max_str_digits`: `int(str)` raises ValueError
+/// for a decimal string with more digits than this.
+const PY_INT_MAX_STR_DIGITS: usize = 4300;
+
+/// Whether `text` is a well-formed Python decimal int literal, regardless of magnitude.
+/// Zeroing every ASCII digit keeps the grammar (whitespace, sign, `_` placement) and
+/// cannot overflow, so `py_int` on the zeroed text decides well-formedness.
+fn is_well_formed_int(text: &str) -> bool {
     let zeroed: String = text
         .chars()
         .map(|c| if c.is_ascii_digit() { '0' } else { c })
         .collect();
-    py_int(&zeroed, 10)?;
+    py_int(&zeroed, 10).is_some()
+}
+
+/// For text that `py_int(text, 10)` rejected: `Some(str(int(text)))` when the text is
+/// still a well-formed Python decimal int literal (it overflowed i128), else None.
+fn overflowing_int_text(text: &str) -> Option<String> {
+    if !is_well_formed_int(text) {
+        return None;
+    }
     let digits: String = text.chars().filter(char::is_ascii_digit).collect();
     let digits = digits.trim_start_matches('0');
     if digits.is_empty() {

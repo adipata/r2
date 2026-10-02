@@ -7849,7 +7849,8 @@ merges).**
     `custom mechanism parameter <name!r> must be …`, §4.6.3);
   - numeric text read through `text::py_int` (template-editor ULONG values, `param_int`,
     `login --slot` — a non-ASCII-digit slot is Param `invalid slot …` where c2 selected that
-    slot; an over-i128 slot keeps c2's Provider `no token with slot <n> …`)
+    slot; an over-i128 slot keeps c2's Provider `no token with slot <n> …`, and one of more
+    than 4300 digits keeps c2's Param `invalid slot …`, CPython's `int(str)` digit limit)
     and an explicit `!!int`/`!!float` YAML scalar (`yaml::parse`, which otherwise follows
     Python's `int()`/`float()`: surrounding whitespace, sign, base prefix) accept ASCII
     digits only (CPython's `int()` also accepts other Unicode decimal digits); `select`
