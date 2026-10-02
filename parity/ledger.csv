@@ -44,7 +44,7 @@ tests/integration/test_console_crypto.py::test_ops_key_filter_restricts_to_the_k
 tests/integration/test_console_keys.py::test_console_keys_end_to_end,1,R8,ported,r2-cli::e2e_console_keys softhsm::test_console_keys_end_to_end_softhsm ; r2-cli::e2e_console_keys softhsm::console_keys_end_to_end_without_signing_softhsm ; r2-cli::e2e_console_keys memory_console_keys_end_to_end,"softhsm; drives the real checklist editor ('ok' answers, R10): port once R10 merges or script an accept-all editor until then | R8: the full session (CSRs on token) is #[ignore = ""needs R5b (merge checklist)""] until R5b's C_Sign merges; the session without CSRs runs now; template-editor answers are probed at run time (identity editor vs R10)"
 tests/integration/test_console_keys.py::test_export_refusal_and_p12_self_signed,1,R8,ported,r2-cli::e2e_console_keys softhsm::test_export_refusal_and_p12_self_signed_softhsm,"softhsm; drives the real checklist editor ('ok' answers, R10): port once R10 merges or script an accept-all editor until then | R8: template-editor answers probed at run time (identity editor vs R10)"
 tests/integration/test_console_keys.py::test_generate_honors_template_editor_cka_id,1,R10,todo,,softhsm; editor `add CKA_ID=...` + identity-row note through the real checklist editor (R10); provider identity resolution is R5a
-tests/integration/test_console_keys.py::test_key_template_dump_and_reseed,1,R14,todo,,softhsm; SoftHSM dump -> reseed round trip
+tests/integration/test_console_keys.py::test_key_template_dump_and_reseed,1,R14,ported,r2-console tests::key_template_softhsm::test_key_template_dump_and_reseed_softhsm ; r2-console tests::key_template_softhsm::r2_dump_of_a_c2_style_import_matches_c2_and_c2_dump_seeds_r2_softhsm,"softhsm; SoftHSM dump -> reseed round trip | R14: in-crate Pkcs11Provider session over run_line with an accept-all SpyEditor (c2 piped ""ok""); plus byte-identical dump vs a c2 dump of the same imported object and c2-dump seeding (§11 D18 -1)"
 tests/integration/test_copy.py::TestExtractableAesCopies::test_mem_to_softhsm,1,R10,todo,,softhsm
 tests/integration/test_copy.py::TestExtractableAesCopies::test_softhsm_to_mem,1,R10,todo,,softhsm
 tests/integration/test_copy.py::TestExtractableAesCopies::test_softhsm_to_softhsm,1,R10,todo,,softhsm
@@ -152,8 +152,8 @@ tests/unit/console/test_copy_cmd.py::test_copy_bad_id_hex_raises_param_error,1,R
 tests/unit/console/test_copy_cmd.py::test_copy_unknown_source_key_and_dest_provider,1,R10,todo,,
 tests/unit/console/test_copy_cmd.py::test_complete_offers_refs_providers_and_options,1,R10,todo,,asserts the --template option (R14 feature) in copy's completion
 tests/unit/console/test_copy_cmd.py::test_complete_source_ref_offers_key_refs_and_selectors,1,R10,todo,,
-tests/unit/console/test_copy_cmd.py::test_copy_template_seeds_destination_editor,1,R14,todo,,--template / key template / templatefile -> R14
-tests/unit/console/test_copy_cmd.py::test_copy_template_memory_destination_raises,1,R14,todo,,--template / key template / templatefile -> R14
+tests/unit/console/test_copy_cmd.py::test_copy_template_seeds_destination_editor,1,R14,ported,r2-console tests::key_template::test_copy_template_seeds_destination_editor,"--template / key template / templatefile -> R14 | R14: #[ignore = ""needs R10 (merge checklist)""] (copy command is R10's)"
+tests/unit/console/test_copy_cmd.py::test_copy_template_memory_destination_raises,1,R14,ported,r2-console tests::key_template::test_copy_template_memory_destination_raises,"--template / key template / templatefile -> R14 | R14: #[ignore = ""needs R10 (merge checklist)""] (copy command is R10's)"
 tests/unit/console/test_discovery.py::test_discovery_finds_the_l7_commands,1,R7,ported,r2-console tests::discovery::test_discovery_finds_the_l7_commands ; r2-console tests::discovery::duplicate_command_names_are_a_config_error ; r2-console tests::build_discovery::build_rs_lists_every_command_module,
 tests/unit/console/test_discovery.py::test_every_module_exports_a_commands_list,1,R7,n/a:pkgutil-discovery,,the build.rs-generated aggregator does not compile if a commands/*.rs lacks its export
 tests/unit/console/test_discovery.py::test_command_metadata_is_complete,1,R7,ported,r2-console tests::discovery::test_command_metadata_is_complete,the frozenset type check on flags is Python-only
@@ -289,13 +289,13 @@ tests/unit/console/test_keys_cmd.py::test_key_edit_sibling_duplicate_becomes_fai
 tests/unit/console/test_keys_cmd.py::test_key_edit_logged_out_hsm_raises,1,R8,ported,r2-console tests::keys_cmd::test_key_edit_logged_out_hsm_raises,
 tests/unit/console/test_keys_cmd.py::test_key_edit_duplicate_target_propagates,1,R8,ported,r2-console tests::keys_cmd::test_key_edit_duplicate_target_propagates,
 tests/unit/console/test_keys_cmd.py::test_key_edit_completion,1,R8,ported,r2-console tests::keys_cmd::test_key_edit_completion,"asserts `key` subcommands {info, edit, template}: `template` is R14's subcommand"
-tests/unit/console/test_keys_cmd.py::test_key_template_rejects_memory_provider,1,R14,todo,,--template / key template / templatefile -> R14
-tests/unit/console/test_keys_cmd.py::test_key_template_dumps_class_keyed_file,1,R14,todo,,--template / key template / templatefile -> R14
-tests/unit/console/test_keys_cmd.py::test_key_template_warns_when_material_dumped,1,R14,todo,,--template / key template / templatefile -> R14
-tests/unit/console/test_keys_cmd.py::test_generate_template_seeds_editor_from_file,1,R14,todo,,--template / key template / templatefile -> R14
-tests/unit/console/test_keys_cmd.py::test_generate_keypair_template_section_per_editor,1,R14,todo,,--template / key template / templatefile -> R14
-tests/unit/console/test_keys_cmd.py::test_generate_template_on_memory_target_raises,1,R14,todo,,--template / key template / templatefile -> R14
-tests/unit/console/test_keys_cmd.py::test_load_template_seeds_editor_from_file,1,R14,todo,,--template / key template / templatefile -> R14
+tests/unit/console/test_keys_cmd.py::test_key_template_rejects_memory_provider,1,R14,ported,r2-console tests::key_template::test_key_template_rejects_memory_provider,--template / key template / templatefile -> R14
+tests/unit/console/test_keys_cmd.py::test_key_template_dumps_class_keyed_file,1,R14,ported,r2-console tests::key_template::test_key_template_dumps_class_keyed_file,--template / key template / templatefile -> R14
+tests/unit/console/test_keys_cmd.py::test_key_template_warns_when_material_dumped,1,R14,ported,r2-console tests::key_template::test_key_template_warns_when_material_dumped,--template / key template / templatefile -> R14
+tests/unit/console/test_keys_cmd.py::test_generate_template_seeds_editor_from_file,1,R14,ported,r2-console tests::key_template::test_generate_template_seeds_editor_from_file,--template / key template / templatefile -> R14
+tests/unit/console/test_keys_cmd.py::test_generate_keypair_template_section_per_editor,1,R14,ported,r2-console tests::key_template::test_generate_keypair_template_section_per_editor,--template / key template / templatefile -> R14
+tests/unit/console/test_keys_cmd.py::test_generate_template_on_memory_target_raises,1,R14,ported,r2-console tests::key_template::test_generate_template_on_memory_target_raises,--template / key template / templatefile -> R14
+tests/unit/console/test_keys_cmd.py::test_load_template_seeds_editor_from_file,1,R14,ported,r2-console tests::key_template::test_load_template_seeds_editor_from_file,--template / key template / templatefile -> R14
 tests/unit/console/test_keys_cmd_objects.py::test_keys_lists_every_object_kind,1,R8,ported,r2-console tests::keys_cmd_objects::test_keys_lists_every_object_kind,
 tests/unit/console/test_keys_cmd_objects.py::test_key_info_data_object,1,R8,ported,r2-console tests::keys_cmd_objects::test_key_info_data_object,
 tests/unit/console/test_keys_cmd_objects.py::test_generate_generic_inline_and_default_size,1,R8,ported,r2-console tests::keys_cmd_objects::test_generate_generic_inline_and_default_size,
@@ -817,8 +817,8 @@ tests/unit/services/test_keyload.py::test_import_explicit_key_id_is_used_verbati
 tests/unit/services/test_keyload.py::test_import_records_template_in_provider_calls,1,R8,ported,r2-services::keyload test_import_records_template_in_provider_calls,
 tests/unit/services/test_keyload.py::test_pkcs8_der_material_parses_and_imports,1,R8,ported,r2-services::keyload test_pkcs8_der_material_parses_and_imports,
 tests/unit/services/test_keyload.py::test_make_templates_helper_yields_default_template,1,R8,ported,r2-services::keyload test_make_templates_helper_yields_default_template,
-tests/unit/services/test_keyload.py::test_import_seed_template_section_replaces_defaults,1,R14,todo,,--template seeding (seed_templates) needs templatefile::build_seed (R14); R14 ports it into its own test file
-tests/unit/services/test_keyload.py::test_import_pkcs12_picks_section_per_material,1,R14,todo,,--template seeding (seed_templates) needs templatefile::build_seed (R14); R14 ports it into its own test file
+tests/unit/services/test_keyload.py::test_import_seed_template_section_replaces_defaults,1,R14,ported,r2-services::templatefile test_import_seed_template_section_replaces_defaults,--template seeding (seed_templates) needs templatefile::build_seed (R14); R14 ports it into its own test file
+tests/unit/services/test_keyload.py::test_import_pkcs12_picks_section_per_material,1,R14,ported,r2-services::templatefile test_import_pkcs12_picks_section_per_material,--template seeding (seed_templates) needs templatefile::build_seed (R14); R14 ports it into its own test file
 tests/unit/services/test_objects_services.py::test_generic_and_data_hints_are_verbatim,1,R8,ported,r2-services::keyload test_generic_and_data_hints_are_verbatim,
 tests/unit/services/test_objects_services.py::test_editor_titles_and_data_import,1,R8,ported,r2-services::keyload test_editor_titles_and_data_import,
 tests/unit/services/test_objects_services.py::test_export_bytes_data_object_is_raw_only,1,R8,ported,r2-services::keyexport test_export_bytes_data_object_is_raw_only,
@@ -828,21 +828,21 @@ tests/unit/services/test_objects_services.py::test_copy_seeds_data_extras_into_t
 tests/unit/services/test_objects_services.py::test_copy_certificate_round_trip_is_plain_material,1,R10,todo,,transfer part
 tests/unit/services/test_objects_services.py::test_copy_refuses_unmodelled_key_types,1,R10,todo,,transfer part
 tests/unit/services/test_objects_services.py::test_wrapload_generic_hint_and_data_refusal,1,R15,todo,,wrapload part
-tests/unit/services/test_templatefile.py::test_dump_load_round_trip,1,R14,todo,,
-tests/unit/services/test_templatefile.py::test_dump_writes_per_kind_yaml_scalars,1,R14,todo,,
-tests/unit/services/test_templatefile.py::test_dump_write_failure_raises_dataioerror,1,R14,todo,,
-tests/unit/services/test_templatefile.py::test_load_missing_file_raises_dataioerror,1,R14,todo,,
-tests/unit/services/test_templatefile.py::test_load_malformed_yaml_raises_paramerror,1,R14,todo,,
-tests/unit/services/test_templatefile.py::test_load_without_sections_raises_paramerror,3,R14,todo,,
-tests/unit/services/test_templatefile.py::test_load_unknown_section_raises_paramerror,1,R14,todo,,
-tests/unit/services/test_templatefile.py::test_load_non_mapping_section_raises_paramerror,1,R14,todo,,
-tests/unit/services/test_templatefile.py::test_load_unknown_attribute_hints_custom_attributes,1,R14,todo,,
-tests/unit/services/test_templatefile.py::test_load_custom_attribute_kind_comes_from_config,1,R14,todo,,
-tests/unit/services/test_templatefile.py::test_load_value_kind_mismatch_raises_paramerror,6,R14,todo,,
-tests/unit/services/test_templatefile.py::test_build_seed_without_file_returns_defaults,1,R14,todo,,
-tests/unit/services/test_templatefile.py::test_build_seed_missing_section_falls_back_to_defaults,1,R14,todo,,
-tests/unit/services/test_templatefile.py::test_build_seed_uses_matching_section,1,R14,todo,,
-tests/unit/services/test_templatefile.py::test_build_seed_returns_fresh_attr_objects,1,R14,todo,,
+tests/unit/services/test_templatefile.py::test_dump_load_round_trip,1,R14,ported,r2-services::templatefile test_dump_load_round_trip,
+tests/unit/services/test_templatefile.py::test_dump_writes_per_kind_yaml_scalars,1,R14,ported,r2-services::templatefile test_dump_writes_per_kind_yaml_scalars,
+tests/unit/services/test_templatefile.py::test_dump_write_failure_raises_dataioerror,1,R14,ported,r2-services::templatefile test_dump_write_failure_raises_dataioerror,
+tests/unit/services/test_templatefile.py::test_load_missing_file_raises_dataioerror,1,R14,ported,r2-services::templatefile test_load_missing_file_raises_dataioerror,
+tests/unit/services/test_templatefile.py::test_load_malformed_yaml_raises_paramerror,1,R14,ported,r2-services::templatefile test_load_malformed_yaml_raises_paramerror,
+tests/unit/services/test_templatefile.py::test_load_without_sections_raises_paramerror,3,R14,ported,r2-services::templatefile test_load_without_sections_raises_paramerror,
+tests/unit/services/test_templatefile.py::test_load_unknown_section_raises_paramerror,1,R14,ported,r2-services::templatefile test_load_unknown_section_raises_paramerror,
+tests/unit/services/test_templatefile.py::test_load_non_mapping_section_raises_paramerror,1,R14,ported,r2-services::templatefile test_load_non_mapping_section_raises_paramerror,
+tests/unit/services/test_templatefile.py::test_load_unknown_attribute_hints_custom_attributes,1,R14,ported,r2-services::templatefile test_load_unknown_attribute_hints_custom_attributes,
+tests/unit/services/test_templatefile.py::test_load_custom_attribute_kind_comes_from_config,1,R14,ported,r2-services::templatefile test_load_custom_attribute_kind_comes_from_config,
+tests/unit/services/test_templatefile.py::test_load_value_kind_mismatch_raises_paramerror,6,R14,ported,r2-services::templatefile test_load_value_kind_mismatch_raises_paramerror,
+tests/unit/services/test_templatefile.py::test_build_seed_without_file_returns_defaults,1,R14,ported,r2-services::templatefile test_build_seed_without_file_returns_defaults,
+tests/unit/services/test_templatefile.py::test_build_seed_missing_section_falls_back_to_defaults,1,R14,ported,r2-services::templatefile test_build_seed_missing_section_falls_back_to_defaults,
+tests/unit/services/test_templatefile.py::test_build_seed_uses_matching_section,1,R14,ported,r2-services::templatefile test_build_seed_uses_matching_section,
+tests/unit/services/test_templatefile.py::test_build_seed_returns_fresh_attr_objects,1,R14,ported,r2-services::templatefile test_build_seed_returns_fresh_attr_objects,
 tests/unit/services/test_wrapload.py::test_table_shape_is_the_spec_contract,1,R15,todo,,
 tests/unit/services/test_wrapload.py::test_kek_requirements_split_by_algorithm_and_direction,1,R15,todo,,
 tests/unit/services/test_wrapload.py::test_param_shapes_match_the_builtin_rows,1,R15,todo,,
@@ -868,7 +868,7 @@ tests/unit/services/test_wrapload.py::test_load_wrapped_round_trips_through_the_
 tests/unit/services/test_wrapload.py::test_load_wrapped_opens_the_editor_for_pkcs11_seeded_from_the_result,1,R15,todo,,
 tests/unit/services/test_wrapload.py::test_load_wrapped_skips_the_editor_for_memory_targets,1,R15,todo,,
 tests/unit/services/test_wrapload.py::test_load_wrapped_threads_mechanism_params_and_identity,1,R15,todo,,
-tests/unit/services/test_wrapload.py::test_load_wrapped_seed_templates_reach_the_editor,1,R14,todo,,--template seeding (seed_templates) needs templatefile::build_seed (R14); R14 ports it into its own test file
+tests/unit/services/test_wrapload.py::test_load_wrapped_seed_templates_reach_the_editor,1,R14,ported,r2-services::templatefile test_load_wrapped_seed_templates_reach_the_editor,"--template seeding (seed_templates) needs templatefile::build_seed (R14); R14 ports it into its own test file | R14: #[ignore = ""needs R15 (merge checklist)""] (load_wrapped is R15's)"
 tests/unit/services/test_wrapload.py::test_load_wrapped_rejects_a_result_class_the_entry_forbids,1,R15,todo,,
 tests/unit/services/test_wrapload.py::test_wrap_candidates_need_the_public_half_for_rsa,1,R15,todo,,
 tests/unit/services/test_wrapload.py::test_wrap_candidates_accept_a_certificate_as_the_public_key,1,R15,todo,,
@@ -1255,8 +1255,8 @@ tests/unit/test_transfer.py::TestDecisionMatrix::test_non_exportable_memory_key_
 tests/unit/test_transfer.py::TestDecisionMatrix::test_pkcs11_to_memory_uses_wrap_route_without_editor,1,R10,todo,,
 tests/unit/test_transfer.py::TestDecisionMatrix::test_public_key_copies_plain_between_pkcs11_providers,1,R10,todo,,
 tests/unit/test_transfer.py::TestDecisionMatrix::test_certificate_copies_plain,1,R10,todo,,
-tests/unit/test_transfer.py::TestTemplateFileSeeding::test_wrap_route_editor_seeded_from_matching_section,1,R14,todo,,--template seeding (seed_templates) needs templatefile::build_seed (R14); R14 ports it into its own test file
-tests/unit/test_transfer.py::TestTemplateFileSeeding::test_wrap_route_missing_section_falls_back_to_defaults,1,R14,todo,,--template seeding (seed_templates) needs templatefile::build_seed (R14); R14 ports it into its own test file
+tests/unit/test_transfer.py::TestTemplateFileSeeding::test_wrap_route_editor_seeded_from_matching_section,1,R14,ported,r2-services::templatefile test_wrap_route_editor_seeded_from_matching_section,"--template seeding (seed_templates) needs templatefile::build_seed (R14); R14 ports it into its own test file | R14: #[ignore = ""needs R10 (merge checklist)""] (copy_key is R10's)"
+tests/unit/test_transfer.py::TestTemplateFileSeeding::test_wrap_route_missing_section_falls_back_to_defaults,1,R14,ported,r2-services::templatefile test_wrap_route_missing_section_falls_back_to_defaults,"--template seeding (seed_templates) needs templatefile::build_seed (R14); R14 ports it into its own test file | R14: #[ignore = ""needs R10 (merge checklist)""] (copy_key is R10's)"
 tests/unit/test_x509build.py::test_self_signed_rsa,1,R6,ported,r2-core::x509build self_signed_rsa,
 tests/unit/test_x509build.py::test_self_signed_ec,1,R6,ported,r2-core::x509build self_signed_ec,
 tests/unit/test_x509build.py::test_self_signed_ed25519,1,R6,ported,r2-core::x509build self_signed_ed25519,

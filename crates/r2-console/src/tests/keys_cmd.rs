@@ -1752,12 +1752,11 @@ fn test_key_edit_completion() {
 fn key_template_is_delegated_to_the_r14_hook() {
     let p = make_pair(&[]);
     p.mem.import_key(&aes_material(), "k", None, None).unwrap();
-    // before R14 merges the hook is its R0 stub; afterwards memory keys are refused —
-    // either way the `key` command routes the subcommand there and renders nothing itself
+    // memory keys are refused by R14's hook — the `key` command routes the subcommand
+    // there and renders nothing itself
     let err = run_line(&p.ctx, "key template mem:k /dev/null").unwrap_err();
-    assert!(
-        err.message == "not implemented (R14)"
-            || err.message == "key template works only with PKCS#11 providers",
+    assert_eq!(
+        err.message, "key template works only with PKCS#11 providers",
         "{}",
         err.message
     );

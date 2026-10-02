@@ -7805,6 +7805,14 @@ merges).**
     `os.access(X_OK)` by any execute bit (r2 has no safe access to the real uid/gid or
     noexec mounts), so a util executable only by another user, or on a noexec mount, is
     picked where c2 kept searching `PATH`, and then fails to start (above).
+  - (s) a §5.16 template file (`--template`, R14) that is not valid UTF-8 (`Path.read_text`
+    raised `UnicodeDecodeError`), or whose YAML construction raised a plain `ValueError`
+    (an impossible timestamp such as `2001-02-30`, a malformed explicit
+    `!!int`/`!!float`/`!!bool` scalar): c2's `load_template_file` caught only `OSError` and
+    `yaml.YAMLError`, so the command crashed into the unexpected-error path. r2 raises
+    DataIo `cannot read <path>: <CPython UnicodeDecodeError text>` resp. Param (`template`)
+    `invalid YAML in template file <path>: <Python's ValueError text>` (hint `template files
+    are class-keyed YAML (spec §5.16)`), before any prompt.
 - *Reason*: every expected failure must be a `ConsoleError`; OpenSSL would reject the CN
   with a different text anyway.
 - *Verified by*: R8 certops test (a), R6 keyparse/x509info/formats fixtures (b, h, i, j:
@@ -7835,7 +7843,8 @@ merges).**
   `derive_negative_out_len_is_the_tokens_value_invalid`, `derive_peer_rules`; SoftHSM
   `softhsm_oaep_software_fallback_reports_its_own_openssl_reason`), R11 wizard tests (r:
   `util_spawn_failure_is_an_error`, `append_io_errors_are_config_errors`,
-  `decline_works_on_a_provider_without_token_init_and_accept_refuses_it`).
+  `decline_works_on_a_provider_without_token_init_and_accept_refuses_it`), R14 templatefile
+  test (s: `non_utf8_file_is_an_unreadable_file`).
 
 **D13 — Ctrl-C while a command runs is honored at step boundaries.**
 - *Description*: c2's `KeyboardInterrupt` surfaced at the next Python bytecode after the
