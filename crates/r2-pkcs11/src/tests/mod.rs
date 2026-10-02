@@ -36,7 +36,13 @@ pub(crate) fn provider_with(
     custom_attributes: IndexMap<String, CustomAttributeDef>,
 ) -> Pkcs11Provider {
     let shared: Rc<dyn crate::backend::Backend> = backend.clone();
-    Pkcs11Provider::with_backend("hsm", config("hsm"), custom_mechanisms, custom_attributes, shared)
+    Pkcs11Provider::with_backend(
+        "hsm",
+        config("hsm"),
+        custom_mechanisms,
+        custom_attributes,
+        shared,
+    )
 }
 
 pub(crate) fn provider_over(backend: &Rc<FakeBackend>) -> Pkcs11Provider {
@@ -88,7 +94,10 @@ pub(crate) fn symbol(text: &str) -> AttrValue {
 
 /// SENSITIVE=false / EXTRACTABLE=true template (c2 `exportable()`).
 pub(crate) fn exportable() -> KeyTemplate {
-    tpl(vec![boolean("CKA_SENSITIVE", false), boolean("CKA_EXTRACTABLE", true)])
+    tpl(vec![
+        boolean("CKA_SENSITIVE", false),
+        boolean("CKA_EXTRACTABLE", true),
+    ])
 }
 
 /// The stored attribute map of the (first) object labelled `label`.

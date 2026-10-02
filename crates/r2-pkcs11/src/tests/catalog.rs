@@ -7,18 +7,43 @@ fn table_sizes_equal_pykcs11() {
     // forward: 10 CKO + 58 CKK + 3 CKC + 425 CKM names (aliases included)
     assert_eq!(SYMBOLS.len(), 496);
     let prefixed = |p: &str| SYMBOLS.iter().filter(|(n, _)| n.starts_with(p)).count();
-    assert_eq!((prefixed("CKO_"), prefixed("CKK_"), prefixed("CKC_"), prefixed("CKM_")), (10, 58, 3, 425));
     assert_eq!(
-        (CKO_NAMES.len(), CKK_NAMES.len(), CKC_NAMES.len(), CKM_NAMES.len(), CKR_NAMES.len()),
+        (
+            prefixed("CKO_"),
+            prefixed("CKK_"),
+            prefixed("CKC_"),
+            prefixed("CKM_")
+        ),
+        (10, 58, 3, 425)
+    );
+    assert_eq!(
+        (
+            CKO_NAMES.len(),
+            CKK_NAMES.len(),
+            CKC_NAMES.len(),
+            CKM_NAMES.len(),
+            CKR_NAMES.len()
+        ),
         (10, 56, 3, 416, 93)
     );
     // binary-search invariants
     assert!(SYMBOLS.windows(2).all(|w| w[0].0 < w[1].0));
-    for table in [&CKO_NAMES[..], &CKK_NAMES[..], &CKC_NAMES[..], &CKM_NAMES[..], &CKR_NAMES[..]] {
+    for table in [
+        &CKO_NAMES[..],
+        &CKK_NAMES[..],
+        &CKC_NAMES[..],
+        &CKM_NAMES[..],
+        &CKR_NAMES[..],
+    ] {
         assert!(table.windows(2).all(|w| w[0].0 < w[1].0));
     }
     // every reverse entry round-trips through the forward table
-    for (code, name) in CKO_NAMES.iter().chain(&CKK_NAMES).chain(&CKC_NAMES).chain(&CKM_NAMES) {
+    for (code, name) in CKO_NAMES
+        .iter()
+        .chain(&CKK_NAMES)
+        .chain(&CKC_NAMES)
+        .chain(&CKM_NAMES)
+    {
         assert_eq!(symbol_value(name), Some(*code), "{name}");
     }
 }

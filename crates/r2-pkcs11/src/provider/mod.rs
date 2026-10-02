@@ -69,7 +69,10 @@ fn token_from_raw(info: RawTokenInfo) -> TokenInfo {
 }
 
 fn is_recoverable(err: &BackendError) -> bool {
-    matches!(ckr::code_of(err), Some(rv::CKR_SESSION_HANDLE_INVALID | rv::CKR_DEVICE_REMOVED))
+    matches!(
+        ckr::code_of(err),
+        Some(rv::CKR_SESSION_HANDLE_INVALID | rv::CKR_DEVICE_REMOVED)
+    )
 }
 
 fn session_lost() -> ConsoleError {
@@ -118,7 +121,10 @@ impl Pkcs11Provider {
         user_pin: &SecretString,
     ) -> Result<()> {
         if label.len() > 32 {
-            return Err(ConsoleError::param("token label must be at most 32 bytes", "label"));
+            return Err(ConsoleError::param(
+                "token label must be at most 32 bytes",
+                "label",
+            ));
         }
         r2_provider::Provider::initialize(self)?;
         let context = "token initialization";
@@ -191,6 +197,10 @@ impl Pkcs11Provider {
     }
 
     /// The CKM codes the logged-in token listed (unfiltered).
+    #[allow(
+        dead_code,
+        reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
+    )]
     pub(crate) fn mech_codes(&self) -> Vec<u64> {
         self.state.borrow().mech_codes.clone()
     }
@@ -288,7 +298,10 @@ impl Pkcs11Provider {
             Ok(Some((slot, codes))) => {
                 let mut state = self.state.borrow_mut();
                 state.slot = Some(slot);
-                state.token = Some(TokenInfo { slot_id: slot, ..token });
+                state.token = Some(TokenInfo {
+                    slot_id: slot,
+                    ..token
+                });
                 state.mech_codes = codes;
                 drop(state);
                 tracing::info!(target: "r2::pkcs11", "{}: session recovered on slot {}", self.name, slot);
@@ -316,7 +329,9 @@ impl Pkcs11Provider {
         match f() {
             Ok(value) => Ok(value),
             Err(OpError::Console(err)) => Err(err),
-            Err(OpError::Backend(err)) if !is_recoverable(&err) => Err(self.translate(err, context)),
+            Err(OpError::Backend(err)) if !is_recoverable(&err) => {
+                Err(self.translate(err, context))
+            }
             Err(OpError::Backend(_)) => {
                 self.recover_session()?;
                 match f() {
@@ -341,6 +356,10 @@ impl Pkcs11Provider {
     }
 
     /// Canonical name advertised? Else UnsupportedOperation (c2 `_check_advertised`).
+    #[allow(
+        dead_code,
+        reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
+    )]
     pub(crate) fn check_advertised(&self, mechanism: &str) -> Result<()> {
         if r2_provider::Provider::mechanisms(self).contains(mechanism) {
             return Ok(());
@@ -352,15 +371,25 @@ impl Pkcs11Provider {
     }
 
     /// Does the token list the CKM named `name` (PyKCS11 name table)?
+    #[allow(
+        dead_code,
+        reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
+    )]
     pub(crate) fn has_ckm(&self, name: &str) -> bool {
         crate::catalog::symbol_value(name).is_some_and(|code| self.mech_codes().contains(&code))
     }
 
     /// The code of CKM `name`, or UnsupportedOperation "token lacks {name} for {context}".
+    #[allow(
+        dead_code,
+        reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
+    )]
     pub(crate) fn require_ckm(&self, name: &str, context: &str) -> Result<u64> {
         match crate::catalog::symbol_value(name) {
             Some(code) if self.mech_codes().contains(&code) => Ok(code),
-            _ => Err(ConsoleError::unsupported(format!("token lacks {name} for {context}"))),
+            _ => Err(ConsoleError::unsupported(format!(
+                "token lacks {name} for {context}"
+            ))),
         }
     }
 }
@@ -391,7 +420,9 @@ impl r2_provider::Provider for Pkcs11Provider {
             Ok(()) => {}
             Err(err) => {
                 let detail = match err {
-                    BackendError::LibraryUnavailable(detail) | BackendError::Binding(detail) => detail,
+                    BackendError::LibraryUnavailable(detail) | BackendError::Binding(detail) => {
+                        detail
+                    }
                     BackendError::Ckr(c) => ckr::pykcs11_error_text(c.code),
                 };
                 return Err(ConsoleError::provider_unavailable(format!(
@@ -431,9 +462,15 @@ impl r2_provider::Provider for Pkcs11Provider {
         // never loads the library (§6: status must work for broken configs)
         let state = self.state.borrow();
         if state.logged_in {
-            ProviderStatus { auth: AuthState::LoggedIn, token: state.token.clone() }
+            ProviderStatus {
+                auth: AuthState::LoggedIn,
+                token: state.token.clone(),
+            }
         } else {
-            ProviderStatus { auth: AuthState::LoggedOut, token: None }
+            ProviderStatus {
+                auth: AuthState::LoggedOut,
+                token: None,
+            }
         }
     }
 
@@ -451,7 +488,9 @@ impl r2_provider::Provider for Pkcs11Provider {
 
     fn login(&self, token: &TokenInfo, pin: &SecretString, keep_pin: bool) -> Result<()> {
         if self.state.borrow().logged_in {
-            return Err(ConsoleError::already_logged_in("already logged in").with_hint("logout first"));
+            return Err(
+                ConsoleError::already_logged_in("already logged in").with_hint("logout first")
+            );
         }
         self.initialize()?;
         let current_slot = self.state.borrow().slot;
@@ -513,7 +552,11 @@ impl r2_provider::Provider for Pkcs11Provider {
         {
             let ignorable = matches!(
                 ckr::code_of(&err),
-                Some(rv::CKR_USER_NOT_LOGGED_IN | rv::CKR_SESSION_HANDLE_INVALID | rv::CKR_DEVICE_REMOVED)
+                Some(
+                    rv::CKR_USER_NOT_LOGGED_IN
+                        | rv::CKR_SESSION_HANDLE_INVALID
+                        | rv::CKR_DEVICE_REMOVED
+                )
             );
             if !ignorable {
                 self.state.borrow_mut().logged_in = false;

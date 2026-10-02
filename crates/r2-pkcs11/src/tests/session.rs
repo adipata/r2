@@ -29,8 +29,14 @@ fn load_failure_is_provider_unavailable() {
     backend.set_load_error("Load (/fake/libfake.so)");
     let err = provider.initialize().unwrap_err();
     assert_eq!(err.kind, ErrorKind::ProviderUnavailable);
-    assert_eq!(err.message, "cannot load PKCS#11 library /fake/libfake.so: Load (/fake/libfake.so)");
-    assert_eq!(err.hint.as_deref(), Some("check providers.pkcs11[].library in the configuration"));
+    assert_eq!(
+        err.message,
+        "cannot load PKCS#11 library /fake/libfake.so: Load (/fake/libfake.so)"
+    );
+    assert_eq!(
+        err.hint.as_deref(),
+        Some("check providers.pkcs11[].library in the configuration")
+    );
 }
 
 #[test]
@@ -42,7 +48,8 @@ fn wrong_library_path() {
     let err = provider.initialize().unwrap_err();
     assert_eq!(err.kind, ErrorKind::ProviderUnavailable);
     assert!(
-        err.message.starts_with("cannot load PKCS#11 library /nonexistent/lib.so: "),
+        err.message
+            .starts_with("cannot load PKCS#11 library /nonexistent/lib.so: "),
         "{}",
         err.message
     );
@@ -65,11 +72,16 @@ fn instance_env_applied_before_load() {
     let _guard = r2_testkit::set_env("R2_FAKE_ENV", None);
     let backend = Rc::new(FakeBackend::new());
     let mut cfg = config("hsm");
-    cfg.env.insert("R2_FAKE_ENV".into(), "set-by-provider".into());
+    cfg.env
+        .insert("R2_FAKE_ENV".into(), "set-by-provider".into());
     let shared: Rc<dyn crate::backend::Backend> = backend.clone();
-    let provider = Pkcs11Provider::with_backend("hsm", cfg, Default::default(), Default::default(), shared);
+    let provider =
+        Pkcs11Provider::with_backend("hsm", cfg, Default::default(), Default::default(), shared);
     provider.initialize().unwrap();
-    assert_eq!(std::env::var("R2_FAKE_ENV").as_deref(), Ok("set-by-provider"));
+    assert_eq!(
+        std::env::var("R2_FAKE_ENV").as_deref(),
+        Ok("set-by-provider")
+    );
     assert_eq!(backend.calls(), ["initialize"]);
 }
 
@@ -97,10 +109,21 @@ fn status_and_token_enumeration() {
 fn token_strings_strip_trailing_spaces_and_nuls() {
     let mut info = FakeBackend::token("pad\0\0  \0", "SER  ");
     info.manufacturer = "maker \0".into();
-    let backend = Rc::new(FakeBackend::with_slots(vec![(3, info, DEFAULT_MECHANISMS.to_vec())]));
+    let backend = Rc::new(FakeBackend::with_slots(vec![(
+        3,
+        info,
+        DEFAULT_MECHANISMS.to_vec(),
+    )]));
     let provider = provider_over(&backend);
     let token = token_at(&provider, 3);
-    assert_eq!((token.label.as_str(), token.serial.as_str(), token.manufacturer.as_str()), ("pad", "SER", "maker"));
+    assert_eq!(
+        (
+            token.label.as_str(),
+            token.serial.as_str(),
+            token.manufacturer.as_str()
+        ),
+        ("pad", "SER", "maker")
+    );
 }
 
 #[test]
@@ -110,7 +133,10 @@ fn login_logout_cycle() {
     provider.login(&token, &pin(USER_PIN), false).unwrap();
     let status = provider.status();
     assert_eq!(status.auth, AuthState::LoggedIn);
-    assert_eq!(status.token.as_ref().map(|t| t.label.as_str()), Some("fake-token"));
+    assert_eq!(
+        status.token.as_ref().map(|t| t.label.as_str()),
+        Some("fake-token")
+    );
     assert!(!provider.mechanisms().is_empty()); // §4.5: non-empty post-login
     provider.logout().unwrap();
     assert_eq!(provider.status().auth, AuthState::LoggedOut);
@@ -126,7 +152,10 @@ fn wrong_pin() {
     let token = token_at(&provider, 0);
     let err = provider.login(&token, &pin("9999"), false).unwrap_err();
     assert_eq!(err.ckr().map(|(_, n)| n), Some("CKR_PIN_INCORRECT"));
-    assert_eq!(err.message, "wrong PIN for token 'fake-token' (CKR_PIN_INCORRECT)");
+    assert_eq!(
+        err.message,
+        "wrong PIN for token 'fake-token' (CKR_PIN_INCORRECT)"
+    );
     assert_eq!(err.hint.as_deref(), Some("re-enter the PIN"));
     assert_eq!(provider.status().auth, AuthState::LoggedOut);
 }
@@ -177,18 +206,33 @@ fn logout_keeps_session_reusable() {
 #[test]
 fn single_token_rule_closes_previous_session() {
     let backend = Rc::new(FakeBackend::with_slots(vec![
-        (5, FakeBackend::token("TOK-A", "A"), DEFAULT_MECHANISMS.to_vec()),
-        (6, FakeBackend::token("TOK-B", "B"), DEFAULT_MECHANISMS.to_vec()),
+        (
+            5,
+            FakeBackend::token("TOK-A", "A"),
+            DEFAULT_MECHANISMS.to_vec(),
+        ),
+        (
+            6,
+            FakeBackend::token("TOK-B", "B"),
+            DEFAULT_MECHANISMS.to_vec(),
+        ),
     ]));
     let provider = provider_over(&backend);
-    provider.login(&token_at(&provider, 5), &pin(USER_PIN), false).unwrap();
+    provider
+        .login(&token_at(&provider, 5), &pin(USER_PIN), false)
+        .unwrap();
     assert_eq!(backend.session_slot(), Some(5));
     provider.logout().unwrap();
-    provider.login(&token_at(&provider, 6), &pin(USER_PIN), false).unwrap();
+    provider
+        .login(&token_at(&provider, 6), &pin(USER_PIN), false)
+        .unwrap();
     assert_eq!(backend.session_slot(), Some(6)); // previous slot's session closed (§5.2)
     assert!(backend.calls().contains(&"close_session"));
     assert_eq!(backend.sessions_opened(), 2);
-    assert_eq!(provider.status().token.map(|t| t.label), Some("TOK-B".to_string()));
+    assert_eq!(
+        provider.status().token.map(|t| t.label),
+        Some("TOK-B".to_string())
+    );
 }
 
 // ---- TestRecovery ----
@@ -196,7 +240,9 @@ fn single_token_rule_closes_previous_session() {
 #[test]
 fn keep_pin_recovers_and_retries_once() {
     let (backend, provider) = new_provider();
-    provider.login(&token_at(&provider, 0), &pin(USER_PIN), true).unwrap();
+    provider
+        .login(&token_at(&provider, 0), &pin(USER_PIN), true)
+        .unwrap();
     provider.import_key(&aes(), "rec-key", None, None).unwrap();
     backend.invalidate_session(); // token dropped the session
     let found = provider.find_key(&KeySelector::label("rec-key")).unwrap(); // transparently recovered
@@ -210,10 +256,15 @@ fn without_keep_pin_drops_to_logged_out() {
     let (backend, provider) = logged_in(); // default: no stored PIN
     provider.import_key(&aes(), "rec-key2", None, None).unwrap();
     backend.invalidate_session();
-    let err = provider.find_key(&KeySelector::label("rec-key2")).unwrap_err();
+    let err = provider
+        .find_key(&KeySelector::label("rec-key2"))
+        .unwrap_err();
     assert_eq!(err.kind, ErrorKind::AuthRequired);
     assert_eq!(err.message, "session lost — login again");
-    assert_eq!(err.hint.as_deref(), Some("run `login hsm` (use --keep-pin for auto-reconnect)"));
+    assert_eq!(
+        err.hint.as_deref(),
+        Some("run `login hsm` (use --keep-pin for auto-reconnect)")
+    );
     assert_eq!(provider.status().auth, AuthState::LoggedOut);
     assert!(provider.mechanisms().is_empty());
 }
@@ -221,10 +272,14 @@ fn without_keep_pin_drops_to_logged_out() {
 #[test]
 fn second_failure_drops_even_with_keep_pin() {
     let (backend, provider) = new_provider();
-    provider.login(&token_at(&provider, 0), &pin(USER_PIN), true).unwrap();
+    provider
+        .login(&token_at(&provider, 0), &pin(USER_PIN), true)
+        .unwrap();
     provider.import_key(&aes(), "rec-key3", None, None).unwrap();
     backend.invalidate_all(); // recovery succeeds, the retry fails
-    let err = provider.find_key(&KeySelector::label("rec-key3")).unwrap_err();
+    let err = provider
+        .find_key(&KeySelector::label("rec-key3"))
+        .unwrap_err();
     assert_eq!(err.kind, ErrorKind::AuthRequired);
     assert_eq!(err.message, "session lost — login again");
     assert_eq!(provider.status().auth, AuthState::LoggedOut);
@@ -233,20 +288,29 @@ fn second_failure_drops_even_with_keep_pin() {
 #[test]
 fn recovery_fails_when_token_gone() {
     let (backend, provider) = new_provider();
-    provider.login(&token_at(&provider, 0), &pin(USER_PIN), true).unwrap();
+    provider
+        .login(&token_at(&provider, 0), &pin(USER_PIN), true)
+        .unwrap();
     provider.import_key(&aes(), "rec-key4", None, None).unwrap();
     backend.invalidate_session();
     backend.remove_slot(0); // token pulled
-    let err = provider.find_key(&KeySelector::label("rec-key4")).unwrap_err();
+    let err = provider
+        .find_key(&KeySelector::label("rec-key4"))
+        .unwrap_err();
     assert_eq!(err.kind, ErrorKind::AuthRequired);
-    assert_eq!(err.message, "token 'fake-token' is no longer present — login again");
+    assert_eq!(
+        err.message,
+        "token 'fake-token' is no longer present — login again"
+    );
     assert_eq!(provider.status().auth, AuthState::LoggedOut);
 }
 
 #[test]
 fn device_removed_is_recoverable_too() {
     let (backend, provider) = new_provider();
-    provider.login(&token_at(&provider, 0), &pin(USER_PIN), true).unwrap();
+    provider
+        .login(&token_at(&provider, 0), &pin(USER_PIN), true)
+        .unwrap();
     backend.fail_next("find_objects", rv::CKR_DEVICE_REMOVED);
     assert!(provider.list_keys().unwrap().is_empty());
     assert_eq!(backend.sessions_opened(), 2);
@@ -257,7 +321,9 @@ fn device_removed_is_recoverable_too() {
 #[test]
 fn shutdown_clears_everything() {
     let (backend, provider) = new_provider();
-    provider.login(&token_at(&provider, 0), &pin(USER_PIN), true).unwrap();
+    provider
+        .login(&token_at(&provider, 0), &pin(USER_PIN), true)
+        .unwrap();
     provider.shutdown().unwrap();
     assert_eq!(provider.status().auth, AuthState::LoggedOut);
     assert!(!crate::backend::Backend::has_session(backend.as_ref()));
@@ -304,11 +370,18 @@ fn mechanism_list_failure_leaves_consistent_state() {
 #[test]
 fn init_token_pads_label_and_sets_user_pin() {
     let (backend, provider) = new_provider();
-    provider.init_token(9, "NEWTOK", &pin("4321"), &pin("9876")).unwrap();
+    provider
+        .init_token(9, "NEWTOK", &pin("4321"), &pin("9876"))
+        .unwrap();
     // C_InitToken stored the 32-byte space-padded form...
     assert_eq!(backend.raw_label(9), Some(format!("{:<32}", "NEWTOK")));
     // ...and readback strips the padding to the exact label
-    let tokens: Vec<_> = provider.list_tokens().unwrap().into_iter().filter(|t| t.label == "NEWTOK").collect();
+    let tokens: Vec<_> = provider
+        .list_tokens()
+        .unwrap()
+        .into_iter()
+        .filter(|t| t.label == "NEWTOK")
+        .collect();
     assert_eq!(tokens.len(), 1);
     provider.login(&tokens[0], &pin("9876"), false).unwrap(); // C_InitPIN took effect
     assert_eq!(provider.status().auth, AuthState::LoggedIn);
@@ -319,7 +392,12 @@ fn init_token_refuses_labels_over_32_bytes() {
     let (backend, provider) = new_provider();
     let label = "é".repeat(17); // 17 chars, 34 bytes
     let err = TokenInit::init_token(&provider, 9, &label, &pin("4321"), &pin("9876")).unwrap_err();
-    assert_eq!(err.kind, ErrorKind::Param { param_name: "label".into() });
+    assert_eq!(
+        err.kind,
+        ErrorKind::Param {
+            param_name: "label".into()
+        }
+    );
     assert_eq!(err.message, "token label must be at most 32 bytes");
     assert!(backend.calls().is_empty());
     TokenInit::init_token(&provider, 9, &"x".repeat(32), &pin("4321"), &pin("9876")).unwrap();
@@ -328,7 +406,9 @@ fn init_token_refuses_labels_over_32_bytes() {
 #[test]
 fn init_token_wrong_so_pin_is_translated() {
     let (_backend, provider) = new_provider();
-    let err = provider.init_token(0, "X", &pin("0000"), &pin("1")).unwrap_err();
+    let err = provider
+        .init_token(0, "X", &pin("0000"), &pin("1"))
+        .unwrap_err();
     assert_eq!(err.message, "wrong PIN for token '?' (CKR_PIN_INCORRECT)");
 }
 
@@ -339,7 +419,9 @@ fn set_env_and_reset_applies_env_and_shuts_down() {
     let _lock = r2_testkit::global_state_lock();
     let _guard = r2_testkit::set_env("R2_FAKE_CONF", None);
     let (backend, provider) = logged_in();
-    provider.set_env_and_reset("R2_FAKE_CONF", "/tmp/x.conf").unwrap();
+    provider
+        .set_env_and_reset("R2_FAKE_CONF", "/tmp/x.conf")
+        .unwrap();
     assert_eq!(std::env::var("R2_FAKE_CONF").as_deref(), Ok("/tmp/x.conf"));
     assert_eq!(provider.status().auth, AuthState::LoggedOut);
     assert_eq!(backend.load_counts(), (1, 1));
@@ -354,9 +436,14 @@ fn set_env_and_reset_refuses_a_shared_module() {
     let _guard = r2_testkit::set_env("R2_FAKE_CONF2", None);
     let (backend, provider) = logged_in();
     backend.set_shared(true);
-    let err = provider.set_env_and_reset("R2_FAKE_CONF2", "/tmp/x.conf").unwrap_err();
+    let err = provider
+        .set_env_and_reset("R2_FAKE_CONF2", "/tmp/x.conf")
+        .unwrap_err();
     assert_eq!(err.kind, ErrorKind::Provider);
-    assert_eq!(err.message, "'hsm' shares its PKCS#11 module with another provider");
+    assert_eq!(
+        err.message,
+        "'hsm' shares its PKCS#11 module with another provider"
+    );
     assert_eq!(
         err.hint.as_deref(),
         Some("restart r2 after the setup, or remove the other provider entry")

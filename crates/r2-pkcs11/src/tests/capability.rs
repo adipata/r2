@@ -30,7 +30,10 @@ fn set(names: &[&str]) -> BTreeSet<String> {
 fn folding_hash_variants_fold() {
     assert_eq!(fold(&["CKM_ECDSA_SHA256"]), set(&["ECDSA"]));
     assert_eq!(fold(&["CKM_SHA384_RSA_PKCS"]), set(&["RSA-PKCS1"]));
-    assert_eq!(fold(&["CKM_RSA_PKCS_PSS", "CKM_SHA1_RSA_PKCS_PSS"]), set(&["RSA-PSS"]));
+    assert_eq!(
+        fold(&["CKM_RSA_PKCS_PSS", "CKM_SHA1_RSA_PKCS_PSS"]),
+        set(&["RSA-PSS"])
+    );
 }
 
 #[test]
@@ -50,7 +53,11 @@ fn folding_gmac_advertised_via_gcm_fallback() {
 #[test]
 fn folding_wrap_and_derive_names() {
     assert_eq!(
-        fold(&["CKM_AES_KEY_WRAP", "CKM_AES_KEY_WRAP_PAD", "CKM_ECDH1_DERIVE"]),
+        fold(&[
+            "CKM_AES_KEY_WRAP",
+            "CKM_AES_KEY_WRAP_PAD",
+            "CKM_ECDH1_DERIVE"
+        ]),
         set(&["AES-KEY-WRAP", "AES-KEY-WRAP-PAD", "ECDH"])
     );
     // KWP folds into the PAD canonical name
@@ -97,7 +104,10 @@ fn cmac_advertised_with_plain_ckm() {
 #[test]
 fn eddsa_standard_ckm_wins() {
     let codes = codes(&["CKM_EDDSA"]);
-    assert_eq!(eddsa_ckm(&codes, &EDDSA_VENDOR_CKMS), symbol_value("CKM_EDDSA"));
+    assert_eq!(
+        eddsa_ckm(&codes, &EDDSA_VENDOR_CKMS),
+        symbol_value("CKM_EDDSA")
+    );
     assert!(fold_mechanisms(&codes, &BTreeMap::new()).contains("EDDSA"));
 }
 
@@ -150,7 +160,11 @@ fn unknown_ckms_survive_the_unfiltered_mechanism_list() {
     let vendor = 0x8000_0A01;
     let mut mechs = DEFAULT_MECHANISMS.to_vec();
     mechs.push(vendor);
-    let backend = Rc::new(FakeBackend::with_slots(vec![(0, FakeBackend::token("fake-token", "FAKE0001"), mechs)]));
+    let backend = Rc::new(FakeBackend::with_slots(vec![(
+        0,
+        FakeBackend::token("fake-token", "FAKE0001"),
+        mechs,
+    )]));
     let custom = BTreeMap::from([(vendor, "vendor.acme.kcv".to_string())]);
     let provider = provider_with(&backend, custom, IndexMap::new());
     let token = token_at(&provider, 0);
@@ -173,8 +187,21 @@ fn mechanisms_fold_hmac() {
 fn default_fake_token_advertises_softhsm_like_names() {
     let (_backend, provider) = logged_in();
     let expected = set(&[
-        "AES-CBC", "AES-CMAC", "AES-CTR", "AES-ECB", "AES-GCM", "AES-GMAC", "AES-KEY-WRAP",
-        "AES-KEY-WRAP-PAD", "ECDH", "ECDSA", "EDDSA", "HMAC", "RSA-OAEP", "RSA-PKCS1", "RSA-PSS",
+        "AES-CBC",
+        "AES-CMAC",
+        "AES-CTR",
+        "AES-ECB",
+        "AES-GCM",
+        "AES-GMAC",
+        "AES-KEY-WRAP",
+        "AES-KEY-WRAP-PAD",
+        "ECDH",
+        "ECDSA",
+        "EDDSA",
+        "HMAC",
+        "RSA-OAEP",
+        "RSA-PKCS1",
+        "RSA-PSS",
         "RSA-RAW",
     ]);
     assert_eq!(provider.mechanisms(), expected);
@@ -187,7 +214,11 @@ fn custom_ckm_advertised() {
     let vendor = 0x8000_0A01;
     let mut mechs = DEFAULT_MECHANISMS.to_vec();
     mechs.push(vendor);
-    let backend = Rc::new(FakeBackend::with_slots(vec![(0, FakeBackend::token("fake-token", "FAKE0001"), mechs)]));
+    let backend = Rc::new(FakeBackend::with_slots(vec![(
+        0,
+        FakeBackend::token("fake-token", "FAKE0001"),
+        mechs,
+    )]));
     let provider = provider_with(
         &backend,
         BTreeMap::from([(vendor, "vendor.acme.kcv".to_string())]),

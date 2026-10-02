@@ -2,7 +2,7 @@
 //! Together with `crate::ckr` this is the single CKR choke point: every cryptoki error is
 //! converted here into a raw `BackendError`.
 use std::cell::RefCell;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::OnceLock;
 
@@ -27,7 +27,9 @@ use crate::ckr::rv;
 pub(crate) fn rv_code(err: &RvError) -> u64 {
     static TABLE: OnceLock<Vec<(RvError, u64)>> = OnceLock::new();
     match err {
-        RvError::VendorDefined(code) | RvError::UnknownErrorCode(code) => u64::from(*code),
+        RvError::VendorDefined(code) | RvError::UnknownErrorCode(code) => {
+            crate::ulong_to_u64(*code)
+        }
         other => TABLE
             .get_or_init(|| {
                 (1..0x400u64)
@@ -51,10 +53,14 @@ pub(crate) fn rv_code(err: &RvError) -> u64 {
 /// other non-CKR error is a Binding error (c2's −1 code; the detail is logged only).
 pub(crate) fn convert(err: Error, function: &'static str) -> BackendError {
     match err {
-        Error::Pkcs11(rv_error, _) => BackendError::Ckr(Ckr { code: rv_code(&rv_error), function }),
-        Error::NullFunctionPointer => {
-            BackendError::Ckr(Ckr { code: rv::CKR_FUNCTION_NOT_SUPPORTED, function })
-        }
+        Error::Pkcs11(rv_error, _) => BackendError::Ckr(Ckr {
+            code: rv_code(&rv_error),
+            function,
+        }),
+        Error::NullFunctionPointer => BackendError::Ckr(Ckr {
+            code: rv::CKR_FUNCTION_NOT_SUPPORTED,
+            function,
+        }),
         Error::LibraryLoading(inner) => BackendError::LibraryUnavailable(inner.to_string()),
         Error::MissingSymbol(_) => BackendError::LibraryUnavailable(err.to_string()),
         other => BackendError::Binding(format!("{function}: {other}")),
@@ -96,7 +102,7 @@ pub(crate) fn obj(handle: u64) -> BResult<ObjectHandle> {
 }
 
 fn widen(code: sys::CK_ULONG) -> u64 {
-    u64::from(code)
+    crate::ulong_to_u64(code)
 }
 
 /// Raw `(type, bytes)` entries → cryptoki attributes (`Attribute::VendorDefined` maps back
@@ -107,7 +113,10 @@ fn attributes(template: &[RawAttr]) -> BResult<Vec<Attribute>> {
         .map(|(kind, value)| {
             let t = sys::CK_ATTRIBUTE_TYPE::try_from(*kind)
                 .map_err(|_| ckr(rv::CKR_ATTRIBUTE_TYPE_INVALID, "attribute"))?;
-            Ok(Attribute::VendorDefined((AttributeType::VendorDefined(t), value.to_vec())))
+            Ok(Attribute::VendorDefined((
+                AttributeType::VendorDefined(t),
+                value.to_vec(),
+            )))
         })
         .collect()
 }
@@ -133,11 +142,20 @@ fn len_ulong(len: usize) -> BResult<sys::CK_ULONG> {
 fn native_plain(ckm: u64) -> Option<Mechanism<'static>> {
     let table: [(sys::CK_MECHANISM_TYPE, Mechanism<'static>); 33] = [
         (sys::CKM_AES_KEY_GEN, Mechanism::AesKeyGen),
-        (sys::CKM_GENERIC_SECRET_KEY_GEN, Mechanism::GenericSecretKeyGen),
+        (
+            sys::CKM_GENERIC_SECRET_KEY_GEN,
+            Mechanism::GenericSecretKeyGen,
+        ),
         (sys::CKM_RSA_PKCS_KEY_PAIR_GEN, Mechanism::RsaPkcsKeyPairGen),
         (sys::CKM_EC_KEY_PAIR_GEN, Mechanism::EccKeyPairGen),
-        (sys::CKM_EC_EDWARDS_KEY_PAIR_GEN, Mechanism::EccEdwardsKeyPairGen),
-        (sys::CKM_EC_MONTGOMERY_KEY_PAIR_GEN, Mechanism::EccMontgomeryKeyPairGen),
+        (
+            sys::CKM_EC_EDWARDS_KEY_PAIR_GEN,
+            Mechanism::EccEdwardsKeyPairGen,
+        ),
+        (
+            sys::CKM_EC_MONTGOMERY_KEY_PAIR_GEN,
+            Mechanism::EccMontgomeryKeyPairGen,
+        ),
         (sys::CKM_AES_ECB, Mechanism::AesEcb),
         (sys::CKM_AES_CMAC, Mechanism::AesCMac),
         (sys::CKM_AES_KEY_WRAP, Mechanism::AesKeyWrap),
@@ -166,16 +184,27 @@ fn native_plain(ckm: u64) -> Option<Mechanism<'static>> {
         (sys::CKM_SHA384, Mechanism::Sha384),
         (sys::CKM_SHA512, Mechanism::Sha512),
     ];
-    table.into_iter().find(|(code, _)| widen(*code) == ckm).map(|(_, m)| m)
+    table
+        .into_iter()
+        .find(|(code, _)| widen(*code) == ckm)
+        .map(|(_, m)| m)
 }
 
 /// `Some((ckm, param))` when the spec must go through RawFns (a runtime-length raw
 /// parameter that is not a 16-byte AES-CBC IV, S0 G3).
+#[allow(
+    dead_code,
+    reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
+)]
 fn raw_bytes(spec: &MechSpec) -> Option<(u64, &[u8])> {
     match spec {
         MechSpec::Bytes { ckm, param } => {
             let cbc = *ckm == widen(sys::CKM_AES_CBC) || *ckm == widen(sys::CKM_AES_CBC_PAD);
-            if cbc && param.len() == 16 { None } else { Some((*ckm, param.as_slice())) }
+            if cbc && param.len() == 16 {
+                None
+            } else {
+                Some((*ckm, param.as_slice()))
+            }
         }
         _ => None,
     }
@@ -186,17 +215,13 @@ fn raw_bytes(spec: &MechSpec) -> Option<(u64, &[u8])> {
 /// through `VendorDefinedMechanism::new(mech_type(ckm), Some(&sys_struct))` with Sized
 /// `repr(C)` cryptoki-sys structs only (§4.5.5 review rule); the wire layout equals the
 /// native variants'.
-fn with_mechanism<R>(
-    spec: &MechSpec,
-    f: impl FnOnce(&Mechanism<'_>) -> BResult<R>,
-) -> BResult<R> {
+fn with_mechanism<R>(spec: &MechSpec, f: impl FnOnce(&Mechanism<'_>) -> BResult<R>) -> BResult<R> {
     match spec {
         MechSpec::Plain { ckm } => match native_plain(*ckm) {
             Some(native) => f(&native),
-            None => f(&Mechanism::VendorDefined(VendorDefinedMechanism::new::<()>(
-                mech_type(*ckm)?,
-                None,
-            ))),
+            None => f(&Mechanism::VendorDefined(
+                VendorDefinedMechanism::new::<()>(mech_type(*ckm)?, None),
+            )),
         },
         MechSpec::Bytes { ckm, param } => {
             let mut iv = [0u8; 16];
@@ -213,7 +238,12 @@ fn with_mechanism<R>(
                 ))
             }
         }
-        MechSpec::Gcm { ckm, iv, aad, tag_bits } => {
+        MechSpec::Gcm {
+            ckm,
+            iv,
+            aad,
+            tag_bits,
+        } => {
             let mut iv_copy = iv.clone();
             let aad_copy = aad.clone();
             let params = sys::CK_GCM_PARAMS {
@@ -230,7 +260,10 @@ fn with_mechanism<R>(
             drop(aad_copy);
             result
         }
-        MechSpec::Ctr { counter_bits, counter_block } => {
+        MechSpec::Ctr {
+            counter_bits,
+            counter_block,
+        } => {
             let params = sys::CK_AES_CTR_PARAMS {
                 ulCounterBits: param_ulong(*counter_bits)?,
                 cb: *counter_block,
@@ -239,12 +272,20 @@ fn with_mechanism<R>(
                 VendorDefinedMechanism::new(mech_type(widen(sys::CKM_AES_CTR))?, Some(&params));
             f(&Mechanism::VendorDefined(mechanism))
         }
-        MechSpec::Oaep { ckm, hash_ckm, mgf, label } => {
+        MechSpec::Oaep {
+            ckm,
+            hash_ckm,
+            mgf,
+            label,
+        } => {
             let label_copy = label.clone();
             let (source_data, source_len) = if label_copy.is_empty() {
                 (std::ptr::null_mut(), 0)
             } else {
-                (label_copy.as_ptr() as *mut std::ffi::c_void, len_ulong(label_copy.len())?)
+                (
+                    label_copy.as_ptr() as *mut std::ffi::c_void,
+                    len_ulong(label_copy.len())?,
+                )
             };
             let params = sys::CK_RSA_PKCS_OAEP_PARAMS {
                 hashAlg: param_ulong(*hash_ckm)?,
@@ -258,7 +299,12 @@ fn with_mechanism<R>(
             drop(label_copy);
             result
         }
-        MechSpec::Pss { ckm, hash_ckm, mgf, salt_len } => {
+        MechSpec::Pss {
+            ckm,
+            hash_ckm,
+            mgf,
+            salt_len,
+        } => {
             let params = sys::CK_RSA_PKCS_PSS_PARAMS {
                 hashAlg: param_ulong(*hash_ckm)?,
                 mgf: param_ulong(*mgf)?,
@@ -267,13 +313,20 @@ fn with_mechanism<R>(
             let mechanism = VendorDefinedMechanism::new(mech_type(*ckm)?, Some(&params));
             f(&Mechanism::VendorDefined(mechanism))
         }
-        MechSpec::Ecdh1 { kdf, shared_data, public_data } => {
+        MechSpec::Ecdh1 {
+            kdf,
+            shared_data,
+            public_data,
+        } => {
             let shared = shared_data.clone();
             let public = public_data.clone();
             let (shared_ptr, shared_len) = if shared.is_empty() {
                 (std::ptr::null_mut(), 0)
             } else {
-                (shared.as_ptr() as *mut sys::CK_BYTE, len_ulong(shared.len())?)
+                (
+                    shared.as_ptr() as *mut sys::CK_BYTE,
+                    len_ulong(shared.len())?,
+                )
             };
             let params = sys::CK_ECDH1_DERIVE_PARAMS {
                 kdf: param_ulong(*kdf)?,
@@ -316,6 +369,10 @@ pub(crate) struct CryptokiBackend {
     session: RefCell<Option<Session>>,
 }
 
+#[allow(
+    dead_code,
+    reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
+)]
 impl CryptokiBackend {
     pub(crate) fn new(config: &Pkcs11InstanceConfig) -> Self {
         Self {
@@ -339,7 +396,9 @@ impl CryptokiBackend {
         f: impl FnOnce(&Session) -> BResult<R>,
     ) -> BResult<R> {
         let guard = self.session.borrow();
-        let session = guard.as_ref().ok_or_else(|| ckr(rv::CKR_SESSION_HANDLE_INVALID, function))?;
+        let session = guard
+            .as_ref()
+            .ok_or_else(|| ckr(rv::CKR_SESSION_HANDLE_INVALID, function))?;
         f(session)
     }
 
@@ -364,13 +423,25 @@ impl CryptokiBackend {
         self.with_session("crypt", |session| {
             if let Some((ckm, param)) = raw_bytes(mech) {
                 let mechanism = raw::bytes_mechanism(ckm, param)?;
-                return module.raw.crypt(op, session.handle(), &mechanism, key_handle.handle(), data);
+                return module.raw.crypt(
+                    op,
+                    session.handle(),
+                    &mechanism,
+                    key_handle.handle(),
+                    data,
+                );
             }
             with_mechanism(mech, |m| {
                 let out = match op {
-                    RawOp::Encrypt => session.encrypt(m, key_handle, data).map_err(|e| convert(e, "C_Encrypt")),
-                    RawOp::Decrypt => session.decrypt(m, key_handle, data).map_err(|e| convert(e, "C_Decrypt")),
-                    RawOp::Sign => session.sign(m, key_handle, data).map_err(|e| convert(e, "C_Sign")),
+                    RawOp::Encrypt => session
+                        .encrypt(m, key_handle, data)
+                        .map_err(|e| convert(e, "C_Encrypt")),
+                    RawOp::Decrypt => session
+                        .decrypt(m, key_handle, data)
+                        .map_err(|e| convert(e, "C_Decrypt")),
+                    RawOp::Sign => session
+                        .sign(m, key_handle, data)
+                        .map_err(|e| convert(e, "C_Sign")),
                 }?;
                 Ok(Zeroizing::new(out))
             })
@@ -378,6 +449,10 @@ impl CryptokiBackend {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
+)]
 fn is_signature_failure(err: &BackendError) -> bool {
     matches!(err, BackendError::Ckr(Ckr { code, .. })
         if *code == rv::CKR_SIGNATURE_INVALID || *code == rv::CKR_SIGNATURE_LEN_RANGE)
@@ -471,7 +546,9 @@ impl super::Backend for CryptokiBackend {
             UserKind::So => UserType::So,
         };
         self.with_session("C_Login", |session| {
-            session.login(user_type, Some(pin)).map_err(|e| convert(e, "C_Login"))
+            session
+                .login(user_type, Some(pin))
+                .map_err(|e| convert(e, "C_Login"))
         })
     }
 
@@ -577,7 +654,10 @@ impl super::Backend for CryptokiBackend {
         wipe(public_attrs);
         wipe(private_attrs);
         let (public_handle, private_handle) = result?;
-        Ok((widen(public_handle.handle()), widen(private_handle.handle())))
+        Ok((
+            widen(public_handle.handle()),
+            widen(private_handle.handle()),
+        ))
     }
 
     fn encrypt(&self, mech: &MechSpec, key: u64, data: &[u8]) -> BResult<Vec<u8>> {
@@ -599,7 +679,11 @@ impl super::Backend for CryptokiBackend {
                             .map_err(|e| convert(e, "C_EncryptUpdate"))?,
                     );
                 }
-                out.extend(session.encrypt_final().map_err(|e| convert(e, "C_EncryptFinal"))?);
+                out.extend(
+                    session
+                        .encrypt_final()
+                        .map_err(|e| convert(e, "C_EncryptFinal"))?,
+                );
                 Ok(out)
             })
         })
@@ -647,11 +731,15 @@ impl super::Backend for CryptokiBackend {
         self.with_session("C_WrapKey", |session| {
             if let Some((ckm, param)) = raw_bytes(mech) {
                 let mechanism = raw::bytes_mechanism(ckm, param)?;
-                return module.raw.wrap(session.handle(), &mechanism, wrapping, target);
+                return module
+                    .raw
+                    .wrap(session.handle(), &mechanism, wrapping, target);
             }
             with_mechanism(mech, |m| {
                 let mechanism = sys::CK_MECHANISM::from(m);
-                module.raw.wrap(session.handle(), &mechanism, wrapping, target)
+                module
+                    .raw
+                    .wrap(session.handle(), &mechanism, wrapping, target)
             })
         })
     }
@@ -693,7 +781,9 @@ impl super::Backend for CryptokiBackend {
         self.with_session("C_DeriveKey", |session| {
             if let Some((ckm, param)) = raw_bytes(mech) {
                 let mechanism = raw::bytes_mechanism(ckm, param)?;
-                return module.raw.derive(session.handle(), &mechanism, base.handle(), template);
+                return module
+                    .raw
+                    .derive(session.handle(), &mechanism, base.handle(), template);
             }
             let attrs = attributes(template)?;
             let result = with_mechanism(mech, |m| {
@@ -705,10 +795,4 @@ impl super::Backend for CryptokiBackend {
             Ok(widen(result?.handle()))
         })
     }
-}
-
-/// Registry key of a library path (tests).
-#[cfg(test)]
-pub(crate) fn key_of(library: &Path) -> PathBuf {
-    raw::registry_key(library)
 }

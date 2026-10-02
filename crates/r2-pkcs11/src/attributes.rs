@@ -11,6 +11,10 @@ use crate::backend::{BResult, BackendError, Ckr};
 use crate::ckr::rv;
 
 /// Size of a native `CK_ULONG` (4 bytes on Windows, 8 on LP64).
+#[allow(
+    dead_code,
+    reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
+)]
 pub(crate) const ULONG_SIZE: usize = std::mem::size_of::<cryptoki_sys::CK_ULONG>();
 
 /// The symbolic-constant prefixes a ULONG value may carry (c2 `_SYMBOL_PREFIXES`).
@@ -24,7 +28,10 @@ pub(crate) fn is_symbol(text: &str) -> bool {
 /// CKR_ATTRIBUTE_VALUE_INVALID (§4.5.5 narrowing rule).
 pub(crate) fn ulong_bytes(value: u64) -> BResult<Vec<u8>> {
     let narrow = cryptoki_sys::CK_ULONG::try_from(value).map_err(|_| {
-        BackendError::Ckr(Ckr { code: rv::CKR_ATTRIBUTE_VALUE_INVALID, function: "ulong" })
+        BackendError::Ckr(Ckr {
+            code: rv::CKR_ATTRIBUTE_VALUE_INVALID,
+            function: "ulong",
+        })
     })?;
     Ok(narrow.to_ne_bytes().to_vec())
 }
@@ -220,12 +227,18 @@ pub(crate) fn encode_vendor_value(kind: AttrKind, value: &AttrValue) -> Result<V
         AttrKind::Ulong => match value {
             AttrValue::Ulong(n) => ulong_bytes(*n).map_err(|_| {
                 ConsoleError::param(
-                    format!("vendor ULONG attribute expects an integer, got {}", value.py_repr()),
+                    format!(
+                        "vendor ULONG attribute expects an integer, got {}",
+                        value.py_repr()
+                    ),
                     value.render_info(),
                 )
             }),
             _ => Err(ConsoleError::param(
-                format!("vendor ULONG attribute expects an integer, got {}", value.py_repr()),
+                format!(
+                    "vendor ULONG attribute expects an integer, got {}",
+                    value.py_repr()
+                ),
                 value.render_info(),
             )),
         },
@@ -236,7 +249,10 @@ pub(crate) fn encode_vendor_value(kind: AttrKind, value: &AttrValue) -> Result<V
         AttrKind::Bytes => match value {
             AttrValue::Bytes(b) => Ok(b.clone()),
             _ => Err(ConsoleError::param(
-                format!("vendor BYTES attribute expects bytes, got {}", value.py_type_name()),
+                format!(
+                    "vendor BYTES attribute expects bytes, got {}",
+                    value.py_type_name()
+                ),
                 value.render_info(),
             )),
         },
@@ -245,6 +261,10 @@ pub(crate) fn encode_vendor_value(kind: AttrKind, value: &AttrValue) -> Result<V
 
 /// Inverse of `encode_vendor_value`: BOOL → any nonzero byte, ULONG → native-endian,
 /// STR → UTF-8 with replacement, BYTES → as-is.
+#[allow(
+    dead_code,
+    reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
+)]
 pub(crate) fn decode_vendor_value(kind: AttrKind, data: &[u8]) -> AttrValue {
     match kind {
         AttrKind::Bool => AttrValue::Bool(data.iter().any(|b| *b != 0)),

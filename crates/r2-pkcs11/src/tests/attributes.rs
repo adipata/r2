@@ -39,14 +39,21 @@ fn catalog_every_entry_well_formed() {
     // the literal codes equal the PKCS#11 constants (cryptoki-sys cross-check)
     let sys_codes = [
         ("CKA_CLASS", cryptoki_sys::CKA_CLASS),
-        ("CKA_CERTIFICATE_CATEGORY", cryptoki_sys::CKA_CERTIFICATE_CATEGORY),
+        (
+            "CKA_CERTIFICATE_CATEGORY",
+            cryptoki_sys::CKA_CERTIFICATE_CATEGORY,
+        ),
         ("CKA_KEY_GEN_MECHANISM", cryptoki_sys::CKA_KEY_GEN_MECHANISM),
         ("CKA_EC_POINT", cryptoki_sys::CKA_EC_POINT),
         ("CKA_WRAP_WITH_TRUSTED", cryptoki_sys::CKA_WRAP_WITH_TRUSTED),
         ("CKA_PUBLIC_KEY_INFO", cryptoki_sys::CKA_PUBLIC_KEY_INFO),
     ];
     for (name, code) in sys_codes {
-        assert_eq!(cka(name).map(|e| e.code), Some(u64::from(code)), "{name}");
+        assert_eq!(
+            cka(name).map(|e| e.code),
+            Some(crate::ulong_to_u64(code)),
+            "{name}"
+        );
     }
 }
 
@@ -101,7 +108,10 @@ fn conversion_symbolic_ulong_passes_through() {
         ulong_attr("CKA_CLASS", symbol("CKO_SECRET_KEY")),
         ulong_attr("CKA_KEY_TYPE", symbol("CKK_AES")),
         // a STR row holding a constant name (config inference keeps it STR)
-        ulong_attr("CKA_KEY_GEN_MECHANISM", AttrValue::Str("CKM_AES_KEY_GEN".into())),
+        ulong_attr(
+            "CKA_KEY_GEN_MECHANISM",
+            AttrValue::Str("CKM_AES_KEY_GEN".into()),
+        ),
     ]);
     let entries = template_to_attrs(&template, &no_custom()).unwrap();
     assert_eq!(entries[0].value, symbol("CKO_SECRET_KEY"));
@@ -124,7 +134,11 @@ fn conversion_value_kind_mismatches() {
             None,
         ),
         (
-            TemplateAttr::new("CKA_VALUE_LEN", AttrKind::Ulong, AttrValue::Str("not-a-symbol".into())),
+            TemplateAttr::new(
+                "CKA_VALUE_LEN",
+                AttrKind::Ulong,
+                AttrValue::Str("not-a-symbol".into()),
+            ),
             "template attribute CKA_VALUE_LEN expects an integer or a CKO_/CKK_/CKC_/CKM_ \
              constant name, got 'not-a-symbol'",
             None,
@@ -156,7 +170,10 @@ fn conversion_custom_attribute_resolution() {
     let mut custom = IndexMap::new();
     custom.insert(
         "CKA_ACME_USAGE".to_string(),
-        CustomAttributeDef { code: 0x8000_0101, kind: AttrKind::Bytes },
+        CustomAttributeDef {
+            code: 0x8000_0101,
+            kind: AttrKind::Bytes,
+        },
     );
     let template = tpl(vec![bytes_attr("CKA_ACME_USAGE", b"\xaa\xbb")]);
     let entries = template_to_attrs(&template, &custom).unwrap();
@@ -172,7 +189,10 @@ fn conversion_catalog_wins_over_custom() {
     let mut custom = IndexMap::new();
     custom.insert(
         "CKA_TOKEN".to_string(),
-        CustomAttributeDef { code: 0x8000_0001, kind: AttrKind::Bytes },
+        CustomAttributeDef {
+            code: 0x8000_0001,
+            kind: AttrKind::Bytes,
+        },
     );
     let entries = template_to_attrs(&tpl(vec![boolean("CKA_TOKEN", true)]), &custom).unwrap();
     assert_eq!(entries[0].code, 0x0001);
@@ -183,8 +203,14 @@ fn conversion_catalog_wins_over_custom() {
 
 #[test]
 fn vendor_encoding_bool() {
-    assert_eq!(encode_vendor_value(AttrKind::Bool, &AttrValue::Bool(true)).unwrap(), [1]);
-    assert_eq!(encode_vendor_value(AttrKind::Bool, &AttrValue::Bool(false)).unwrap(), [0]);
+    assert_eq!(
+        encode_vendor_value(AttrKind::Bool, &AttrValue::Bool(true)).unwrap(),
+        [1]
+    );
+    assert_eq!(
+        encode_vendor_value(AttrKind::Bool, &AttrValue::Bool(false)).unwrap(),
+        [0]
+    );
 }
 
 #[test]
@@ -198,7 +224,10 @@ fn vendor_encoding_ulong_native_endian() {
 fn vendor_encoding_ulong_rejects_non_int() {
     let err = encode_vendor_value(AttrKind::Ulong, &AttrValue::Symbol("CKO_SECRET_KEY".into()))
         .unwrap_err();
-    assert_eq!(err.message, "vendor ULONG attribute expects an integer, got 'CKO_SECRET_KEY'");
+    assert_eq!(
+        err.message,
+        "vendor ULONG attribute expects an integer, got 'CKO_SECRET_KEY'"
+    );
     assert_eq!(err.param_name(), Some("CKO_SECRET_KEY"));
 }
 
@@ -236,13 +265,22 @@ fn vendor_decoding_round_trips_every_kind() {
 
 #[test]
 fn vendor_decoding_bool_any_nonzero_byte_is_true() {
-    assert_eq!(decode_vendor_value(AttrKind::Bool, &[0, 0]), AttrValue::Bool(false));
-    assert_eq!(decode_vendor_value(AttrKind::Bool, &[0, 2]), AttrValue::Bool(true));
+    assert_eq!(
+        decode_vendor_value(AttrKind::Bool, &[0, 0]),
+        AttrValue::Bool(false)
+    );
+    assert_eq!(
+        decode_vendor_value(AttrKind::Bool, &[0, 2]),
+        AttrValue::Bool(true)
+    );
 }
 
 #[test]
 fn vendor_decoding_str_replaces_undecodable_bytes() {
-    assert_eq!(decode_vendor_value(AttrKind::Str, &[0xff]), AttrValue::Str("\u{fffd}".into()));
+    assert_eq!(
+        decode_vendor_value(AttrKind::Str, &[0xff]),
+        AttrValue::Str("\u{fffd}".into())
+    );
 }
 
 // ---- TestTemplateIdentity ----
@@ -267,7 +305,10 @@ fn identity_extracts_enabled_rows() {
 
 #[test]
 fn identity_disabled_rows_ignored() {
-    let template = tpl(vec![bytes_attr("CKA_ID", b"\x01").disabled(), str_attr("CKA_LABEL", "x").disabled()]);
+    let template = tpl(vec![
+        bytes_attr("CKA_ID", b"\x01").disabled(),
+        str_attr("CKA_LABEL", "x").disabled(),
+    ]);
     assert_eq!(template_identity(&[Some(&template)]).unwrap(), (None, None));
 }
 
@@ -275,7 +316,10 @@ fn identity_disabled_rows_ignored() {
 fn identity_agreeing_templates_merge() {
     let private = tpl(vec![bytes_attr("CKA_ID", b"\x01")]);
     let public = tpl(vec![bytes_attr("CKA_ID", b"\x01")]);
-    assert_eq!(template_identity(&[Some(&private), Some(&public)]).unwrap(), (None, Some(vec![1])));
+    assert_eq!(
+        template_identity(&[Some(&private), Some(&public)]).unwrap(),
+        (None, Some(vec![1]))
+    );
 }
 
 #[test]

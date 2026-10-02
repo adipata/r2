@@ -24,9 +24,13 @@ use crate::attributes::{
     self, Pkcs11Attr, decode_ulong, encode_vendor_value, hex, template_identity, template_to_attrs,
     ulong_bytes,
 };
-use crate::backend::{BackendError, MechSpec, RawAttr};
+use crate::backend::{MechSpec, RawAttr};
 
 /// CKA codes of cryptoki-sys widened to u64 (`as u64` widens CK_ULONG on every target).
+#[allow(
+    dead_code,
+    reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
+)]
 pub(crate) mod cka {
     use cryptoki_sys as sys;
     macro_rules! codes {
@@ -70,7 +74,7 @@ pub(crate) mod cka {
 }
 
 fn w(code: sys::CK_ULONG) -> u64 {
-    u64::from(code)
+    crate::ulong_to_u64(code)
 }
 
 /// CKO code of a class (cryptoki-sys numerics, §5 [S]).
@@ -141,6 +145,15 @@ fn i2b(value: &BigNumRef) -> Zeroizing<Vec<u8>> {
 }
 
 /// The first OpenSSL reason of an error stack (§11 D11).
+/// A BIGNUM for secret key material on the secure heap: OpenSSL clears secure BIGNUMs
+/// when they are freed (rust-openssl's `BigNum` drop is a plain `BN_free`), so the
+/// private scalar / RSA components never linger in freed memory, also on error paths.
+fn secret_bn(value: &[u8]) -> std::result::Result<BigNum, openssl::error::ErrorStack> {
+    let mut bn = BigNum::new_secure()?;
+    bn.copy_from_slice(value)?;
+    Ok(bn)
+}
+
 fn reason(err: &openssl::error::ErrorStack) -> String {
     err.errors()
         .first()
@@ -152,7 +165,9 @@ fn reason(err: &openssl::error::ErrorStack) -> String {
 fn curve_name(nid: Option<Nid>) -> String {
     match nid {
         Some(Nid::X9_62_PRIME192V1) => "secp192r1".to_string(),
-        Some(nid) => nid.short_name().map_or_else(|_| "unknown".to_string(), str::to_string),
+        Some(nid) => nid
+            .short_name()
+            .map_or_else(|_| "unknown".to_string(), str::to_string),
         None => "unknown".to_string(),
     }
 }
@@ -216,13 +231,14 @@ pub(crate) fn material_attrs(material: &KeyMaterial) -> Result<Vec<RawAttr>> {
     match material.key_class {
         KeyClass::Secret | KeyClass::Data => Ok(vec![(cka::VALUE, bytes(data))]),
         KeyClass::Certificate => {
-            let facts = x509info::cert_facts(data, Classifier::Pkcs11).map_err(|err| {
-                match err.message.strip_prefix("certificate is not valid DER X.509: ") {
-                    Some(detail) => ConsoleError::key_parse(format!(
-                        "certificate material is not DER X.509: {detail}"
-                    )),
-                    None => err,
-                }
+            let facts = x509info::cert_facts(data, Classifier::Pkcs11).map_err(|err| match err
+                .message
+                .strip_prefix("certificate is not valid DER X.509: ")
+            {
+                Some(detail) => ConsoleError::key_parse(format!(
+                    "certificate material is not DER X.509: {detail}"
+                )),
+                None => err,
             })?;
             let x509 = crate::catalog::symbol_value("CKC_X_509").unwrap_or(0);
             let ckc = ulong_bytes(x509).map_err(|_| {
@@ -243,16 +259,25 @@ pub(crate) fn material_attrs(material: &KeyMaterial) -> Result<Vec<RawAttr>> {
 
 fn private_material_attrs(data: &[u8]) -> Result<Vec<RawAttr>> {
     let key = PKey::private_key_from_der(data).map_err(|err| {
-        ConsoleError::key_parse(format!("private key material is not DER PKCS#8: {}", reason(&err)))
+        ConsoleError::key_parse(format!(
+            "private key material is not DER PKCS#8: {}",
+            reason(&err)
+        ))
     })?;
     let invalid = |err: openssl::error::ErrorStack| {
-        ConsoleError::key_parse(format!("private key material is not DER PKCS#8: {}", reason(&err)))
+        ConsoleError::key_parse(format!(
+            "private key material is not DER PKCS#8: {}",
+            reason(&err)
+        ))
     };
     match key.id() {
         Id::RSA | Id::RSA_PSS => {
             let rsa = key.rsa().map_err(invalid)?;
-            let missing =
-                || ConsoleError::key_parse("private key material is not DER PKCS#8: missing CRT components");
+            let missing = || {
+                ConsoleError::key_parse(
+                    "private key material is not DER PKCS#8: missing CRT components",
+                )
+            };
             Ok(vec![
                 (cka::MODULUS, i2b(rsa.n())),
                 (cka::PUBLIC_EXPONENT, i2b(rsa.e())),
@@ -272,12 +297,18 @@ fn private_material_attrs(data: &[u8]) -> Result<Vec<RawAttr>> {
             })?;
             let width = i32::try_from(curve.field_bytes().unwrap_or(32)).unwrap_or(32);
             let scalar = ec.private_key().to_vec_padded(width).map_err(invalid)?;
-            Ok(vec![(cka::EC_PARAMS, oid_der(&curve)), (cka::VALUE, Zeroizing::new(scalar))])
+            Ok(vec![
+                (cka::EC_PARAMS, oid_der(&curve)),
+                (cka::VALUE, Zeroizing::new(scalar)),
+            ])
         }
         id => match edwards_or_montgomery(id) {
             Some(curve) => {
                 let raw = key.raw_private_key().map_err(invalid)?;
-                Ok(vec![(cka::EC_PARAMS, oid_der(&curve)), (cka::VALUE, Zeroizing::new(raw))])
+                Ok(vec![
+                    (cka::EC_PARAMS, oid_der(&curve)),
+                    (cka::VALUE, Zeroizing::new(raw)),
+                ])
             }
             None => Err(ConsoleError::key_parse(format!(
                 "unsupported private key type {}",
@@ -289,13 +320,19 @@ fn private_material_attrs(data: &[u8]) -> Result<Vec<RawAttr>> {
 
 fn public_material_attrs(data: &[u8]) -> Result<Vec<RawAttr>> {
     let invalid = |err: openssl::error::ErrorStack| {
-        ConsoleError::key_parse(format!("public key material is not DER SPKI: {}", reason(&err)))
+        ConsoleError::key_parse(format!(
+            "public key material is not DER SPKI: {}",
+            reason(&err)
+        ))
     };
     let key = PKey::public_key_from_der(data).map_err(invalid)?;
     match key.id() {
         Id::RSA | Id::RSA_PSS => {
             let rsa = key.rsa().map_err(invalid)?;
-            Ok(vec![(cka::MODULUS, i2b(rsa.n())), (cka::PUBLIC_EXPONENT, i2b(rsa.e()))])
+            Ok(vec![
+                (cka::MODULUS, i2b(rsa.n())),
+                (cka::PUBLIC_EXPONENT, i2b(rsa.e())),
+            ])
         }
         Id::EC => {
             let ec = key.ec_key().map_err(invalid)?;
@@ -310,7 +347,10 @@ fn public_material_attrs(data: &[u8]) -> Result<Vec<RawAttr>> {
                 .map_err(invalid)?;
             Ok(vec![
                 (cka::EC_PARAMS, oid_der(&curve)),
-                (cka::EC_POINT, bytes(&r2_core::der::wrap_octet_string(&point))),
+                (
+                    cka::EC_POINT,
+                    bytes(&r2_core::der::wrap_octet_string(&point)),
+                ),
             ])
         }
         id => match edwards_or_montgomery(id) {
@@ -330,7 +370,8 @@ fn public_material_attrs(data: &[u8]) -> Result<Vec<RawAttr>> {
 }
 
 fn label_text(raw: Option<Zeroizing<Vec<u8>>>) -> String {
-    raw.map(|v| String::from_utf8_lossy(&v).into_owned()).unwrap_or_default()
+    raw.map(|v| String::from_utf8_lossy(&v).into_owned())
+        .unwrap_or_default()
 }
 
 fn flag(raw: &Option<Zeroizing<Vec<u8>>>) -> bool {
@@ -347,8 +388,11 @@ impl Pkcs11Provider {
         let known = attributes::is_symbol(symbol);
         match crate::catalog::symbol_value(symbol) {
             Some(value) if known => Ok(value),
-            _ => Err(ConsoleError::param(format!("unknown PKCS#11 constant {}", py_repr(symbol)), symbol)
-                .with_hint("ULONG template values may be ints or CKO_/CKK_/CKC_/CKM_ names")),
+            _ => Err(ConsoleError::param(
+                format!("unknown PKCS#11 constant {}", py_repr(symbol)),
+                symbol,
+            )
+            .with_hint("ULONG template values may be ints or CKO_/CKK_/CKC_/CKM_ names")),
         }
     }
 
@@ -364,7 +408,9 @@ impl Pkcs11Provider {
             return encode_vendor_value(entry.kind, &entry.value).map(Zeroizing::new);
         }
         match &entry.value {
-            AttrValue::Symbol(symbol) => self.ulong(self.resolve_symbol(symbol)?, "object creation"),
+            AttrValue::Symbol(symbol) => {
+                self.ulong(self.resolve_symbol(symbol)?, "object creation")
+            }
             AttrValue::Ulong(n) => self.ulong(*n, "object creation"),
             AttrValue::Bool(b) => Ok(bool_bytes(*b)),
             AttrValue::Str(text) => Ok(bytes(text.as_bytes())),
@@ -440,8 +486,12 @@ impl Pkcs11Provider {
         if default_exportable && matches!(key_class, KeyClass::Secret | KeyClass::Private) {
             // SoftHSM defaults both flags to false on import; a silent template gets the
             // §4.5 import semantics instead (an operator row always wins)
-            assembled.entry(cka::SENSITIVE).or_insert_with(|| bool_bytes(false));
-            assembled.entry(cka::EXTRACTABLE).or_insert_with(|| bool_bytes(true));
+            assembled
+                .entry(cka::SENSITIVE)
+                .or_insert_with(|| bool_bytes(false));
+            assembled
+                .entry(cka::EXTRACTABLE)
+                .or_insert_with(|| bool_bytes(true));
         }
         assembled.insert(cka::LABEL, bytes(label.as_bytes()));
         match key_id {
@@ -470,11 +520,12 @@ impl Pkcs11Provider {
         let label = template_label.unwrap_or_else(|| label.to_string());
         if key_class == Some(KeyClass::Data) {
             if key_id.is_some() || template_id.is_some() {
-                return Err(ConsoleError::param("data objects carry no CKA_ID (§4.3)", "CKA_ID")
-                    .with_hint(
+                return Err(
+                    ConsoleError::param("data objects carry no CKA_ID (§4.3)", "CKA_ID").with_hint(
                         "drop --id / the template CKA_ID row; data objects are identified by \
                          label alone",
-                    ));
+                    ),
+                );
             }
             return Ok((label, None));
         }
@@ -482,7 +533,11 @@ impl Pkcs11Provider {
             && k != t.as_slice()
         {
             return Err(ConsoleError::param(
-                format!("template CKA_ID 0x{} conflicts with --id 0x{}", hex(t), hex(k)),
+                format!(
+                    "template CKA_ID 0x{} conflicts with --id 0x{}",
+                    hex(t),
+                    hex(k)
+                ),
                 "CKA_ID",
             )
             .with_hint("drop one of the two — they must agree"));
@@ -506,7 +561,10 @@ impl Pkcs11Provider {
     /// Build a KeyInfo snapshot; None for objects r2 cannot model (c2 `_key_info`).
     pub(crate) fn key_info(&self, handle: u64, key_class: KeyClass) -> OResult<Option<KeyInfo>> {
         let label = label_text(self.attr(handle, cka::LABEL)?);
-        let key_id = self.attr(handle, cka::ID)?.map(|v| v.to_vec()).filter(|v| !v.is_empty());
+        let key_id = self
+            .attr(handle, cka::ID)?
+            .map(|v| v.to_vec())
+            .filter(|v| !v.is_empty());
         let name = self.provider_name().to_string();
         let key_ref = KeyRef::new(name.clone(), label.clone(), key_id);
         match key_class {
@@ -541,7 +599,10 @@ impl Pkcs11Provider {
             KeyClass::Data => {
                 let value = self.attr(handle, cka::VALUE)?.map(|v| v.len()).unwrap_or(0);
                 let mut attributes = BTreeMap::new();
-                if let Some(app) = self.attr(handle, cka::APPLICATION)?.filter(|v| !v.is_empty()) {
+                if let Some(app) = self
+                    .attr(handle, cka::APPLICATION)?
+                    .filter(|v| !v.is_empty())
+                {
                     attributes.insert(
                         "CKA_APPLICATION".to_string(),
                         AttrValue::Str(String::from_utf8_lossy(&app).into_owned()),
@@ -571,7 +632,9 @@ impl Pkcs11Provider {
                 let mut exportable = true;
                 if matches!(key_class, KeyClass::Secret | KeyClass::Private) {
                     if key_class == KeyClass::Secret {
-                        let vlen = self.attr(handle, cka::VALUE_LEN)?.map_or(0, |v| decode_ulong(&v));
+                        let vlen = self
+                            .attr(handle, cka::VALUE_LEN)?
+                            .map_or(0, |v| decode_ulong(&v));
                         if vlen != 0 {
                             size_bits = u32::try_from(vlen.saturating_mul(8)).ok();
                         }
@@ -584,13 +647,17 @@ impl Pkcs11Provider {
                 }
                 match algorithm {
                     KeyAlgorithm::Rsa => {
-                        if let Some(modulus) = self.attr(handle, cka::MODULUS)?.filter(|m| !m.is_empty()) {
+                        if let Some(modulus) =
+                            self.attr(handle, cka::MODULUS)?.filter(|m| !m.is_empty())
+                        {
                             let significant = modulus.iter().skip_while(|b| **b == 0).count();
                             size_bits = u32::try_from(significant.saturating_mul(8)).ok();
                         }
                     }
                     KeyAlgorithm::Ec | KeyAlgorithm::EcEdwards | KeyAlgorithm::EcMontgomery => {
-                        if let Some(params) = self.attr(handle, cka::EC_PARAMS)?.filter(|p| !p.is_empty()) {
+                        if let Some(params) =
+                            self.attr(handle, cka::EC_PARAMS)?.filter(|p| !p.is_empty())
+                        {
                             curve = r2_core::der::curve_from_oid_der(&params);
                         }
                     }
@@ -622,10 +689,17 @@ impl Pkcs11Provider {
             return Ok(None);
         };
         let code = decode_ulong(&raw);
-        Ok(lookup::CLASS_PREFERENCE.into_iter().find(|class| cko(*class) == code))
+        Ok(lookup::CLASS_PREFERENCE
+            .into_iter()
+            .find(|class| cko(*class) == code))
     }
 
-    fn class_template(&self, key_class: KeyClass, label: &str, key_id: Option<&[u8]>) -> OResult<Vec<RawAttr>> {
+    fn class_template(
+        &self,
+        key_class: KeyClass,
+        label: &str,
+        key_id: Option<&[u8]>,
+    ) -> OResult<Vec<RawAttr>> {
         let mut template = vec![
             (cka::CLASS, Zeroizing::new(ulong_bytes(cko(key_class))?)),
             (cka::LABEL, bytes(label.as_bytes())),
@@ -640,8 +714,11 @@ impl Pkcs11Provider {
     /// wins regardless of `key.handle` (handles renumber across re-login); among twins only
     /// the exact `key.handle` object is acceptable, else AmbiguousKey.
     pub(crate) fn find_handle(&self, key: &KeyInfo) -> OResult<u64> {
-        let template =
-            self.class_template(key.key_class, &key.key_ref.label, key.key_ref.key_id.as_deref())?;
+        let template = self.class_template(
+            key.key_class,
+            &key.key_ref.label,
+            key.key_ref.key_id.as_deref(),
+        )?;
         let handles = self.backend().find_objects(&template)?;
         let display = key.key_ref.display();
         match handles.len() {
@@ -717,11 +794,18 @@ impl Pkcs11Provider {
             if *key_class == KeyClass::Certificate {
                 continue;
             }
-            if !self.identity_twins(*key_class, label, key_id, None)?.is_empty() {
-                return Err(
-                    lookup::duplicate_identity(self.provider_name(), *key_class, label, key_id, false)
-                        .into(),
-                );
+            if !self
+                .identity_twins(*key_class, label, key_id, None)?
+                .is_empty()
+            {
+                return Err(lookup::duplicate_identity(
+                    self.provider_name(),
+                    *key_class,
+                    label,
+                    key_id,
+                    false,
+                )
+                .into());
             }
         }
         Ok(())
@@ -763,12 +847,19 @@ impl Pkcs11Provider {
                 let Some(info) = self.key_info(handle, class)? else {
                     continue;
                 };
-                if selector.handle.is_some_and(|wanted| info.handle != Some(wanted)) {
+                if selector
+                    .handle
+                    .is_some_and(|wanted| info.handle != Some(wanted))
+                {
                     continue;
                 }
                 matches.push(info);
             }
-            Ok(lookup::select_match(self.provider_name(), selector, matches)?)
+            Ok(lookup::select_match(
+                self.provider_name(),
+                selector,
+                matches,
+            )?)
         })
     }
 
@@ -820,7 +911,9 @@ impl Pkcs11Provider {
             self.ensure_identity_free(&[material.key_class], &label, resolved_id.as_deref())?;
             let handle = self.backend().create_object(&attrs)?;
             self.key_info(handle, material.key_class)?.ok_or_else(|| {
-                OpError::Console(ConsoleError::key_not_found(format!("imported object '{label}' vanished")))
+                OpError::Console(ConsoleError::key_not_found(format!(
+                    "imported object '{label}' vanished"
+                )))
             })
         })
     }
@@ -846,7 +939,9 @@ impl Pkcs11Provider {
                     "size_bits",
                 ));
             };
-            if algorithm == KeyAlgorithm::Generic && (size_bits % 8 != 0 || !(8..=8192).contains(&size_bits)) {
+            if algorithm == KeyAlgorithm::Generic
+                && (size_bits % 8 != 0 || !(8..=8192).contains(&size_bits))
+            {
                 return Err(ConsoleError::param(
                     format!(
                         "invalid generic secret size {size_bits}; expected a multiple of 8 between 8 and \
@@ -855,7 +950,10 @@ impl Pkcs11Provider {
                     "size_bits",
                 ));
             }
-            let extra = vec![(cka::VALUE_LEN, self.ulong(u64::from(size_bits / 8), "object creation")?)];
+            let extra = vec![(
+                cka::VALUE_LEN,
+                self.ulong(u64::from(size_bits / 8), "object creation")?,
+            )];
             let attrs = self.build_template(
                 request.template.as_ref(),
                 KeyClass::Secret,
@@ -881,18 +979,28 @@ impl Pkcs11Provider {
             );
             return self.op(&format!("{what} key generation"), || {
                 self.ensure_identity_free(&[KeyClass::Secret], &label, resolved_id.as_deref())?;
-                let handle = self.backend().generate_key(&MechSpec::Plain { ckm: keygen }, &attrs)?;
+                let handle = self
+                    .backend()
+                    .generate_key(&MechSpec::Plain { ckm: keygen }, &attrs)?;
                 self.key_info(handle, KeyClass::Secret)?.ok_or_else(|| {
-                    OpError::Console(ConsoleError::key_not_found(format!("generated key '{label}' vanished")))
+                    OpError::Console(ConsoleError::key_not_found(format!(
+                        "generated key '{label}' vanished"
+                    )))
                 })
             });
         }
         let public_extra: Vec<RawAttr> = if algorithm == KeyAlgorithm::Rsa {
             let Some(size_bits) = request.size_bits else {
-                return Err(ConsoleError::param("size_bits is required for RSA", "size_bits"));
+                return Err(ConsoleError::param(
+                    "size_bits is required for RSA",
+                    "size_bits",
+                ));
             };
             vec![
-                (cka::MODULUS_BITS, self.ulong(u64::from(size_bits), "object creation")?),
+                (
+                    cka::MODULUS_BITS,
+                    self.ulong(u64::from(size_bits), "object creation")?,
+                ),
                 (cka::PUBLIC_EXPONENT, bytes(&[0x01, 0x00, 0x01])),
             ]
         } else {
@@ -903,8 +1011,11 @@ impl Pkcs11Provider {
                 ));
             };
             if !Curve::KNOWN.contains(curve) {
-                return Err(ConsoleError::param(format!("unknown curve {}", py_repr(curve.as_str())), "curve")
-                    .with_hint("valid curves: ed25519, ed448, p256, p384, p521, x25519, x448"));
+                return Err(ConsoleError::param(
+                    format!("unknown curve {}", py_repr(curve.as_str())),
+                    "curve",
+                )
+                .with_hint("valid curves: ed25519, ed448, p256, p384, p521, x25519, x448"));
             }
             if curve.algorithm() != algorithm {
                 return Err(ConsoleError::param(
@@ -966,7 +1077,9 @@ impl Pkcs11Provider {
                 &private_attrs,
             )?;
             self.key_info(private, KeyClass::Private)?.ok_or_else(|| {
-                OpError::Console(ConsoleError::key_not_found(format!("generated key '{label}' vanished")))
+                OpError::Console(ConsoleError::key_not_found(format!(
+                    "generated key '{label}' vanished"
+                )))
             })
         })
     }
@@ -999,14 +1112,15 @@ impl Pkcs11Provider {
             let value = || -> OResult<Option<Zeroizing<Vec<u8>>>> {
                 Ok(self.attr(handle, cka::VALUE)?.filter(|v| !v.is_empty()))
             };
-            let material = |algorithm, key_class, data: Zeroizing<Vec<u8>>, curve, size_bits| KeyMaterial {
-                algorithm,
-                key_class,
-                data,
-                curve,
-                size_bits,
-                label_hint: Some(key.key_ref.label.clone()),
-            };
+            let material =
+                |algorithm, key_class, data: Zeroizing<Vec<u8>>, curve, size_bits| KeyMaterial {
+                    algorithm,
+                    key_class,
+                    data,
+                    curve,
+                    size_bits,
+                    label_hint: Some(key.key_ref.label.clone()),
+                };
             match key.key_class {
                 KeyClass::Data => {
                     let data = value()?.ok_or_else(|| {
@@ -1015,7 +1129,13 @@ impl Pkcs11Provider {
                         ))
                     })?;
                     let bits = u32::try_from(data.len().saturating_mul(8)).ok();
-                    Ok(material(KeyAlgorithm::None, KeyClass::Data, data, None, bits))
+                    Ok(material(
+                        KeyAlgorithm::None,
+                        KeyClass::Data,
+                        data,
+                        None,
+                        bits,
+                    ))
                 }
                 KeyClass::Certificate => {
                     let der = value()?.ok_or_else(|| {
@@ -1023,7 +1143,13 @@ impl Pkcs11Provider {
                             "certificate '{display}' has no readable CKA_VALUE"
                         ))
                     })?;
-                    Ok(material(key.algorithm, KeyClass::Certificate, der, key.curve.clone(), key.size_bits))
+                    Ok(material(
+                        key.algorithm,
+                        KeyClass::Certificate,
+                        der,
+                        key.curve.clone(),
+                        key.size_bits,
+                    ))
                 }
                 KeyClass::Secret => {
                     let data = value()?.ok_or_else(|| refused(&display))?;
@@ -1032,11 +1158,23 @@ impl Pkcs11Provider {
                 }
                 KeyClass::Public => {
                     let der = self.export_public(handle, key)?;
-                    Ok(material(key.algorithm, KeyClass::Public, der, key.curve.clone(), key.size_bits))
+                    Ok(material(
+                        key.algorithm,
+                        KeyClass::Public,
+                        der,
+                        key.curve.clone(),
+                        key.size_bits,
+                    ))
                 }
                 KeyClass::Private => {
                     let der = self.export_private(handle, key)?;
-                    Ok(material(key.algorithm, KeyClass::Private, der, key.curve.clone(), key.size_bits))
+                    Ok(material(
+                        key.algorithm,
+                        KeyClass::Private,
+                        der,
+                        key.curve.clone(),
+                        key.size_bits,
+                    ))
                 }
             }
         })
@@ -1051,9 +1189,14 @@ impl Pkcs11Provider {
         };
         let pkey: PKey<Public> = if key.algorithm == KeyAlgorithm::Rsa {
             let modulus = self.attr(handle, cka::MODULUS)?.filter(|v| !v.is_empty());
-            let exponent = self.attr(handle, cka::PUBLIC_EXPONENT)?.filter(|v| !v.is_empty());
+            let exponent = self
+                .attr(handle, cka::PUBLIC_EXPONENT)?
+                .filter(|v| !v.is_empty());
             let (Some(n), Some(e)) = (modulus, exponent) else {
-                return Err(ConsoleError::key_not_exportable("public RSA attributes unreadable on token").into());
+                return Err(ConsoleError::key_not_exportable(
+                    "public RSA attributes unreadable on token",
+                )
+                .into());
             };
             let rsa = Rsa::from_public_components(
                 BigNum::from_slice(&n).map_err(rebuild)?,
@@ -1064,7 +1207,10 @@ impl Pkcs11Provider {
         } else {
             let point = self.attr(handle, cka::EC_POINT)?.filter(|v| !v.is_empty());
             let (Some(point), Some(curve)) = (point, key.curve.as_ref()) else {
-                return Err(ConsoleError::key_not_exportable("public EC attributes unreadable on token").into());
+                return Err(ConsoleError::key_not_exportable(
+                    "public EC attributes unreadable on token",
+                )
+                .into());
             };
             let raw = r2_core::der::unwrap_octet_string(&point);
             if let Some(nid) = curve_nid(curve) {
@@ -1106,9 +1252,18 @@ impl Pkcs11Provider {
                 let part = self.attr(handle, code)?.filter(|v| !v.is_empty());
                 parts.push(part.ok_or_else(|| refused(&display))?);
             }
-            let bn = |i: usize| BigNum::from_slice(&parts[i]).map_err(rebuild);
-            let rsa = Rsa::from_private_components(bn(0)?, bn(1)?, bn(2)?, bn(3)?, bn(4)?, bn(5)?, bn(6)?, bn(7)?)
-                .map_err(rebuild)?;
+            let bn = |i: usize| secret_bn(&parts[i]).map_err(rebuild);
+            let rsa = Rsa::from_private_components(
+                bn(0)?,
+                bn(1)?,
+                bn(2)?,
+                bn(3)?,
+                bn(4)?,
+                bn(5)?,
+                bn(6)?,
+                bn(7)?,
+            )
+            .map_err(rebuild)?;
             PKey::from_rsa(rsa).map_err(rebuild)?
         } else {
             let value = self.attr(handle, cka::VALUE)?.filter(|v| !v.is_empty());
@@ -1117,18 +1272,23 @@ impl Pkcs11Provider {
             };
             if let Some(nid) = curve_nid(curve) {
                 let group = EcGroup::from_curve_name(nid).map_err(rebuild)?;
-                let ctx = BigNumContext::new().map_err(rebuild)?;
-                let scalar = BigNum::from_slice(&value).map_err(rebuild)?;
+                let mut ctx = BigNumContext::new_secure().map_err(rebuild)?;
+                let scalar = secret_bn(&value).map_err(rebuild)?;
                 let mut point = EcPoint::new(&group).map_err(rebuild)?;
-                point.mul_generator2(&group, &scalar, &ctx).map_err(rebuild)?;
-                let ec = EcKey::from_private_components(&group, &scalar, &point).map_err(rebuild)?;
+                point
+                    .mul_generator2(&group, &scalar, &mut ctx)
+                    .map_err(rebuild)?;
+                let ec =
+                    EcKey::from_private_components(&group, &scalar, &point).map_err(rebuild)?;
                 PKey::from_ec_key(ec).map_err(rebuild)?
             } else {
                 let id = raw_id(curve).ok_or_else(|| refused(&display))?;
                 PKey::private_key_from_raw_bytes(&value, id).map_err(rebuild)?
             }
         };
-        Ok(Zeroizing::new(pkey.private_key_to_pkcs8().map_err(rebuild)?))
+        Ok(Zeroizing::new(
+            pkey.private_key_to_pkcs8().map_err(rebuild)?,
+        ))
     }
 
     // ------------------------------------------------------------------
@@ -1137,10 +1297,17 @@ impl Pkcs11Provider {
 
     /// (handle, created): a CKO_PUBLIC_KEY with the certificate's CKA_ID, else a session
     /// public-key object built from the certificate SPKI (c2 `_public_for_certificate`).
+    #[allow(
+        dead_code,
+        reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
+    )]
     pub(crate) fn public_for_certificate(&self, cert_key: &KeyInfo) -> OResult<(u64, bool)> {
         if let Some(id) = &cert_key.key_ref.key_id {
             let template = vec![
-                (cka::CLASS, Zeroizing::new(ulong_bytes(cko(KeyClass::Public))?)),
+                (
+                    cka::CLASS,
+                    Zeroizing::new(ulong_bytes(cko(KeyClass::Public))?),
+                ),
                 (cka::ID, bytes(id)),
             ];
             // twin publics under one CKA_ID are interchangeable SPKI carriers
@@ -1149,17 +1316,27 @@ impl Pkcs11Provider {
             }
         }
         let cert_handle = self.find_handle(cert_key)?;
-        let der = self.attr(cert_handle, cka::VALUE)?.filter(|v| !v.is_empty()).ok_or_else(|| {
-            ConsoleError::crypto(format!(
-                "certificate '{}' has no readable value",
-                cert_key.key_ref.display()
-            ))
-        })?;
+        let der = self
+            .attr(cert_handle, cka::VALUE)?
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| {
+                ConsoleError::crypto(format!(
+                    "certificate '{}' has no readable value",
+                    cert_key.key_ref.display()
+                ))
+            })?;
         let facts = x509info::cert_facts(&der, Classifier::Pkcs11)?;
-        let rows = material_attrs(&KeyMaterial::new(facts.algorithm, KeyClass::Public, facts.spki_der))?;
+        let rows = material_attrs(&KeyMaterial::new(
+            facts.algorithm,
+            KeyClass::Public,
+            facts.spki_der,
+        ))?;
         let key_type = ckk(facts.algorithm).unwrap_or_default();
         let mut attrs = vec![
-            (cka::CLASS, Zeroizing::new(ulong_bytes(cko(KeyClass::Public))?)),
+            (
+                cka::CLASS,
+                Zeroizing::new(ulong_bytes(cko(KeyClass::Public))?),
+            ),
             (cka::KEY_TYPE, Zeroizing::new(ulong_bytes(key_type)?)),
             (cka::TOKEN, bool_bytes(false)),
             (cka::PRIVATE, bool_bytes(false)),
@@ -1174,6 +1351,10 @@ impl Pkcs11Provider {
 
     /// Run `f` with the operative handle: certificates resolve to their public key, an
     /// on-the-fly session object is destroyed after use (c2 `_with_public_use_handle`).
+    #[allow(
+        dead_code,
+        reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
+    )]
     pub(crate) fn with_public_use_handle<T>(
         &self,
         key: &KeyInfo,
@@ -1197,10 +1378,16 @@ fn refused(display: &str) -> ConsoleError {
 }
 
 /// Certificates stand in for PUBLIC keys only (c2 `_reject_certificate`).
+#[allow(
+    dead_code,
+    reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
+)]
 pub(crate) fn reject_certificate(key: &KeyInfo, verb: &str) -> Result<()> {
     if key.key_class == KeyClass::Certificate {
-        return Err(ConsoleError::unsupported(format!("certificates cannot be used for {verb} (§4.3)"))
-            .with_hint("certificates stand in for PUBLIC keys only (encrypt/verify/wrap)"));
+        return Err(ConsoleError::unsupported(format!(
+            "certificates cannot be used for {verb} (§4.3)"
+        ))
+        .with_hint("certificates stand in for PUBLIC keys only (encrypt/verify/wrap)"));
     }
     Ok(())
 }
@@ -1222,10 +1409,16 @@ pub(crate) fn reject_other_type(key: &KeyInfo, verb: &str) -> Result<()> {
 }
 
 /// DATA and OTHER objects take part in no crypto verb (c2 `_reject_non_key`).
+#[allow(
+    dead_code,
+    reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
+)]
 pub(crate) fn reject_non_key(key: &KeyInfo, verb: &str) -> Result<()> {
     if key.key_class == KeyClass::Data {
-        return Err(ConsoleError::unsupported(format!("data objects cannot be used for {verb} (§4.3)"))
-            .with_hint("data objects hold opaque bytes, not key material — export or copy them"));
+        return Err(ConsoleError::unsupported(format!(
+            "data objects cannot be used for {verb} (§4.3)"
+        ))
+        .with_hint("data objects hold opaque bytes, not key material — export or copy them"));
     }
     reject_other_type(key, verb)
 }

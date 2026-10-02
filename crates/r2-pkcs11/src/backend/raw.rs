@@ -6,6 +6,10 @@
 //! calls with a runtime-length raw mechanism parameter, and `C_WrapKey` with output
 //! truncation. dlopen is refcounted, so the second open maps the module cryptoki already
 //! loaded and initialized.
+#![allow(
+    dead_code,
+    reason = "the crypto/wrap/derive shims are consumed by R5b's verbs"
+)]
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -24,13 +28,20 @@ use zeroize::Zeroizing;
 use super::{BResult, BackendError, Ckr, RawAttr};
 use crate::ckr::rv;
 
-/// A CK_RV of RawFns as a backend error (u64::from: widening).
+/// A CK_RV of RawFns as a backend error (widening, `crate::ulong_to_u64`).
 fn ckr(code: CK_RV, function: &'static str) -> BackendError {
-    BackendError::Ckr(Ckr { code: u64::from(code), function })
+    BackendError::Ckr(Ckr {
+        code: crate::ulong_to_u64(code),
+        function,
+    })
 }
 
 fn check(code: CK_RV, function: &'static str) -> BResult<()> {
-    if u64::from(code) == rv::CKR_OK { Ok(()) } else { Err(ckr(code, function)) }
+    if crate::ulong_to_u64(code) == rv::CKR_OK {
+        Ok(())
+    } else {
+        Err(ckr(code, function))
+    }
 }
 
 /// Checked usize/u64 → CK_ULONG (§4.5.5 narrowing rule).
@@ -41,10 +52,18 @@ pub(crate) fn ulong(value: usize, code: u64, function: &'static str) -> BResult<
 /// A `CK_MECHANISM` whose `pParameter` points at `param` verbatim (empty → NULL, c2 parity).
 /// The result borrows `param` through a raw pointer: build it in the frame of the call.
 pub(crate) fn bytes_mechanism(ckm: u64, param: &[u8]) -> BResult<CK_MECHANISM> {
-    let mechanism = cryptoki_sys::CK_MECHANISM_TYPE::try_from(ckm)
-        .map_err(|_| BackendError::Ckr(Ckr { code: rv::CKR_MECHANISM_INVALID, function: "raw" }))?;
+    let mechanism = cryptoki_sys::CK_MECHANISM_TYPE::try_from(ckm).map_err(|_| {
+        BackendError::Ckr(Ckr {
+            code: rv::CKR_MECHANISM_INVALID,
+            function: "raw",
+        })
+    })?;
     if param.is_empty() {
-        return Ok(CK_MECHANISM { mechanism, pParameter: null_mut(), ulParameterLen: 0 });
+        return Ok(CK_MECHANISM {
+            mechanism,
+            pParameter: null_mut(),
+            ulParameterLen: 0,
+        });
     }
     Ok(CK_MECHANISM {
         mechanism,
@@ -60,7 +79,10 @@ fn raw_template(template: &[RawAttr]) -> BResult<Vec<CK_ATTRIBUTE>> {
         .map(|(kind, value)| {
             Ok(CK_ATTRIBUTE {
                 type_: cryptoki_sys::CK_ATTRIBUTE_TYPE::try_from(*kind).map_err(|_| {
-                    BackendError::Ckr(Ckr { code: rv::CKR_ATTRIBUTE_TYPE_INVALID, function: "raw" })
+                    BackendError::Ckr(Ckr {
+                        code: rv::CKR_ATTRIBUTE_TYPE_INVALID,
+                        function: "raw",
+                    })
                 })?,
                 pValue: value.as_ptr() as *mut c_void,
                 ulValueLen: ulong(value.len(), rv::CKR_ATTRIBUTE_VALUE_INVALID, "raw")?,
@@ -106,8 +128,11 @@ impl RawFns {
         let mut list: *mut CK_FUNCTION_LIST = null_mut();
         // SAFETY: C_GetFunctionList writes one pointer through the valid out-parameter.
         let code = unsafe { lib.C_GetFunctionList(&mut list) };
-        if u64::from(code) != rv::CKR_OK || list.is_null() {
-            return Err(format!("C_GetFunctionList failed (0x{:08X})", u64::from(code)));
+        if crate::ulong_to_u64(code) != rv::CKR_OK || list.is_null() {
+            return Err(format!(
+                "C_GetFunctionList failed (0x{:08X})",
+                crate::ulong_to_u64(code)
+            ));
         }
         Ok(Self { _lib: lib, list })
     }
@@ -115,18 +140,28 @@ impl RawFns {
     /// Unfiltered C_GetMechanismList (cryptoki drops CKMs it has no MechanismType for).
     pub(crate) fn mechanism_list(&self, slot: u64) -> BResult<Vec<u64>> {
         let f = entry!(self, C_GetMechanismList);
-        let slot = CK_SLOT_ID::try_from(slot)
-            .map_err(|_| BackendError::Ckr(Ckr { code: rv::CKR_SLOT_ID_INVALID, function: "C_GetMechanismList" }))?;
+        let slot = CK_SLOT_ID::try_from(slot).map_err(|_| {
+            BackendError::Ckr(Ckr {
+                code: rv::CKR_SLOT_ID_INVALID,
+                function: "C_GetMechanismList",
+            })
+        })?;
         let mut count: CK_ULONG = 0;
         // SAFETY: size query: NULL list pointer and a valid count out-parameter.
-        check(unsafe { f(slot, null_mut(), &mut count) }, "C_GetMechanismList")?;
+        check(
+            unsafe { f(slot, null_mut(), &mut count) },
+            "C_GetMechanismList",
+        )?;
         let mut codes: Vec<cryptoki_sys::CK_MECHANISM_TYPE> =
             vec![0; usize::try_from(count).unwrap_or(0)];
         let mut filled = count;
         // SAFETY: `codes` holds `count` writable entries, announced through `filled`.
-        check(unsafe { f(slot, codes.as_mut_ptr(), &mut filled) }, "C_GetMechanismList")?;
+        check(
+            unsafe { f(slot, codes.as_mut_ptr(), &mut filled) },
+            "C_GetMechanismList",
+        )?;
         codes.truncate(usize::try_from(filled).unwrap_or(0));
-        Ok(codes.into_iter().map(u64::from).collect())
+        Ok(codes.into_iter().map(crate::ulong_to_u64).collect())
     }
 
     /// One attribute, byte level. Ok(None) = sensitive, type-invalid or unavailable.
@@ -138,16 +173,26 @@ impl RawFns {
     ) -> BResult<Option<Zeroizing<Vec<u8>>>> {
         let f = entry!(self, C_GetAttributeValue);
         let type_ = cryptoki_sys::CK_ATTRIBUTE_TYPE::try_from(kind).map_err(|_| {
-            BackendError::Ckr(Ckr { code: rv::CKR_ATTRIBUTE_TYPE_INVALID, function: "C_GetAttributeValue" })
+            BackendError::Ckr(Ckr {
+                code: rv::CKR_ATTRIBUTE_TYPE_INVALID,
+                function: "C_GetAttributeValue",
+            })
         })?;
-        let mut attr = CK_ATTRIBUTE { type_, pValue: null_mut(), ulValueLen: 0 };
+        let mut attr = CK_ATTRIBUTE {
+            type_,
+            pValue: null_mut(),
+            ulValueLen: 0,
+        };
         // SAFETY: size pass: one attribute with a NULL value pointer.
-        let code = u64::from(unsafe { f(session, object, &mut attr, 1) });
+        let code = crate::ulong_to_u64(unsafe { f(session, object, &mut attr, 1) });
         match code {
             rv::CKR_OK => {}
             rv::CKR_ATTRIBUTE_SENSITIVE | rv::CKR_ATTRIBUTE_TYPE_INVALID => return Ok(None),
             other => {
-                return Err(BackendError::Ckr(Ckr { code: other, function: "C_GetAttributeValue" }));
+                return Err(BackendError::Ckr(Ckr {
+                    code: other,
+                    function: "C_GetAttributeValue",
+                }));
             }
         }
         if attr.ulValueLen == CK_UNAVAILABLE_INFORMATION {
@@ -157,12 +202,15 @@ impl RawFns {
         let mut buffer = Zeroizing::new(vec![0u8; len]);
         attr.pValue = buffer.as_mut_ptr() as *mut c_void;
         // SAFETY: value pass: `buffer` holds exactly `ulValueLen` writable bytes.
-        let code = u64::from(unsafe { f(session, object, &mut attr, 1) });
+        let code = crate::ulong_to_u64(unsafe { f(session, object, &mut attr, 1) });
         match code {
             rv::CKR_OK => {}
             rv::CKR_ATTRIBUTE_SENSITIVE | rv::CKR_ATTRIBUTE_TYPE_INVALID => return Ok(None),
             other => {
-                return Err(BackendError::Ckr(Ckr { code: other, function: "C_GetAttributeValue" }));
+                return Err(BackendError::Ckr(Ckr {
+                    code: other,
+                    function: "C_GetAttributeValue",
+                }));
             }
         }
         if attr.ulValueLen == CK_UNAVAILABLE_INFORMATION {
@@ -204,21 +252,30 @@ impl RawFns {
                 // SAFETY: `mech` and its parameter live in the caller's frame for the call.
                 check(unsafe { init(session, &mut mech, key) }, "C_EncryptInit")?;
                 // SAFETY: input/output buffers are valid for the announced lengths.
-                Self::two_call(&|o, n| unsafe { run(session, input, data_len, o, n) }, "C_Encrypt")
+                Self::two_call(
+                    &|o, n| unsafe { run(session, input, data_len, o, n) },
+                    "C_Encrypt",
+                )
             }
             RawOp::Decrypt => {
                 let (init, run) = (entry!(self, C_DecryptInit), entry!(self, C_Decrypt));
                 // SAFETY: as above.
                 check(unsafe { init(session, &mut mech, key) }, "C_DecryptInit")?;
                 // SAFETY: as above.
-                Self::two_call(&|o, n| unsafe { run(session, input, data_len, o, n) }, "C_Decrypt")
+                Self::two_call(
+                    &|o, n| unsafe { run(session, input, data_len, o, n) },
+                    "C_Decrypt",
+                )
             }
             RawOp::Sign => {
                 let (init, run) = (entry!(self, C_SignInit), entry!(self, C_Sign));
                 // SAFETY: as above.
                 check(unsafe { init(session, &mut mech, key) }, "C_SignInit")?;
                 // SAFETY: as above.
-                Self::two_call(&|o, n| unsafe { run(session, input, data_len, o, n) }, "C_Sign")
+                Self::two_call(
+                    &|o, n| unsafe { run(session, input, data_len, o, n) },
+                    "C_Sign",
+                )
             }
         }
     }
@@ -307,7 +364,7 @@ impl RawFns {
             },
             "C_UnwrapKey",
         )?;
-        Ok(u64::from(handle))
+        Ok(crate::ulong_to_u64(handle))
     }
 
     /// C_DeriveKey with a raw mechanism and a raw template.
@@ -325,10 +382,19 @@ impl RawFns {
         let count = ulong(attrs.len(), rv::CKR_TEMPLATE_INCONSISTENT, "raw")?;
         // SAFETY: as for `unwrap`.
         check(
-            unsafe { f(session, &mut mech, base_key, attrs.as_mut_ptr(), count, &mut handle) },
+            unsafe {
+                f(
+                    session,
+                    &mut mech,
+                    base_key,
+                    attrs.as_mut_ptr(),
+                    count,
+                    &mut handle,
+                )
+            },
             "C_DeriveKey",
         )?;
-        Ok(u64::from(handle))
+        Ok(crate::ulong_to_u64(handle))
     }
 }
 
@@ -374,12 +440,15 @@ pub(crate) fn acquire(library: &Path) -> BResult<(PathBuf, Rc<SharedModule>)> {
         module.users.set(module.users.get() + 1);
         return Ok((key, module));
     }
-    let ctx = Pkcs11::new(library).map_err(|e| BackendError::LibraryUnavailable(load_detail(&e)))?;
+    let ctx =
+        Pkcs11::new(library).map_err(|e| BackendError::LibraryUnavailable(load_detail(&e)))?;
     match ctx.initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK)) {
         Ok(()) | Err(Error::Pkcs11(RvError::CryptokiAlreadyInitialized, _)) => {}
         Err(Error::Pkcs11(rv_error, _)) => {
             let code = super::cryptoki::rv_code(&rv_error);
-            return Err(BackendError::LibraryUnavailable(crate::ckr::pykcs11_error_text(code)));
+            return Err(BackendError::LibraryUnavailable(
+                crate::ckr::pykcs11_error_text(code),
+            ));
         }
         Err(other) => return Err(BackendError::LibraryUnavailable(load_detail(&other))),
     }
@@ -390,7 +459,11 @@ pub(crate) fn acquire(library: &Path) -> BResult<(PathBuf, Rc<SharedModule>)> {
             return Err(BackendError::LibraryUnavailable(detail));
         }
     };
-    let module = Rc::new(SharedModule { ctx, raw, users: Cell::new(1) });
+    let module = Rc::new(SharedModule {
+        ctx,
+        raw,
+        users: Cell::new(1),
+    });
     MODULES.with(|m| m.borrow_mut().insert(key.clone(), Rc::clone(&module)));
     tracing::info!(target: "r2::pkcs11", "loaded PKCS#11 library {}", library.display());
     Ok((key, module))

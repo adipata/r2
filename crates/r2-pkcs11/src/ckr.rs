@@ -6,6 +6,10 @@ use crate::backend::BackendError;
 use crate::catalog::ckr_name;
 
 /// CK_RV constants of cryptoki-sys widened to u64 (§4.5.5 narrowing rule).
+#[allow(
+    dead_code,
+    reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
+)]
 pub(crate) mod rv {
     use cryptoki_sys as sys;
     macro_rules! rvs {

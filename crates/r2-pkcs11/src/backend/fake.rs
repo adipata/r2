@@ -17,7 +17,7 @@ use crate::attributes::{decode_ulong, ulong_bytes};
 use crate::ckr::rv;
 
 fn w(code: sys::CK_ULONG) -> u64 {
-    u64::from(code)
+    crate::ulong_to_u64(code)
 }
 
 fn fail(code: u64, function: &'static str) -> BackendError {
@@ -173,7 +173,11 @@ impl FakeBackend {
     /// One slot 0 holding an initialized token (label "fake-token", serial "FAKE0001",
     /// user PIN "1234", SO PIN "4321") and DEFAULT_MECHANISMS.
     pub(crate) fn new() -> Self {
-        Self::with_slots(vec![(0, Self::token("fake-token", "FAKE0001"), DEFAULT_MECHANISMS.to_vec())])
+        Self::with_slots(vec![(
+            0,
+            Self::token("fake-token", "FAKE0001"),
+            DEFAULT_MECHANISMS.to_vec(),
+        )])
     }
 
     /// A RawTokenInfo for `with_slots` (manufacturer "r2", model "FakeBackend",
@@ -212,7 +216,9 @@ impl FakeBackend {
             .collect(),
             ..State::default()
         };
-        Self { state: RefCell::new(state) }
+        Self {
+            state: RefCell::new(state),
+        }
     }
 
     /// Inject `rv` for the next call of the named Backend method (e.g. "login",
@@ -220,9 +226,11 @@ impl FakeBackend {
     pub(crate) fn fail_next(&self, method: &'static str, rv: u64) {
         self.state.borrow_mut().fail_next.push((method, rv));
     }
+    #[allow(dead_code, reason = "failure/state knobs for R5b's verb tests")]
     pub(crate) fn fail_always(&self, method: &'static str, rv: u64) {
         self.state.borrow_mut().fail_always.push((method, rv));
     }
+    #[allow(dead_code, reason = "failure/state knobs for R5b's verb tests")]
     pub(crate) fn clear_failures(&self) {
         let mut state = self.state.borrow_mut();
         state.fail_next.clear();
@@ -238,6 +246,7 @@ impl FakeBackend {
     }
     /// Attribute types that C_SetAttributeValue refuses with CKR_ATTRIBUTE_READ_ONLY
     /// (CKA_SENSITIVE true→false / CKA_EXTRACTABLE false→true one-direction rules are built in).
+    #[allow(dead_code, reason = "failure/state knobs for R5b's verb tests")]
     pub(crate) fn set_read_only(&self, attrs: &[u64]) {
         self.state.borrow_mut().read_only = attrs.iter().copied().collect();
     }
@@ -302,13 +311,22 @@ impl FakeBackend {
         }
     }
     pub(crate) fn is_logged_in(&self, slot: u64) -> bool {
-        self.state.borrow().slots.get(&slot).is_some_and(|t| t.logged_in)
+        self.state
+            .borrow()
+            .slots
+            .get(&slot)
+            .is_some_and(|t| t.logged_in)
     }
     /// The label as C_InitToken stored it (unpadded readback is `token_info`'s job).
     pub(crate) fn raw_label(&self, slot: u64) -> Option<String> {
-        self.state.borrow().slots.get(&slot).map(|t| t.label.clone())
+        self.state
+            .borrow()
+            .slots
+            .get(&slot)
+            .map(|t| t.label.clone())
     }
     /// C_DeriveKey refuses extractable secret templates (§5.10 [U]).
+    #[allow(dead_code, reason = "failure/state knobs for R5b's verb tests")]
     pub(crate) fn set_forbid_extractable_secrets(&self, forbid: bool) {
         self.state.borrow_mut().forbid_extractable_secrets = forbid;
     }
@@ -320,7 +338,11 @@ impl FakeBackend {
         state.next_handle += 1;
         state.objects.insert(
             handle,
-            Object { slot, attrs: attrs.into_iter().collect(), secret: secret.to_vec() },
+            Object {
+                slot,
+                attrs: attrs.into_iter().collect(),
+                secret: secret.to_vec(),
+            },
         );
         handle
     }
@@ -378,13 +400,23 @@ impl FakeBackend {
         let mut state = self.state.borrow_mut();
         state.last_mechanism = Some(spec.clone());
         let code = spec_ckm(spec);
-        let listed = state.slots.get(&slot).is_some_and(|t| t.mechanisms.contains(&code));
+        let listed = state
+            .slots
+            .get(&slot)
+            .is_some_and(|t| t.mechanisms.contains(&code));
         if !listed {
             return Err(fail(rv::CKR_MECHANISM_INVALID, method));
         }
-        if let MechSpec::Oaep { ckm, hash_ckm, mgf, label } = spec
+        if let MechSpec::Oaep {
+            ckm,
+            hash_ckm,
+            mgf,
+            label,
+        } = spec
             && *ckm == w(sys::CKM_RSA_PKCS_OAEP)
-            && (*hash_ckm != w(sys::CKM_SHA_1) || *mgf != w(sys::CKG_MGF1_SHA1) || !label.is_empty())
+            && (*hash_ckm != w(sys::CKM_SHA_1)
+                || *mgf != w(sys::CKG_MGF1_SHA1)
+                || !label.is_empty())
         {
             return Err(fail(rv::CKR_ARGUMENTS_BAD, method));
         }
@@ -396,7 +428,13 @@ impl FakeBackend {
             .borrow()
             .objects
             .get(&handle)
-            .map(|o| if o.secret.is_empty() { vec![0] } else { o.secret.clone() })
+            .map(|o| {
+                if o.secret.is_empty() {
+                    vec![0]
+                } else {
+                    o.secret.clone()
+                }
+            })
             .ok_or_else(|| fail(rv::CKR_KEY_HANDLE_INVALID, method))
     }
 
@@ -404,7 +442,14 @@ impl FakeBackend {
         let mut state = self.state.borrow_mut();
         let handle = state.next_handle;
         state.next_handle += 1;
-        state.objects.insert(handle, Object { slot, attrs, secret });
+        state.objects.insert(
+            handle,
+            Object {
+                slot,
+                attrs,
+                secret,
+            },
+        );
         handle
     }
 
@@ -413,7 +458,9 @@ impl FakeBackend {
     }
 
     fn flag(attrs: &BTreeMap<u64, Vec<u8>>, kind: sys::CK_ATTRIBUTE_TYPE) -> bool {
-        attrs.get(&w(kind)).is_some_and(|v| v.iter().any(|b| *b != 0))
+        attrs
+            .get(&w(kind))
+            .is_some_and(|v| v.iter().any(|b| *b != 0))
     }
 
     fn value_readable(attrs: &BTreeMap<u64, Vec<u8>>) -> bool {
@@ -453,7 +500,10 @@ impl FakeBackend {
         .map(|(_, n)| n);
         if code == w(sys::CKM_AES_CMAC) {
             digest[..16].to_vec()
-        } else if [sys::CKM_ECDSA, sys::CKM_ECDSA_SHA256, sys::CKM_EDDSA].into_iter().any(|c| w(c) == code) {
+        } else if [sys::CKM_ECDSA, sys::CKM_ECDSA_SHA256, sys::CKM_EDDSA]
+            .into_iter()
+            .any(|c| w(c) == code)
+        {
             doubled
         } else if let Some(width) = hmac_width {
             doubled[..width].to_vec()
@@ -470,7 +520,10 @@ impl FakeBackend {
             return Err(fail(rv::CKR_ARGUMENTS_BAD, method));
         }
         let secret = self.secret_of(key, method)?;
-        if let MechSpec::Gcm { iv, aad, tag_bits, .. } = mech {
+        if let MechSpec::Gcm {
+            iv, aad, tag_bits, ..
+        } = mech
+        {
             let tag_len = usize::try_from(*tag_bits / 8).unwrap_or(16);
             let stream_ctx = [b"gcm|".as_slice(), iv].concat();
             if encrypt {
@@ -494,10 +547,13 @@ impl FakeBackend {
             if code == w(sys::CKM_AES_CBC_PAD) {
                 let pad = 16 - payload.len() % 16;
                 payload.extend(std::iter::repeat_n(u8::try_from(pad).unwrap_or(16), pad));
-            } else if code == w(sys::CKM_AES_ECB) && payload.len() % 16 != 0 {
+            } else if code == w(sys::CKM_AES_ECB) && !payload.len().is_multiple_of(16) {
                 return Err(fail(rv::CKR_DATA_LEN_RANGE, method));
             }
-            return Ok(xor(&payload, &keystream(&secret, ctx.as_bytes(), payload.len())));
+            return Ok(xor(
+                &payload,
+                &keystream(&secret, ctx.as_bytes(), payload.len()),
+            ));
         }
         let mut plain = xor(data, &keystream(&secret, ctx.as_bytes(), data.len()));
         if code == w(sys::CKM_AES_CBC_PAD) {
@@ -548,7 +604,10 @@ impl Backend for FakeBackend {
     fn token_info(&self, slot: u64) -> BResult<RawTokenInfo> {
         self.enter("token_info")?;
         let state = self.state.borrow();
-        let token = state.slots.get(&slot).ok_or_else(|| fail(rv::CKR_SLOT_ID_INVALID, "token_info"))?;
+        let token = state
+            .slots
+            .get(&slot)
+            .ok_or_else(|| fail(rv::CKR_SLOT_ID_INVALID, "token_info"))?;
         let trim = |t: &str| t.trim_end_matches(['\0', ' ']).to_string();
         Ok(RawTokenInfo {
             slot_id: slot,
@@ -578,7 +637,10 @@ impl Backend for FakeBackend {
         if !state.slots.contains_key(&slot) {
             return Err(fail(rv::CKR_SLOT_ID_INVALID, "open_session"));
         }
-        state.session = Some(Session { slot, invalidated: false });
+        state.session = Some(Session {
+            slot,
+            invalidated: false,
+        });
         state.sessions_opened += 1;
         Ok(())
     }
@@ -694,9 +756,11 @@ impl Backend for FakeBackend {
             .iter()
             .filter(|(_, o)| o.slot == slot)
             .filter(|(_, o)| {
-                template
-                    .iter()
-                    .all(|(t, v)| o.attrs.get(t).is_some_and(|stored| stored.as_slice() == v.as_slice()))
+                template.iter().all(|(t, v)| {
+                    o.attrs
+                        .get(t)
+                        .is_some_and(|stored| stored.as_slice() == v.as_slice())
+                })
             })
             .map(|(h, _)| *h)
             .collect())
@@ -728,10 +792,14 @@ impl Backend for FakeBackend {
                 return Err(fail(rv::CKR_ATTRIBUTE_READ_ONLY, "set_attrs"));
             }
             let new = value.iter().any(|b| *b != 0);
-            if *code == w(sys::CKA_SENSITIVE) && Self::flag(&obj.attrs, sys::CKA_SENSITIVE) && !new {
+            if *code == w(sys::CKA_SENSITIVE) && Self::flag(&obj.attrs, sys::CKA_SENSITIVE) && !new
+            {
                 return Err(fail(rv::CKR_ATTRIBUTE_READ_ONLY, "set_attrs"));
             }
-            if *code == w(sys::CKA_EXTRACTABLE) && !Self::flag(&obj.attrs, sys::CKA_EXTRACTABLE) && new {
+            if *code == w(sys::CKA_EXTRACTABLE)
+                && !Self::flag(&obj.attrs, sys::CKA_EXTRACTABLE)
+                && new
+            {
                 return Err(fail(rv::CKR_ATTRIBUTE_READ_ONLY, "set_attrs"));
             }
         }
@@ -756,11 +824,18 @@ impl Backend for FakeBackend {
             && !attrs.contains_key(&w(sys::CKA_VALUE_LEN))
         {
             // SoftHSM derives CKA_VALUE_LEN for imported secret keys
-            attrs.insert(w(sys::CKA_VALUE_LEN), ul(u64::try_from(value.len()).unwrap_or(0)));
+            attrs.insert(
+                w(sys::CKA_VALUE_LEN),
+                ul(u64::try_from(value.len()).unwrap_or(0)),
+            );
         }
-        let key_class = [sys::CKO_SECRET_KEY, sys::CKO_PRIVATE_KEY, sys::CKO_PUBLIC_KEY]
-            .into_iter()
-            .any(|c| class == Some(w(c)));
+        let key_class = [
+            sys::CKO_SECRET_KEY,
+            sys::CKO_PRIVATE_KEY,
+            sys::CKO_PUBLIC_KEY,
+        ]
+        .into_iter()
+        .any(|c| class == Some(w(c)));
         if key_class {
             // imported objects: CKA_KEY_GEN_MECHANISM = CK_UNAVAILABLE_INFORMATION (SoftHSM)
             attrs
@@ -830,7 +905,10 @@ impl Backend for FakeBackend {
             pub_attrs.insert(*code, value.clone());
             priv_attrs.insert(*code, value.clone());
         }
-        pub_attrs.insert(w(sys::CKA_EC_POINT), r2_core::der::wrap_octet_string(&point));
+        pub_attrs.insert(
+            w(sys::CKA_EC_POINT),
+            r2_core::der::wrap_octet_string(&point),
+        );
         let public_handle = self.store(slot, pub_attrs, secret.clone());
         let private_handle = self.store(slot, priv_attrs, secret);
         Ok((public_handle, private_handle))
@@ -845,7 +923,10 @@ impl Backend for FakeBackend {
         self.require_mechanism(slot, mech, "encrypt_multipart")?;
         let data = parts.concat();
         let secret = self.secret_of(key, "encrypt_multipart")?;
-        if let MechSpec::Gcm { iv, aad, tag_bits, .. } = mech {
+        if let MechSpec::Gcm {
+            iv, aad, tag_bits, ..
+        } = mech
+        {
             let tag_len = usize::try_from(*tag_bits / 8).unwrap_or(16);
             let stream_ctx = [b"gcm|".as_slice(), iv].concat();
             let mut out = xor(&data, &keystream(&secret, &stream_ctx, data.len()));
@@ -890,7 +971,11 @@ impl Backend for FakeBackend {
             Some(v) if !v.is_empty() => v.clone(),
             _ => target.secret.clone(),
         };
-        let stream = keystream(&self.secret_of(wrapping_key, "wrap_key")?, format!("wrap|{code}").as_bytes(), value.len());
+        let stream = keystream(
+            &self.secret_of(wrapping_key, "wrap_key")?,
+            format!("wrap|{code}").as_bytes(),
+            value.len(),
+        );
         Ok(xor(&value, &stream))
     }
 
@@ -922,7 +1007,9 @@ impl Backend for FakeBackend {
             _ => Vec::new(),
         };
         let mut attrs = Self::attr_map(template);
-        if self.state.borrow().forbid_extractable_secrets && Self::flag(&attrs, sys::CKA_EXTRACTABLE) {
+        if self.state.borrow().forbid_extractable_secrets
+            && Self::flag(&attrs, sys::CKA_EXTRACTABLE)
+        {
             return Err(fail(rv::CKR_TEMPLATE_INCONSISTENT, "derive_key"));
         }
         let length = attrs

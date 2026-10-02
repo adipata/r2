@@ -30,7 +30,6 @@ const CKA_SUBJECT: u64 = 0x0101;
 const CKA_ID: u64 = 0x0102;
 const CKA_SENSITIVE: u64 = 0x0103;
 const CKA_WRAP: u64 = 0x0106;
-const CKA_MODULUS: u64 = 0x0120;
 const CKA_VALUE_LEN: u64 = 0x0161;
 const CKA_EXTRACTABLE: u64 = 0x0162;
 const CKA_KEY_GEN_MECHANISM: u64 = 0x0166;
@@ -74,7 +73,10 @@ fn data() -> KeyMaterial {
 fn cert_material(cn: &str) -> (KeyMaterial, Vec<u8>) {
     let pkcs8 = r2_testkit::fixtures::rsa2048_pkcs8();
     let der = r2_testkit::fixtures::self_signed_cert(&pkcs8, cn);
-    (KeyMaterial::new(KeyAlgorithm::Rsa, KeyClass::Certificate, der.clone()), der)
+    (
+        KeyMaterial::new(KeyAlgorithm::Rsa, KeyClass::Certificate, der.clone()),
+        der,
+    )
 }
 
 fn sel(label: &str) -> KeySelector {
@@ -109,7 +111,9 @@ fn enabled_only_and_disabled_omitted() {
         boolean("CKA_SENSITIVE", true),
         boolean("CKA_EXTRACTABLE", false),
     ]);
-    provider.import_key(&aes(), "conv-1", Some(&template), Some(b"\x0a")).unwrap();
+    provider
+        .import_key(&aes(), "conv-1", Some(&template), Some(b"\x0a"))
+        .unwrap();
     let obj = object_of(&backend, "conv-1");
     assert!(!obj.contains_key(&CKA_WRAP)); // disabled → OMITTED from the call (§4.7)
     assert_eq!(obj[&CKA_TOKEN], [1]);
@@ -126,7 +130,9 @@ fn enabled_only_and_disabled_omitted() {
 fn locked_class_mismatch_rejected() {
     let (_backend, provider) = logged_in();
     let template = tpl(vec![ulong_attr("CKA_CLASS", symbol("CKO_PRIVATE_KEY"))]);
-    let err = provider.import_key(&aes(), "conv-2", Some(&template), None).unwrap_err();
+    let err = provider
+        .import_key(&aes(), "conv-2", Some(&template), None)
+        .unwrap_err();
     assert_eq!(param_name(&err), Some("CKA_CLASS"));
     assert_eq!(
         err.message,
@@ -138,7 +144,9 @@ fn locked_class_mismatch_rejected() {
 fn locked_key_type_mismatch_rejected() {
     let (_backend, provider) = logged_in();
     let template = tpl(vec![ulong_attr("CKA_KEY_TYPE", symbol("CKK_RSA"))]);
-    let err = provider.import_key(&aes(), "conv-3", Some(&template), None).unwrap_err();
+    let err = provider
+        .import_key(&aes(), "conv-3", Some(&template), None)
+        .unwrap_err();
     assert_eq!(param_name(&err), Some("CKA_KEY_TYPE"));
     assert_eq!(
         err.message,
@@ -149,8 +157,13 @@ fn locked_key_type_mismatch_rejected() {
 #[test]
 fn unknown_symbol_is_a_param_error() {
     let (_backend, provider) = logged_in();
-    let template = tpl(vec![ulong_attr("CKA_KEY_GEN_MECHANISM", symbol("CKM_NOPE"))]);
-    let err = provider.import_key(&aes(), "conv-x", Some(&template), None).unwrap_err();
+    let template = tpl(vec![ulong_attr(
+        "CKA_KEY_GEN_MECHANISM",
+        symbol("CKM_NOPE"),
+    )]);
+    let err = provider
+        .import_key(&aes(), "conv-x", Some(&template), None)
+        .unwrap_err();
     assert_eq!(err.message, "unknown PKCS#11 constant 'CKM_NOPE'");
     assert_eq!(param_name(&err), Some("CKM_NOPE"));
     assert_eq!(
@@ -164,8 +177,13 @@ fn str_constant_row_converts_for_ulong_attrs() {
     // §4.7 test vector: CKA_KEY_GEN_MECHANISM: CKM_AES_KEY_GEN (a STR row) → 0x1080
     let (backend, provider) = logged_in();
     let template = tpl(vec![str_attr("CKA_KEY_GEN_MECHANISM", "CKM_AES_KEY_GEN")]);
-    provider.import_key(&aes(), "conv-y", Some(&template), None).unwrap();
-    assert_eq!(object_of(&backend, "conv-y")[&CKA_KEY_GEN_MECHANISM], ul(0x1080));
+    provider
+        .import_key(&aes(), "conv-y", Some(&template), None)
+        .unwrap();
+    assert_eq!(
+        object_of(&backend, "conv-y")[&CKA_KEY_GEN_MECHANISM],
+        ul(0x1080)
+    );
 }
 
 #[test]
@@ -179,8 +197,13 @@ fn import_defaults_exportable_when_template_silent() {
     assert!(info.exportable);
     assert_eq!(info.size_bits, Some(256));
     // explicit template rows are NOT overridden
-    let template = tpl(vec![boolean("CKA_SENSITIVE", true), boolean("CKA_EXTRACTABLE", true)]);
-    let info2 = provider.import_key(&aes(), "conv-5", Some(&template), None).unwrap();
+    let template = tpl(vec![
+        boolean("CKA_SENSITIVE", true),
+        boolean("CKA_EXTRACTABLE", true),
+    ]);
+    let info2 = provider
+        .import_key(&aes(), "conv-5", Some(&template), None)
+        .unwrap();
     assert!(!info2.exportable); // sensitive wins (§5.5)
     let expected = BTreeMap::from([
         ("CKA_EXTRACTABLE".to_string(), AttrValue::Bool(true)),
@@ -195,12 +218,19 @@ fn vendor_attribute_byte_encoded() {
     let mut custom = IndexMap::new();
     custom.insert(
         "CKA_ACME_USAGE".to_string(),
-        CustomAttributeDef { code: 0x8000_0101, kind: AttrKind::Ulong },
+        CustomAttributeDef {
+            code: 0x8000_0101,
+            kind: AttrKind::Ulong,
+        },
     );
     let provider = provider_with(&backend, BTreeMap::new(), custom);
-    provider.login(&token_at(&provider, 0), &pin(USER_PIN), false).unwrap();
+    provider
+        .login(&token_at(&provider, 0), &pin(USER_PIN), false)
+        .unwrap();
     let template = tpl(vec![ulong_attr("CKA_ACME_USAGE", AttrValue::Ulong(7))]);
-    provider.import_key(&aes(), "conv-6", Some(&template), None).unwrap();
+    provider
+        .import_key(&aes(), "conv-6", Some(&template), None)
+        .unwrap();
     // vendor codes go over the wire as native-endian CK_ULONG bytes
     assert_eq!(object_of(&backend, "conv-6")[&0x8000_0101], ul(7));
 }
@@ -216,7 +246,9 @@ fn certificate_template_drops_key_type() {
         ulong_attr("CKA_KEY_TYPE", symbol("CKK_RSA")),
         boolean("CKA_TOKEN", true),
     ]);
-    let info = provider.import_key(&material, "cert-1", Some(&template), None).unwrap();
+    let info = provider
+        .import_key(&material, "cert-1", Some(&template), None)
+        .unwrap();
     let obj = object_of(&backend, "cert-1");
     assert!(!obj.contains_key(&CKA_KEY_TYPE)); // ignored for cert objects
     assert_eq!(obj[&CKA_CLASS], ul(CKO_CERTIFICATE));
@@ -239,8 +271,13 @@ fn certificate_template_drops_key_type() {
 fn certificate_category_round_trips_through_the_byte_path() {
     let (backend, provider) = logged_in();
     let (material, _der) = cert_material("crt");
-    let template = tpl(vec![ulong_attr("CKA_CERTIFICATE_CATEGORY", AttrValue::Ulong(1))]);
-    provider.import_key(&material, "crt", Some(&template), None).unwrap();
+    let template = tpl(vec![ulong_attr(
+        "CKA_CERTIFICATE_CATEGORY",
+        AttrValue::Ulong(1),
+    )]);
+    provider
+        .import_key(&material, "crt", Some(&template), None)
+        .unwrap();
     assert_eq!(object_of(&backend, "crt")[&CKA_CERTIFICATE_CATEGORY], ul(1));
 }
 
@@ -248,9 +285,16 @@ fn certificate_category_round_trips_through_the_byte_path() {
 fn certificate_material_must_be_der() {
     let (_backend, provider) = logged_in();
     let material = KeyMaterial::new(KeyAlgorithm::Rsa, KeyClass::Certificate, b"junk".to_vec());
-    let err = provider.import_key(&material, "bad-cert", None, None).unwrap_err();
+    let err = provider
+        .import_key(&material, "bad-cert", None, None)
+        .unwrap_err();
     assert_eq!(err.kind, ErrorKind::KeyParse);
-    assert!(err.message.starts_with("certificate material is not DER X.509: "), "{}", err.message);
+    assert!(
+        err.message
+            .starts_with("certificate material is not DER X.509: "),
+        "{}",
+        err.message
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -262,7 +306,9 @@ fn rsa_private_material_carries_the_full_crt_set_and_exports_back() {
     let (backend, provider) = logged_in();
     let pkcs8 = r2_testkit::fixtures::rsa2048_pkcs8();
     let material = KeyMaterial::new(KeyAlgorithm::Rsa, KeyClass::Private, pkcs8.clone());
-    let info = provider.import_key(&material, "rsa-imp", Some(&exportable()), None).unwrap();
+    let info = provider
+        .import_key(&material, "rsa-imp", Some(&exportable()), None)
+        .unwrap();
     let obj = object_of(&backend, "rsa-imp");
     for code in [0x120u64, 0x122, 0x123, 0x124, 0x125, 0x126, 0x127, 0x128] {
         assert!(obj.contains_key(&code), "missing 0x{code:x}");
@@ -277,7 +323,9 @@ fn ec_material_injects_params_point_and_fixed_width_scalar() {
     let (backend, provider) = logged_in();
     let pkcs8 = r2_testkit::fixtures::ec_p256_pkcs8();
     let private = KeyMaterial::new(KeyAlgorithm::Ec, KeyClass::Private, pkcs8.clone());
-    let info = provider.import_key(&private, "ec-imp", Some(&exportable()), None).unwrap();
+    let info = provider
+        .import_key(&private, "ec-imp", Some(&exportable()), None)
+        .unwrap();
     let obj = object_of(&backend, "ec-imp");
     assert_eq!(obj[&CKA_EC_PARAMS], hex_bytes("06082a8648ce3d030107"));
     assert_eq!(obj[&CKA_VALUE].len(), 32);
@@ -299,7 +347,9 @@ fn ed25519_material_round_trips() {
     let (backend, provider) = logged_in();
     let pkcs8 = r2_testkit::fixtures::ed25519_pkcs8();
     let material = KeyMaterial::new(KeyAlgorithm::EcEdwards, KeyClass::Private, pkcs8.clone());
-    let info = provider.import_key(&material, "ed-imp", Some(&exportable()), None).unwrap();
+    let info = provider
+        .import_key(&material, "ed-imp", Some(&exportable()), None)
+        .unwrap();
     let obj = object_of(&backend, "ed-imp");
     assert_eq!(obj[&CKA_EC_PARAMS], hex_bytes("06032b6570"));
     assert_eq!(obj[&CKA_VALUE].len(), 32);
@@ -332,7 +382,9 @@ fn generate_aes_passes_value_len() {
 #[test]
 fn generate_aes_requires_size() {
     let (_backend, provider) = logged_in();
-    let err = provider.generate_key(&generate(KeyAlgorithm::Aes, "gen-bad")).unwrap_err();
+    let err = provider
+        .generate_key(&generate(KeyAlgorithm::Aes, "gen-bad"))
+        .unwrap_err();
     assert_eq!(err.message, "size_bits is required for aes");
     assert_eq!(param_name(&err), Some("size_bits"));
 }
@@ -340,7 +392,9 @@ fn generate_aes_requires_size() {
 #[test]
 fn generate_keypair_shares_label_and_id() {
     let (_backend, provider) = logged_in();
-    let info = provider.generate_key(&with_size(generate(KeyAlgorithm::Rsa, "gen-rsa"), 2048)).unwrap();
+    let info = provider
+        .generate_key(&with_size(generate(KeyAlgorithm::Rsa, "gen-rsa"), 2048))
+        .unwrap();
     assert_eq!(info.key_class, KeyClass::Private);
     assert_eq!(info.size_bits, Some(2048));
     let publics: Vec<KeyInfo> = provider
@@ -357,24 +411,34 @@ fn generate_keypair_shares_label_and_id() {
 #[test]
 fn generate_rsa_requires_size() {
     let (_backend, provider) = logged_in();
-    let err = provider.generate_key(&generate(KeyAlgorithm::Rsa, "r")).unwrap_err();
+    let err = provider
+        .generate_key(&generate(KeyAlgorithm::Rsa, "r"))
+        .unwrap_err();
     assert_eq!(err.message, "size_bits is required for RSA");
 }
 
 #[test]
 fn generate_ec_curve_checks() {
     let (_backend, provider) = logged_in();
-    let err = provider.generate_key(&generate(KeyAlgorithm::Ec, "no-curve")).unwrap_err();
+    let err = provider
+        .generate_key(&generate(KeyAlgorithm::Ec, "no-curve"))
+        .unwrap_err();
     assert_eq!(err.message, "curve is required for ec");
     let mut bad = generate(KeyAlgorithm::Ec, "bad-curve");
     bad.curve = Some(Curve::Other("p999".into()));
     let err = provider.generate_key(&bad).unwrap_err();
     assert_eq!(err.message, "unknown curve 'p999'");
-    assert_eq!(err.hint.as_deref(), Some("valid curves: ed25519, ed448, p256, p384, p521, x25519, x448"));
+    assert_eq!(
+        err.hint.as_deref(),
+        Some("valid curves: ed25519, ed448, p256, p384, p521, x25519, x448")
+    );
     let mut mismatch = generate(KeyAlgorithm::Ec, "mismatch");
     mismatch.curve = Some(Curve::Ed25519);
     let err = provider.generate_key(&mismatch).unwrap_err();
-    assert_eq!(err.message, "curve 'ed25519' does not belong to algorithm ec");
+    assert_eq!(
+        err.message,
+        "curve 'ed25519' does not belong to algorithm ec"
+    );
     assert_eq!(param_name(&err), Some("curve"));
 }
 
@@ -389,7 +453,10 @@ fn generate_ec_injects_params_into_public_template() {
         .objects()
         .into_iter()
         .map(|(_, a)| a)
-        .find(|a| a.get(&CKA_LABEL).map(Vec::as_slice) == Some(b"gen-ec") && a[&CKA_CLASS] == ul(CKO_PUBLIC_KEY))
+        .find(|a| {
+            a.get(&CKA_LABEL).map(Vec::as_slice) == Some(b"gen-ec")
+                && a[&CKA_CLASS] == ul(CKO_PUBLIC_KEY)
+        })
         .unwrap();
     assert_eq!(public[&CKA_EC_PARAMS], hex_bytes("06052b81040022"));
 }
@@ -413,8 +480,14 @@ fn generate_explicit_id_conflicting_with_template_rejected() {
     request.template = Some(tpl(vec![bytes_attr("CKA_ID", b"\xc0\xfe")]));
     let err = provider.generate_key(&request).unwrap_err();
     assert_eq!(param_name(&err), Some("CKA_ID"));
-    assert_eq!(err.message, "template CKA_ID 0xc0fe conflicts with --id 0x0a0b");
-    assert_eq!(err.hint.as_deref(), Some("drop one of the two — they must agree"));
+    assert_eq!(
+        err.message,
+        "template CKA_ID 0xc0fe conflicts with --id 0x0a0b"
+    );
+    assert_eq!(
+        err.hint.as_deref(),
+        Some("drop one of the two — they must agree")
+    );
 }
 
 #[test]
@@ -423,7 +496,10 @@ fn generate_explicit_id_agreeing_with_template_ok() {
     let mut request = with_size(generate(KeyAlgorithm::Aes, "id-agree"), 128);
     request.key_id = Some(vec![0x0a]);
     request.template = Some(tpl(vec![bytes_attr("CKA_ID", b"\x0a")]));
-    assert_eq!(provider.generate_key(&request).unwrap().key_ref.key_id, Some(vec![0x0a]));
+    assert_eq!(
+        provider.generate_key(&request).unwrap().key_ref.key_id,
+        Some(vec![0x0a])
+    );
 }
 
 #[test]
@@ -463,35 +539,58 @@ fn generate_template_label_overrides_argument() {
 fn import_honors_template_id() {
     let (_backend, provider) = logged_in();
     let template = tpl(vec![bytes_attr("CKA_ID", b"\xc0\xfe")]);
-    let info = provider.import_key(&aes(), "id-import", Some(&template), None).unwrap();
+    let info = provider
+        .import_key(&aes(), "id-import", Some(&template), None)
+        .unwrap();
     assert_eq!(info.key_ref.key_id, Some(vec![0xc0, 0xfe]));
 }
 
 #[test]
 fn find_ambiguity_and_delete() {
     let (_backend, provider) = logged_in();
-    provider.import_key(&aes(), "dup", None, Some(b"\x01")).unwrap();
-    provider.import_key(&aes(), "dup", None, Some(b"\x02")).unwrap();
+    provider
+        .import_key(&aes(), "dup", None, Some(b"\x01"))
+        .unwrap();
+    provider
+        .import_key(&aes(), "dup", None, Some(b"\x02"))
+        .unwrap();
     let err = provider.find_key(&sel("dup")).unwrap_err();
     assert_eq!(err.candidates().map(<[_]>::len), Some(2));
-    assert_eq!(err.message, "'dup' matches 2 keys on hsm: hsm:dup#01, hsm:dup#02");
-    let by_id = provider.find_key(&sel("dup").with_id(Some(vec![2]))).unwrap();
+    assert_eq!(
+        err.message,
+        "'dup' matches 2 keys on hsm: hsm:dup#01, hsm:dup#02"
+    );
+    let by_id = provider
+        .find_key(&sel("dup").with_id(Some(vec![2])))
+        .unwrap();
     provider.delete_key(&by_id).unwrap();
-    assert_eq!(provider.find_key(&sel("dup")).unwrap().key_ref.key_id, Some(vec![1]));
+    assert_eq!(
+        provider.find_key(&sel("dup")).unwrap().key_ref.key_id,
+        Some(vec![1])
+    );
 }
 
 #[test]
 fn keypair_family_prefers_private() {
     let (_backend, provider) = logged_in();
-    provider.generate_key(&with_size(generate(KeyAlgorithm::Rsa, "fam"), 2048)).unwrap();
-    assert_eq!(provider.find_key(&sel("fam")).unwrap().key_class, KeyClass::Private);
+    provider
+        .generate_key(&with_size(generate(KeyAlgorithm::Rsa, "fam"), 2048))
+        .unwrap();
+    assert_eq!(
+        provider.find_key(&sel("fam")).unwrap().key_class,
+        KeyClass::Private
+    );
 }
 
 #[test]
 fn find_key_class_selector_targets_half() {
     let (_backend, provider) = logged_in();
-    provider.generate_key(&with_size(generate(KeyAlgorithm::Rsa, "fam2"), 2048)).unwrap();
-    let public = provider.find_key(&sel("fam2").with_class(Some(KeyClass::Public))).unwrap();
+    provider
+        .generate_key(&with_size(generate(KeyAlgorithm::Rsa, "fam2"), 2048))
+        .unwrap();
+    let public = provider
+        .find_key(&sel("fam2").with_class(Some(KeyClass::Public)))
+        .unwrap();
     assert_eq!(public.key_class, KeyClass::Public);
     let err = provider
         .find_key(&sel("fam2").with_class(Some(KeyClass::Certificate)))
@@ -505,10 +604,16 @@ fn find_key_handle_selects_among_identical_objects() {
     // §4.3 '@<handle>': same label+id+class twins — only the handle picks one; the twin
     // comes from an external writer (the provider's own guard refuses it)
     let (backend, provider) = logged_in();
-    let first = provider.import_key(&aes(), "twin", None, Some(b"\x0a")).unwrap();
+    let first = provider
+        .import_key(&aes(), "twin", None, Some(b"\x0a"))
+        .unwrap();
     let wanted = backend.clone_object(first.handle.unwrap(), None);
     let picked = provider
-        .find_key(&sel("twin").with_class(Some(KeyClass::Secret)).with_handle(Some(wanted)))
+        .find_key(
+            &sel("twin")
+                .with_class(Some(KeyClass::Secret))
+                .with_handle(Some(wanted)),
+        )
         .unwrap();
     assert_eq!(picked.handle, Some(wanted));
 }
@@ -517,19 +622,35 @@ fn find_key_handle_selects_among_identical_objects() {
 fn key_info_carries_the_numeric_handle() {
     // c2 test_key_info_handle_is_a_plain_int: every KeyInfo from import/list_keys has Some(handle)
     let (_backend, provider) = logged_in();
-    let info = provider.import_key(&aes(), "plainhandle", None, None).unwrap();
+    let info = provider
+        .import_key(&aes(), "plainhandle", None, None)
+        .unwrap();
     assert!(info.handle.is_some());
-    assert!(provider.list_keys().unwrap().iter().all(|k| k.handle.is_some()));
+    assert!(
+        provider
+            .list_keys()
+            .unwrap()
+            .iter()
+            .all(|k| k.handle.is_some())
+    );
 }
 
 #[test]
 fn export_refused_for_non_exportable() {
     let (_backend, provider) = logged_in();
-    let template = tpl(vec![boolean("CKA_SENSITIVE", true), boolean("CKA_EXTRACTABLE", false)]);
-    let info = provider.import_key(&aes(), "noexp", Some(&template), None).unwrap();
+    let template = tpl(vec![
+        boolean("CKA_SENSITIVE", true),
+        boolean("CKA_EXTRACTABLE", false),
+    ]);
+    let info = provider
+        .import_key(&aes(), "noexp", Some(&template), None)
+        .unwrap();
     let err = provider.export_key(&info).unwrap_err();
     assert_eq!(err.kind, ErrorKind::KeyNotExportable);
-    assert_eq!(err.message, format!("key '{}' is not exportable", info.key_ref.display()));
+    assert_eq!(
+        err.message,
+        format!("key '{}' is not exportable", info.key_ref.display())
+    );
     assert_eq!(
         err.hint.as_deref(),
         Some("CKA_SENSITIVE/CKA_EXTRACTABLE forbid a plain-value read (§5.5)")
@@ -566,7 +687,9 @@ fn list_keys_orders_by_class_then_creation() {
     let (cert, _) = cert_material("c");
     provider.import_key(&data(), "d", None, None).unwrap();
     provider.import_key(&cert, "c", None, None).unwrap();
-    provider.generate_key(&with_size(generate(KeyAlgorithm::Rsa, "k"), 2048)).unwrap();
+    provider
+        .generate_key(&with_size(generate(KeyAlgorithm::Rsa, "k"), 2048))
+        .unwrap();
     provider.import_key(&aes(), "s2", None, None).unwrap();
     provider.import_key(&aes(), "s1", None, None).unwrap();
     let order: Vec<(String, KeyClass)> = provider
@@ -596,9 +719,14 @@ fn list_keys_orders_by_class_then_creation() {
 fn delete_with_twins_and_stale_handle_raises_and_destroys_nothing() {
     for stale_handle in [Some(9999), None] {
         let (backend, provider) = logged_in();
-        let info = provider.import_key(&aes(), "twin", None, Some(b"\x0a")).unwrap();
+        let info = provider
+            .import_key(&aes(), "twin", None, Some(b"\x0a"))
+            .unwrap();
         backend.clone_object(info.handle.unwrap(), None);
-        let stale = KeyInfo { handle: stale_handle, ..info };
+        let stale = KeyInfo {
+            handle: stale_handle,
+            ..info
+        };
         let before = backend.objects();
         let err = provider.delete_key(&stale).unwrap_err();
         assert!(matches!(err.kind, ErrorKind::AmbiguousKey { .. }));
@@ -609,10 +737,16 @@ fn delete_with_twins_and_stale_handle_raises_and_destroys_nothing() {
 #[test]
 fn delete_with_twins_targets_selected_twin() {
     let (backend, provider) = logged_in();
-    let first = provider.import_key(&aes(), "twin", None, Some(b"\x0a")).unwrap();
+    let first = provider
+        .import_key(&aes(), "twin", None, Some(b"\x0a"))
+        .unwrap();
     let clone = backend.clone_object(first.handle.unwrap(), None);
     let picked = provider
-        .find_key(&sel("twin").with_class(Some(KeyClass::Secret)).with_handle(Some(clone)))
+        .find_key(
+            &sel("twin")
+                .with_class(Some(KeyClass::Secret))
+                .with_handle(Some(clone)),
+        )
         .unwrap();
     provider.delete_key(&picked).unwrap();
     let handles: Vec<u64> = backend.objects().into_iter().map(|(h, _)| h).collect();
@@ -624,32 +758,57 @@ fn delete_with_twins_targets_selected_twin() {
 fn export_with_twins_returns_selected_twins_value() {
     let (backend, provider) = logged_in();
     let other_value: Vec<u8> = (32u8..64).collect();
-    let first = provider.import_key(&aes(), "twin", None, Some(b"\x0a")).unwrap();
+    let first = provider
+        .import_key(&aes(), "twin", None, Some(b"\x0a"))
+        .unwrap();
     let clone = backend.clone_object(first.handle.unwrap(), Some(&other_value));
-    let secret = |handle| sel("twin").with_class(Some(KeyClass::Secret)).with_handle(Some(handle));
+    let secret = |handle| {
+        sel("twin")
+            .with_class(Some(KeyClass::Secret))
+            .with_handle(Some(handle))
+    };
     let original = provider.find_key(&secret(first.handle.unwrap())).unwrap();
     let picked = provider.find_key(&secret(clone)).unwrap();
-    assert_eq!(provider.export_key(&original).unwrap().data.to_vec(), aes_key());
-    assert_eq!(provider.export_key(&picked).unwrap().data.to_vec(), other_value);
+    assert_eq!(
+        provider.export_key(&original).unwrap().data.to_vec(),
+        aes_key()
+    );
+    assert_eq!(
+        provider.export_key(&picked).unwrap().data.to_vec(),
+        other_value
+    );
 }
 
 #[test]
 fn single_match_with_stale_handle_still_succeeds() {
     // handles legitimately renumber across re-login — a single match wins
     let (_backend, provider) = logged_in();
-    let info = provider.import_key(&aes(), "solo", None, Some(b"\x05")).unwrap();
-    let stale = KeyInfo { handle: Some(424_242), ..info };
+    let info = provider
+        .import_key(&aes(), "solo", None, Some(b"\x05"))
+        .unwrap();
+    let stale = KeyInfo {
+        handle: Some(424_242),
+        ..info
+    };
     provider.delete_key(&stale).unwrap();
-    assert_eq!(provider.find_key(&sel("solo")).unwrap_err().kind, ErrorKind::KeyNotFound);
+    assert_eq!(
+        provider.find_key(&sel("solo")).unwrap_err().kind,
+        ErrorKind::KeyNotFound
+    );
 }
 
 #[test]
 fn twin_ambiguity_lists_handle_suffixed_candidates() {
     let (backend, provider) = logged_in();
-    let first = provider.import_key(&aes(), "twin", None, Some(b"\x0a")).unwrap();
+    let first = provider
+        .import_key(&aes(), "twin", None, Some(b"\x0a"))
+        .unwrap();
     let first_handle = first.handle.unwrap();
     let clone = backend.clone_object(first_handle, None);
-    let blind = KeyInfo { handle: None, ..first };
+    let blind = KeyInfo {
+        handle: None,
+        ..first
+    };
     let err = provider.export_key(&blind).unwrap_err();
     assert_eq!(err.candidates().map(<[_]>::len), Some(2));
     assert_eq!(
@@ -672,11 +831,18 @@ fn twin_ambiguity_lists_handle_suffixed_candidates() {
 #[test]
 fn import_duplicate_identity_refused() {
     let (backend, provider) = logged_in();
-    provider.import_key(&aes(), "dup-g", None, Some(b"\x01")).unwrap();
+    provider
+        .import_key(&aes(), "dup-g", None, Some(b"\x01"))
+        .unwrap();
     let before = backend.objects().len();
-    let err = provider.import_key(&aes(), "dup-g", None, Some(b"\x01")).unwrap_err();
+    let err = provider
+        .import_key(&aes(), "dup-g", None, Some(b"\x01"))
+        .unwrap_err();
     assert_eq!(err.kind, ErrorKind::DuplicateKey);
-    assert_eq!(err.message, "a secret object with label 'dup-g' and id 0x01 already exists on hsm");
+    assert_eq!(
+        err.message,
+        "a secret object with label 'dup-g' and id 0x01 already exists on hsm"
+    );
     assert_eq!(
         err.hint.as_deref(),
         Some("pick a different --id or label, or delete the existing object first")
@@ -687,18 +853,27 @@ fn import_duplicate_identity_refused() {
 #[test]
 fn import_same_label_different_id_allowed() {
     let (_backend, provider) = logged_in();
-    provider.import_key(&aes(), "dup-ok", None, Some(b"\x01")).unwrap();
-    let info = provider.import_key(&aes(), "dup-ok", None, Some(b"\x02")).unwrap();
+    provider
+        .import_key(&aes(), "dup-ok", None, Some(b"\x01"))
+        .unwrap();
+    let info = provider
+        .import_key(&aes(), "dup-ok", None, Some(b"\x02"))
+        .unwrap();
     assert_eq!(info.key_ref.key_id, Some(vec![2]));
 }
 
 #[test]
 fn generate_over_existing_identity_refused() {
     let (_backend, provider) = logged_in();
-    provider.import_key(&aes(), "gen-g", None, Some(b"\x01")).unwrap();
+    provider
+        .import_key(&aes(), "gen-g", None, Some(b"\x01"))
+        .unwrap();
     let mut request = with_size(generate(KeyAlgorithm::Aes, "gen-g"), 128);
     request.key_id = Some(vec![1]);
-    assert_eq!(provider.generate_key(&request).unwrap_err().kind, ErrorKind::DuplicateKey);
+    assert_eq!(
+        provider.generate_key(&request).unwrap_err().kind,
+        ErrorKind::DuplicateKey
+    );
 }
 
 #[test]
@@ -711,7 +886,10 @@ fn generate_keypair_over_existing_half_refused_atomically() {
     let before = backend.objects();
     let err = provider.generate_key(&request).unwrap_err();
     assert_eq!(err.kind, ErrorKind::DuplicateKey);
-    assert_eq!(err.message, "a public object with label 'pair-g' and id 0x02 already exists on hsm");
+    assert_eq!(
+        err.message,
+        "a public object with label 'pair-g' and id 0x02 already exists on hsm"
+    );
     assert_eq!(backend.objects(), before); // no half-created pair
 }
 
@@ -723,8 +901,12 @@ fn keypair_and_certificates_may_share_identity() {
     request.key_id = Some(vec![3]);
     provider.generate_key(&request).unwrap();
     let (cert, _) = cert_material("twin-cert");
-    provider.import_key(&cert, "fam-g", None, Some(b"\x03")).unwrap();
-    provider.import_key(&cert, "fam-g", None, Some(b"\x03")).unwrap();
+    provider
+        .import_key(&cert, "fam-g", None, Some(b"\x03"))
+        .unwrap();
+    provider
+        .import_key(&cert, "fam-g", None, Some(b"\x03"))
+        .unwrap();
     let certs = provider
         .list_keys()
         .unwrap()
@@ -741,8 +923,13 @@ fn keypair_and_certificates_may_share_identity() {
 #[test]
 fn generate_uses_generic_keygen_and_value_len() {
     let (backend, provider) = logged_in();
-    let info = provider.generate_key(&with_size(generate(KeyAlgorithm::Generic, "gen-g"), 256)).unwrap();
-    assert_eq!((info.key_class, info.algorithm, info.size_bits), (KeyClass::Secret, KeyAlgorithm::Generic, Some(256)));
+    let info = provider
+        .generate_key(&with_size(generate(KeyAlgorithm::Generic, "gen-g"), 256))
+        .unwrap();
+    assert_eq!(
+        (info.key_class, info.algorithm, info.size_bits),
+        (KeyClass::Secret, KeyAlgorithm::Generic, Some(256))
+    );
     let obj = object_of(&backend, "gen-g");
     assert_eq!(obj[&CKA_KEY_TYPE], ul(CKK_GENERIC_SECRET));
     assert_eq!(obj[&CKA_VALUE_LEN], ul(32));
@@ -750,7 +937,9 @@ fn generate_uses_generic_keygen_and_value_len() {
         backend.last_mechanism(),
         Some(crate::backend::MechSpec::Plain { ckm: 0x350 }) // CKM_GENERIC_SECRET_KEY_GEN
     );
-    let err = provider.generate_key(&with_size(generate(KeyAlgorithm::Generic, "bad"), 12)).unwrap_err();
+    let err = provider
+        .generate_key(&with_size(generate(KeyAlgorithm::Generic, "bad"), 12))
+        .unwrap_err();
     assert_eq!(param_name(&err), Some("size_bits"));
     assert_eq!(
         err.message,
@@ -761,13 +950,24 @@ fn generate_uses_generic_keygen_and_value_len() {
 #[test]
 fn generic_import_reads_back_as_generic() {
     let (backend, provider) = logged_in();
-    let info = provider.import_key(&generic(), "imp-g", Some(&exportable()), None).unwrap();
+    let info = provider
+        .import_key(&generic(), "imp-g", Some(&exportable()), None)
+        .unwrap();
     assert_eq!(info.algorithm, KeyAlgorithm::Generic);
     assert_eq!(info.size_bits, Some(256)); // SoftHSM-style derived CKA_VALUE_LEN
-    assert_eq!(object_of(&backend, "imp-g")[&CKA_KEY_TYPE], ul(CKK_GENERIC_SECRET));
-    assert_eq!(provider.export_key(&info).unwrap().data.to_vec(), generic_key());
+    assert_eq!(
+        object_of(&backend, "imp-g")[&CKA_KEY_TYPE],
+        ul(CKK_GENERIC_SECRET)
+    );
+    assert_eq!(
+        provider.export_key(&info).unwrap().data.to_vec(),
+        generic_key()
+    );
     let listed = provider.list_keys().unwrap();
-    let listed: Vec<&KeyInfo> = listed.iter().filter(|k| k.key_ref.label == "imp-g").collect();
+    let listed: Vec<&KeyInfo> = listed
+        .iter()
+        .filter(|k| k.key_ref.label == "imp-g")
+        .collect();
     assert_eq!(listed[0].algorithm, KeyAlgorithm::Generic);
 }
 
@@ -800,7 +1000,9 @@ fn data_import_template_has_no_key_type_id_or_policy() {
         bytes_attr("CKA_OBJECT_ID", b"\x2a"),
         boolean("CKA_TOKEN", true),
     ]);
-    let info = provider.import_key(&data(), "d1", Some(&template), None).unwrap();
+    let info = provider
+        .import_key(&data(), "d1", Some(&template), None)
+        .unwrap();
     let obj = object_of(&backend, "d1");
     assert_eq!(obj[&CKA_CLASS], ul(CKO_DATA));
     for absent in [CKA_KEY_TYPE, CKA_ID, CKA_SENSITIVE, CKA_EXTRACTABLE] {
@@ -809,8 +1011,14 @@ fn data_import_template_has_no_key_type_id_or_policy() {
     assert_eq!(obj[&CKA_VALUE], DATA_VALUE);
     assert_eq!(obj[&CKA_APPLICATION], b"acme");
     assert_eq!(obj[&CKA_OBJECT_ID], [0x2a]);
-    assert_eq!((info.key_class, info.algorithm, info.key_ref.key_id.clone()), (KeyClass::Data, KeyAlgorithm::None, None));
-    assert_eq!(info.size_bits, Some(u32::try_from(DATA_VALUE.len() * 8).unwrap()));
+    assert_eq!(
+        (info.key_class, info.algorithm, info.key_ref.key_id.clone()),
+        (KeyClass::Data, KeyAlgorithm::None, None)
+    );
+    assert_eq!(
+        info.size_bits,
+        Some(u32::try_from(DATA_VALUE.len() * 8).unwrap())
+    );
     assert!(info.exportable);
     let expected = BTreeMap::from([
         ("CKA_APPLICATION".to_string(), AttrValue::Str("acme".into())),
@@ -831,19 +1039,36 @@ fn data_list_find_export_delete() {
         .map(|k| k.key_ref.label)
         .collect();
     assert_eq!(listed, ["d2"]);
-    assert_eq!(provider.find_key(&sel("d2")).unwrap().key_class, KeyClass::Data);
-    assert_eq!(provider.find_key(&sel("d2").with_class(Some(KeyClass::Data))).unwrap().key_ref, info.key_ref);
+    assert_eq!(
+        provider.find_key(&sel("d2")).unwrap().key_class,
+        KeyClass::Data
+    );
+    assert_eq!(
+        provider
+            .find_key(&sel("d2").with_class(Some(KeyClass::Data)))
+            .unwrap()
+            .key_ref,
+        info.key_ref
+    );
     let exported = provider.export_key(&info).unwrap();
-    assert_eq!((exported.key_class, exported.algorithm), (KeyClass::Data, KeyAlgorithm::None));
+    assert_eq!(
+        (exported.key_class, exported.algorithm),
+        (KeyClass::Data, KeyAlgorithm::None)
+    );
     assert_eq!(exported.data.to_vec(), DATA_VALUE);
     provider.delete_key(&info).unwrap();
-    assert_eq!(provider.find_key(&sel("d2")).unwrap_err().kind, ErrorKind::KeyNotFound);
+    assert_eq!(
+        provider.find_key(&sel("d2")).unwrap_err().kind,
+        ErrorKind::KeyNotFound
+    );
 }
 
 #[test]
 fn data_identity_rules() {
     let (_backend, provider) = logged_in();
-    let err = provider.import_key(&data(), "d3", None, Some(b"\x01")).unwrap_err();
+    let err = provider
+        .import_key(&data(), "d3", None, Some(b"\x01"))
+        .unwrap_err();
     assert_eq!(err.message, "data objects carry no CKA_ID (§4.3)");
     assert_eq!(param_name(&err), Some("CKA_ID"));
     assert_eq!(
@@ -851,15 +1076,28 @@ fn data_identity_rules() {
         Some("drop --id / the template CKA_ID row; data objects are identified by label alone")
     );
     let template = tpl(vec![bytes_attr("CKA_ID", b"\x01")]);
-    assert_eq!(param_name(&provider.import_key(&data(), "d3", Some(&template), None).unwrap_err()), Some("CKA_ID"));
+    assert_eq!(
+        param_name(
+            &provider
+                .import_key(&data(), "d3", Some(&template), None)
+                .unwrap_err()
+        ),
+        Some("CKA_ID")
+    );
     provider.import_key(&data(), "d3", None, None).unwrap();
     let err = provider.import_key(&data(), "d3", None, None).unwrap_err();
     assert_eq!(err.kind, ErrorKind::DuplicateKey);
-    assert_eq!(err.message, "a data object with label 'd3' and no id already exists on hsm");
+    assert_eq!(
+        err.message,
+        "a data object with label 'd3' and no id already exists on hsm"
+    );
     // a same-label SECRET key is no twin of a data object
     provider.import_key(&generic(), "d3", None, None).unwrap();
     assert_eq!(
-        provider.find_key(&sel("d3").with_class(Some(KeyClass::Data))).unwrap().key_class,
+        provider
+            .find_key(&sel("d3").with_class(Some(KeyClass::Data)))
+            .unwrap()
+            .key_class,
         KeyClass::Data
     );
 }
@@ -882,18 +1120,36 @@ fn other_key_types_are_listed_and_refused_for_export() {
         &[b'k'; 24],
     );
     let listed = provider.list_keys().unwrap();
-    let info = listed.into_iter().find(|k| k.key_ref.label == "des3").unwrap();
+    let info = listed
+        .into_iter()
+        .find(|k| k.key_ref.label == "des3")
+        .unwrap();
     assert_eq!(info.algorithm, KeyAlgorithm::Other);
-    assert_eq!(info.attributes.get("CKA_KEY_TYPE"), Some(&AttrValue::Symbol("CKK_DES3".into())));
+    assert_eq!(
+        info.attributes.get("CKA_KEY_TYPE"),
+        Some(&AttrValue::Symbol("CKK_DES3".into()))
+    );
     assert!(!info.exportable);
     assert_eq!(info.size_bits, Some(192));
-    assert_eq!(provider.find_key(&sel("des3")).unwrap().algorithm, KeyAlgorithm::Other);
+    assert_eq!(
+        provider.find_key(&sel("des3")).unwrap().algorithm,
+        KeyAlgorithm::Other
+    );
     let err = provider.export_key(&info).unwrap_err();
     assert_eq!(err.kind, ErrorKind::UnsupportedOperation);
-    assert_eq!(err.message, "key type CKK_DES3 of 'hsm:des3#03' is not supported by r2 for export");
-    assert_eq!(err.hint.as_deref(), Some("objects of unsupported key types can be listed and deleted only"));
+    assert_eq!(
+        err.message,
+        "key type CKK_DES3 of 'hsm:des3#03' is not supported by r2 for export"
+    );
+    assert_eq!(
+        err.hint.as_deref(),
+        Some("objects of unsupported key types can be listed and deleted only")
+    );
     provider.delete_key(&info).unwrap();
-    assert_eq!(provider.find_key(&sel("des3")).unwrap_err().kind, ErrorKind::KeyNotFound);
+    assert_eq!(
+        provider.find_key(&sel("des3")).unwrap_err().kind,
+        ErrorKind::KeyNotFound
+    );
 }
 
 #[test]
@@ -904,8 +1160,13 @@ fn import_and_generate_refuse_other() {
     assert_eq!(err.message, "cannot import other secret material");
     assert_eq!(param_name(&err), Some("material"));
     let none = KeyMaterial::new(KeyAlgorithm::None, KeyClass::Secret, b"x".to_vec());
-    assert_eq!(param_name(&provider.import_key(&none, "x", None, None).unwrap_err()), Some("material"));
-    let err = provider.generate_key(&with_size(generate(KeyAlgorithm::Other, "x"), 128)).unwrap_err();
+    assert_eq!(
+        param_name(&provider.import_key(&none, "x", None, None).unwrap_err()),
+        Some("material")
+    );
+    let err = provider
+        .generate_key(&with_size(generate(KeyAlgorithm::Other, "x"), 128))
+        .unwrap_err();
     assert_eq!(err.message, "cannot generate other keys");
     assert_eq!(param_name(&err), Some("algorithm"));
 }
@@ -915,17 +1176,40 @@ fn imported_objects_read_key_gen_mechanism_as_unavailable() {
     // §4.10.4 SoftHSM flavor: imported key objects carry CK_UNAVAILABLE_INFORMATION
     let (backend, provider) = logged_in();
     provider.import_key(&aes(), "kgm", None, None).unwrap();
-    assert_eq!(object_of(&backend, "kgm")[&CKA_KEY_GEN_MECHANISM], ul(u64::MAX));
+    assert_eq!(
+        object_of(&backend, "kgm")[&CKA_KEY_GEN_MECHANISM],
+        ul(u64::MAX)
+    );
 }
 
 #[test]
 fn every_kind_imports_and_lists() {
     let (_backend, provider) = logged_in();
     let (cert, _) = cert_material("all");
-    let rsa = KeyMaterial::new(KeyAlgorithm::Rsa, KeyClass::Private, r2_testkit::fixtures::rsa2048_pkcs8());
-    let ec = KeyMaterial::new(KeyAlgorithm::Ec, KeyClass::Private, r2_testkit::fixtures::ec_p256_pkcs8());
-    let ed = KeyMaterial::new(KeyAlgorithm::EcEdwards, KeyClass::Private, r2_testkit::fixtures::ed25519_pkcs8());
-    for (material, label) in [(aes(), "a"), (rsa, "r"), (ec, "e"), (ed, "ed"), (cert, "c"), (generic(), "g"), (data(), "d")] {
+    let rsa = KeyMaterial::new(
+        KeyAlgorithm::Rsa,
+        KeyClass::Private,
+        r2_testkit::fixtures::rsa2048_pkcs8(),
+    );
+    let ec = KeyMaterial::new(
+        KeyAlgorithm::Ec,
+        KeyClass::Private,
+        r2_testkit::fixtures::ec_p256_pkcs8(),
+    );
+    let ed = KeyMaterial::new(
+        KeyAlgorithm::EcEdwards,
+        KeyClass::Private,
+        r2_testkit::fixtures::ed25519_pkcs8(),
+    );
+    for (material, label) in [
+        (aes(), "a"),
+        (rsa, "r"),
+        (ec, "e"),
+        (ed, "ed"),
+        (cert, "c"),
+        (generic(), "g"),
+        (data(), "d"),
+    ] {
         provider.import_key(&material, label, None, None).unwrap();
     }
     assert_eq!(provider.list_keys().unwrap().len(), 7);

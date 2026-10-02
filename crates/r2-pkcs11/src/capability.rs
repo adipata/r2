@@ -12,7 +12,7 @@ pub(crate) const EDDSA_VENDOR_CKMS: [u64; 2] = [0x8000_0C03, 0x8000_0C02];
 
 /// cryptoki-sys CKM constant widened to u64.
 pub(crate) fn ckm(code: sys::CK_MECHANISM_TYPE) -> u64 {
-    u64::from(code)
+    crate::ulong_to_u64(code)
 }
 
 /// canonical name → the CKMs that advertise it (c2 `_FOLD_SOURCES`, §4.6.5 table).
@@ -20,11 +20,17 @@ pub(crate) fn ckm(code: sys::CK_MECHANISM_TYPE) -> u64 {
 pub(crate) fn fold_sources() -> Vec<(&'static str, Vec<u64>)> {
     vec![
         (m::AES_ECB, vec![ckm(sys::CKM_AES_ECB)]),
-        (m::AES_CBC, vec![ckm(sys::CKM_AES_CBC), ckm(sys::CKM_AES_CBC_PAD)]),
+        (
+            m::AES_CBC,
+            vec![ckm(sys::CKM_AES_CBC), ckm(sys::CKM_AES_CBC_PAD)],
+        ),
         (m::AES_CTR, vec![ckm(sys::CKM_AES_CTR)]),
         (m::AES_GCM, vec![ckm(sys::CKM_AES_GCM)]),
         (m::AES_CMAC, vec![ckm(sys::CKM_AES_CMAC)]),
-        (m::AES_GMAC, vec![ckm(sys::CKM_AES_GMAC), ckm(sys::CKM_AES_GCM)]),
+        (
+            m::AES_GMAC,
+            vec![ckm(sys::CKM_AES_GMAC), ckm(sys::CKM_AES_GCM)],
+        ),
         (
             m::HMAC,
             vec![
@@ -75,7 +81,10 @@ pub(crate) fn fold_sources() -> Vec<(&'static str, Vec<u64>)> {
         (m::AES_KEY_WRAP, vec![ckm(sys::CKM_AES_KEY_WRAP)]),
         (
             m::AES_KEY_WRAP_PAD,
-            vec![ckm(sys::CKM_AES_KEY_WRAP_PAD), ckm(sys::CKM_AES_KEY_WRAP_KWP)],
+            vec![
+                ckm(sys::CKM_AES_KEY_WRAP_PAD),
+                ckm(sys::CKM_AES_KEY_WRAP_KWP),
+            ],
         ),
         // RSA-AES-KEY-WRAP: never advertised (§4.5.5, §11 D6).
     ]
@@ -116,5 +125,8 @@ pub(crate) fn eddsa_ckm(codes: &[u64], eddsa_vendor_ckms: &[u64]) -> Option<u64>
     if codes.contains(&standard) {
         return Some(standard);
     }
-    eddsa_vendor_ckms.iter().copied().find(|c| codes.contains(c))
+    eddsa_vendor_ckms
+        .iter()
+        .copied()
+        .find(|c| codes.contains(c))
 }

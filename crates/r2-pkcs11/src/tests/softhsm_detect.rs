@@ -49,7 +49,10 @@ fn first_existing_search_path() {
     let missing = dir.path().join("missing.so");
     let first = touch(&dir, "first.so");
     let second = touch(&dir, "second.so");
-    assert_eq!(find_softhsm_module(&[missing, first.clone(), second]), Some(first));
+    assert_eq!(
+        find_softhsm_module(&[missing, first.clone(), second]),
+        Some(first)
+    );
 }
 
 #[test]
@@ -57,7 +60,10 @@ fn nothing_found() {
     let _lock = global_state_lock();
     let _env = set_env(SOFTHSM2_LIB_ENV, None);
     let dir = tempfile::tempdir().unwrap();
-    assert_eq!(find_softhsm_module(&[dir.path().join("a.so"), dir.path().join("b.so")]), None);
+    assert_eq!(
+        find_softhsm_module(&[dir.path().join("a.so"), dir.path().join("b.so")]),
+        None
+    );
     assert_eq!(find_softhsm_module(&[]), None);
     // an empty override counts as unset
     let _empty = set_env(SOFTHSM2_LIB_ENV, Some(""));
