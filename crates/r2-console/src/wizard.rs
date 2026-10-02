@@ -21,7 +21,7 @@ use r2_config::yaml::{self, Mapping, Value};
 use r2_core::error::{ConsoleError, Result};
 use r2_core::io::{ConsoleIo, Renderable};
 use r2_core::params::{ParamSpec, ParamValue};
-use r2_core::text::{py_os_error_str, py_strip};
+use r2_core::text::{py_os_error_str, py_repr, py_strip};
 use r2_pkcs11::softhsm::find_softhsm_module;
 use r2_provider::{Provider, TokenInfo};
 use secrecy::{ExposeSecret, SecretString};
@@ -46,10 +46,11 @@ const SOFTHSM2_UTIL: &str = "softhsm2-util";
 /// The comment line of the textual config append (§5.13; c2 named itself — §11 D7).
 const APPEND_COMMENT: &str = "# SoftHSM provider added by the r2 first-run wizard (spec §5.13)";
 const LOG_TARGET: &str = "r2::console";
+/// Hint of every "cannot create the SoftHSM configuration" error.
+const CONF_HINT: &str = "check softhsm.conf_dir / softhsm.token_dir in the configuration";
 
 /// §5.13 trigger: true when no initialized token exists — free SoftHSM slots present as
 /// TokenInfo{label: "", serial: ""}; an initialized token always has a label or serial.
-/// R0 stub body (mandated): `Ok(false)` (c2's ImportError fallback: login proceeds normally).
 pub fn token_needs_init(provider: &dyn Provider) -> r2_core::Result<bool> {
     Ok(!provider
         .list_tokens()?
@@ -64,7 +65,6 @@ pub fn token_needs_init(provider: &dyn Provider) -> r2_core::Result<bool> {
 /// nothing else changed. `library` = the module path for the reported
 /// entry; None → re-detected with `find_softhsm_module(&cfg.softhsm.search_paths)`. Returns
 /// the freshly initialized token (exact-label round trip) for the login flow.
-/// R0 stub body (mandated): `Ok(None)`.
 pub fn run_softhsm_wizard(
     ctx: &AppContext,
     provider: &dyn Provider,
@@ -106,6 +106,11 @@ pub fn run_softhsm_wizard(
         )));
     };
 
+    // `SOFTHSM2_CONF` and the conf text carry these paths as text; a path that is not
+    // valid UTF-8 cannot be passed through losslessly (§11 D12 (q)) — refused up front.
+    utf8_path(conf_dir)?;
+    utf8_path(token_dir)?;
+
     // §5.13 step 1: conf/token dirs + softhsm2.conf.
     let conf_path = write_softhsm_conf(conf_dir, token_dir)?;
     tracing::info!(
@@ -118,7 +123,7 @@ pub fn run_softhsm_wizard(
 
     // §5.13 step 2: env BEFORE the module's C_Initialize; the provider resets itself so
     // the next lazy initialize re-reads it (refused when the module is shared, §11 D15).
-    init.set_env_and_reset(SOFTHSM2_CONF_ENV, &conf_path.to_string_lossy())?;
+    init.set_env_and_reset(SOFTHSM2_CONF_ENV, utf8_path(&conf_path)?)?;
 
     // §5.13 step 3: prompts, then in-process init with the subprocess fallback.
     let label = prompt_label(io)?;
@@ -224,7 +229,7 @@ pub fn write_softhsm_conf(conf_dir: &Path, token_dir: &Path) -> r2_core::Result<
             "cannot create the SoftHSM configuration: {}",
             py_os_error_str(&err, &path)
         ))
-        .with_hint("check softhsm.conf_dir / softhsm.token_dir in the configuration"));
+        .with_hint(CONF_HINT));
     }
     Ok(conf_path)
 }
@@ -333,11 +338,14 @@ pub fn append_provider_entry(source: &Path, entry: &r2_config::yaml::Value) -> r
     let mut backup_name = source.file_name().unwrap_or_default().to_os_string();
     backup_name.push(".bak");
     let backup = source.with_file_name(backup_name);
-    copy2(source, &backup).map_err(|(err, path)| {
+    copy2(source, &backup).map_err(|err| {
+        let detail = match err {
+            CopyError::Os(err, path) => py_os_error_str(&err, &path),
+            CopyError::SameFile(text) => text,
+        };
         ConsoleError::config(format!(
-            "cannot write backup {}: {}",
-            backup.display(),
-            py_os_error_str(&err, &path)
+            "cannot write backup {}: {detail}",
+            backup.display()
         ))
     })?;
     write_config(source, &yaml::dump(&Value::Mapping(data)))
@@ -346,6 +354,18 @@ pub fn append_provider_entry(source: &Path, entry: &r2_config::yaml::Value) -> r
 // ---------------------------------------------------------------------------------------
 // internals
 // ---------------------------------------------------------------------------------------
+
+/// The path as text, or Config "cannot create the SoftHSM configuration: {path} is not
+/// valid UTF-8" (c2's surrogateescape str round trip has no lossless r2 equivalent).
+fn utf8_path(path: &Path) -> Result<&str> {
+    path.to_str().ok_or_else(|| {
+        ConsoleError::config(format!(
+            "cannot create the SoftHSM configuration: {} is not valid UTF-8",
+            path.display()
+        ))
+        .with_hint(CONF_HINT)
+    })
+}
 
 fn say(io: &dyn ConsoleIo, text: String) {
     io.print(Renderable::Text(text));
@@ -454,14 +474,21 @@ fn init_via_softhsm2_util(
     if output.status.success() {
         return Ok(());
     }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    // c2 `text=True`: decoded, then universal newlines (`\r\n` / `\r` → `\n`). Output that
+    // is not valid UTF-8 (c2: UnicodeDecodeError, a crash) is decoded lossily (§11 D12 (q)).
+    let stderr = universal_newlines(&String::from_utf8_lossy(&output.stderr));
+    let stdout = universal_newlines(&String::from_utf8_lossy(&output.stdout));
     let detail = match (py_strip(&stderr), py_strip(&stdout)) {
         ("", "") => format!("exit code {}", return_code(&output.status)),
         ("", out) => out.to_owned(),
         (err, _) => err.to_owned(),
     };
     Err(failed(detail))
+}
+
+/// Python text-mode newline translation (universal newlines).
+fn universal_newlines(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
 /// Python's `CompletedProcess.returncode`: the exit code, or −signal when killed.
@@ -481,7 +508,9 @@ fn return_code(status: &std::process::ExitStatus) -> i64 {
 
 /// Python `shutil.which(name)` (3.12): `$PATH` (unset → `CS_PATH` "/bin:/usr/bin" on
 /// POSIX; empty → not found), first executable regular file; on Windows the current
-/// directory first and the `PATHEXT` extensions.
+/// directory first and the `PATHEXT` extensions. "Executable" approximates Python's
+/// `os.access(X_OK)` by any x bit (the real uid/gid and noexec mounts are not consulted —
+/// no unsafe/libc here; §11 D12 (q)).
 fn which(name: &str) -> Option<PathBuf> {
     let path = match std::env::var_os("PATH") {
         Some(path) => path,
@@ -563,10 +592,16 @@ fn mkdir_parents(path: &Path) -> std::result::Result<(), (std::io::Error, PathBu
     match std::fs::create_dir(path) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            // pathlib: the parent of a single relative component is `.` (whose parent is
+            // itself) — `Path::parent` gives "" there.
             let parent = match path.parent() {
-                Some(parent) if parent != path && !parent.as_os_str().is_empty() => parent,
-                _ => return Err((err, path.to_path_buf())),
+                Some(parent) if parent.as_os_str().is_empty() => Path::new("."),
+                Some(parent) => parent,
+                None => return Err((err, path.to_path_buf())),
             };
+            if parent == path {
+                return Err((err, path.to_path_buf()));
+            }
             mkdir_parents(parent)?;
             match std::fs::create_dir(path) {
                 Ok(()) => Ok(()),
@@ -616,7 +651,7 @@ fn read_text(source: &Path) -> Result<String> {
             utf8_error_text(err.as_bytes(), &err.utf8_error())
         ))
     })?;
-    Ok(text.replace("\r\n", "\n").replace('\r', "\n"))
+    Ok(universal_newlines(&text))
 }
 
 /// CPython's `UnicodeDecodeError` text for invalid UTF-8 (the loader's wording, §4.8.1).
@@ -655,15 +690,38 @@ fn utf8_error_text(bytes: &[u8], error: &std::str::Utf8Error) -> String {
     }
 }
 
-/// `shutil.copy2(source, backup)`: content, permission bits and timestamps; Err names the
-/// path whose operation failed (source read vs backup write), as Python's OSError does.
-fn copy2(source: &Path, backup: &Path) -> std::result::Result<(), (std::io::Error, PathBuf)> {
-    let mut reader = std::fs::File::open(source).map_err(|err| (err, source.to_path_buf()))?;
-    let meta = reader
-        .metadata()
-        .map_err(|err| (err, source.to_path_buf()))?;
-    let mut writer = std::fs::File::create(backup).map_err(|err| (err, backup.to_path_buf()))?;
-    std::io::copy(&mut reader, &mut writer).map_err(|err| (err, backup.to_path_buf()))?;
+/// `shutil.copy2(source, backup)`: a directory destination receives `source`'s file name;
+/// the same file (link or symlink) → `shutil.SameFileError`; then content, permission bits
+/// and timestamps. Err names the path whose operation failed (source read vs backup
+/// write), as Python's OSError does.
+fn copy2(source: &Path, backup: &Path) -> std::result::Result<(), CopyError> {
+    let joined;
+    let backup = if backup.is_dir() {
+        joined = backup.join(source.file_name().unwrap_or_default());
+        joined.as_path()
+    } else {
+        backup
+    };
+    if same_file(source, backup) {
+        return Err(CopyError::SameFile(format!(
+            "{kind}({}) and {kind}({}) are the same file",
+            py_repr(&source.to_string_lossy()),
+            py_repr(&backup.to_string_lossy()),
+            kind = if cfg!(windows) {
+                "WindowsPath"
+            } else {
+                "PosixPath"
+            }
+        )));
+    }
+    let os = |path: &Path| {
+        let path = path.to_path_buf();
+        move |err| CopyError::Os(err, path)
+    };
+    let mut reader = std::fs::File::open(source).map_err(os(source))?;
+    let meta = reader.metadata().map_err(os(source))?;
+    let mut writer = std::fs::File::create(backup).map_err(os(backup))?;
+    std::io::copy(&mut reader, &mut writer).map_err(os(backup))?;
     let mut times = std::fs::FileTimes::new();
     if let Ok(accessed) = meta.accessed() {
         times = times.set_accessed(accessed);
@@ -671,11 +729,36 @@ fn copy2(source: &Path, backup: &Path) -> std::result::Result<(), (std::io::Erro
     if let Ok(modified) = meta.modified() {
         times = times.set_modified(modified);
     }
-    writer
-        .set_times(times)
-        .map_err(|err| (err, backup.to_path_buf()))?;
+    writer.set_times(times).map_err(os(backup))?;
     writer
         .set_permissions(meta.permissions())
-        .map_err(|err| (err, backup.to_path_buf()))?;
+        .map_err(os(backup))?;
     Ok(())
+}
+
+/// A failed `copy2`: Python's `str(err)` is built by the caller from the OSError + path,
+/// or is the ready `SameFileError` text.
+enum CopyError {
+    Os(std::io::Error, PathBuf),
+    SameFile(String),
+}
+
+/// `shutil._samefile` → `os.path.samefile`: both stat (following links) and equal
+/// (st_dev, st_ino); any stat error → not the same.
+#[cfg(unix)]
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+        _ => false,
+    }
+}
+
+/// Windows: the stable std has no file index — canonical paths approximate it.
+#[cfg(not(unix))]
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
 }

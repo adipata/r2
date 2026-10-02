@@ -913,6 +913,8 @@ fn util_failure_detail_is_stderr_then_stdout_then_the_exit_code() {
         ("echo '  out  '\nexit 3", "out"),
         ("echo ' '\necho ' ' >&2\nexit 3", "exit code 3"),
         ("kill -9 $$", "exit code -9"),
+        // text=True: universal newlines before strip
+        ("printf 'a\\r\\nb\\rc\\r\\n' >&2\nexit 1", "a\nb\nc"),
     ] {
         let fx = Fixture::new();
         let (bin, _argv, _env) = fake_util(&fx, body);
@@ -927,6 +929,35 @@ fn util_failure_detail_is_stderr_then_stdout_then_the_exit_code() {
         );
         drop(_path);
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_conf_dir_is_refused_before_anything_is_written() {
+    // c2 carried such a path through os.environ via surrogateescape; r2 cannot set it
+    // losslessly and refuses it up front (§11 D12 (q)).
+    use std::os::unix::ffi::OsStrExt;
+    let fx = Fixture::new();
+    let bad = fx.path().join(std::ffi::OsStr::from_bytes(b"conf-\xff"));
+    let mut config = fx.config.clone();
+    config.softhsm.conf_dir = bad.clone();
+    let provider = provider_with(&Rc::new(WizardDouble::new()));
+    let io = scripted(&HAPPY_ANSWERS);
+    let err = run(&make_ctx(&io, &config, None, None), &provider).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Config);
+    assert_eq!(
+        err.message,
+        format!(
+            "cannot create the SoftHSM configuration: {} is not valid UTF-8",
+            bad.display()
+        )
+    );
+    assert_eq!(
+        err.hint.as_deref(),
+        Some("check softhsm.conf_dir / softhsm.token_dir in the configuration")
+    );
+    assert!(!bad.exists());
+    assert!(!fx.token_dir.exists());
 }
 
 #[cfg(unix)]
@@ -1468,24 +1499,74 @@ fn append_io_errors_are_config_errors() {
         )
     );
 
-    // the .bak cannot be written: a directory sits at its path
+    // the .bak cannot be written: a dangling symlink into a missing directory sits at its
+    // path (c2: FileNotFoundError naming the backup); the config stays untouched
     #[cfg(unix)]
     {
         let source = dir.path().join("r2.yaml");
         std::fs::write(&source, "providers:\n").unwrap();
         let backup = dir.path().join("r2.yaml.bak");
-        std::fs::create_dir(&backup).unwrap();
+        std::os::unix::fs::symlink("missing/x", &backup).unwrap();
         let err = wizard::append_provider_entry(&source, &entry).unwrap_err();
         assert_eq!(
             err.message,
             format!(
-                "cannot write backup {}: [Errno 21] Is a directory: '{}'",
+                "cannot write backup {}: [Errno 2] No such file or directory: '{}'",
                 backup.display(),
                 backup.display()
             )
         );
         assert_eq!(read_text(&source), "providers:\n");
     }
+}
+
+#[test]
+fn append_backup_into_an_existing_directory() {
+    // shutil.copy2 into a directory destination copies to `<dir>/<source name>`; c2 then
+    // rewrites the config as usual.
+    let dir = tempfile::tempdir().unwrap();
+    let entry = helper_entry(dir.path());
+    let source = dir.path().join("r2.yaml");
+    std::fs::write(&source, "providers:\n").unwrap();
+    let backup = dir.path().join("r2.yaml.bak");
+    std::fs::create_dir(&backup).unwrap();
+    wizard::append_provider_entry(&source, &entry).unwrap();
+    assert_eq!(read_text(&backup.join("r2.yaml")), "providers:\n");
+    assert!(read_text(&source).contains("pkcs11:"));
+}
+
+#[cfg(unix)]
+#[test]
+fn append_backup_that_is_the_config_itself_is_refused() {
+    // shutil.SameFileError: a `.bak` symlinked (or hard-linked) to the config is refused
+    // before anything is opened — the config is never truncated.
+    let dir = tempfile::tempdir().unwrap();
+    let entry = helper_entry(dir.path());
+    let source = dir.path().join("r2.yaml");
+    std::fs::write(&source, "providers:\n").unwrap();
+    let backup = dir.path().join("r2.yaml.bak");
+    std::os::unix::fs::symlink(&source, &backup).unwrap();
+    let err = wizard::append_provider_entry(&source, &entry).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Config);
+    assert_eq!(
+        err.message,
+        format!(
+            "cannot write backup {b}: PosixPath('{s}') and PosixPath('{b}') are the same file",
+            s = source.display(),
+            b = backup.display()
+        )
+    );
+    assert_eq!(read_text(&source), "providers:\n");
+
+    std::fs::remove_file(&backup).unwrap();
+    std::fs::hard_link(&source, &backup).unwrap();
+    let err = wizard::append_provider_entry(&source, &entry).unwrap_err();
+    assert!(
+        err.message.ends_with("are the same file"),
+        "{}",
+        err.message
+    );
+    assert_eq!(read_text(&source), "providers:\n");
 }
 
 #[test]

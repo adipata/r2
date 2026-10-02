@@ -7696,7 +7696,19 @@ merges).**
     non-PKCS#11 instance named `softhsm.provider_name`; c2 wrote the conf, set the
     environment and then crashed with `AttributeError` at `init_token`) → UnsupportedOperation
     `provider '<name>' cannot initialize tokens` right after the setup confirm, before
-    anything is written (declining still works on any provider).
+    anything is written (declining still works on any provider). Output of a failing
+    `softhsm2-util` that is not valid UTF-8 (c2's strict text-mode decoding raised
+    `UnicodeDecodeError`, a crash) is decoded lossily (U+FFFD) into the `softhsm2-util
+    --init-token failed: <detail>` text; newlines are translated as in c2. A
+    `softhsm.conf_dir` / `softhsm.token_dir` that is not valid UTF-8 (c2 carried it into
+    `SOFTHSM2_CONF` through surrogateescape) → Config `cannot create the SoftHSM
+    configuration: <path> is not valid UTF-8` (hint `check softhsm.conf_dir /
+    softhsm.token_dir in the configuration`) right after the setup confirm, before anything
+    is written; a re-detected module path that is not valid UTF-8 appears lossily in the
+    reported entry. The `softhsm2-util` lookup ports `shutil.which` but approximates
+    `os.access(X_OK)` by any execute bit (r2 has no safe access to the real uid/gid or
+    noexec mounts), so a util executable only by another user, or on a noexec mount, is
+    picked where c2 kept searching `PATH`, and then fails to start (above).
 - *Reason*: every expected failure must be a `ConsoleError`; OpenSSL would reject the CN
   with a different text anyway.
 - *Verified by*: R8 certops test (a), R6 keyparse/x509info/formats fixtures (b, h, i, j:
@@ -7798,7 +7810,8 @@ merges).**
 - *Description*: r2 types YAML exactly like PyYAML 6.0.3 `safe_load` and writes it
   byte-identically to `safe_dump` (§4.8.4), but its syntax parser is `yaml-rust2` (YAML
   1.2), not PyYAML's: (a) the parser text inside `invalid YAML in config file <path>:
-  <text>` / `invalid YAML in template file <path>: <text>` differs (construction errors —
+  <text>` / `invalid YAML in template file <path>: <text>` / the wizard's (§5.13) `cannot
+  parse config file <path>: <text>` differs (construction errors —
   unknown tag, unhashable key, several documents — use PyYAML's wording); (b) inputs that
   only one of the two parsers rejects (exotic or malformed syntax: tabs in indentation,
   YAML-1.2-only escapes, directives) may load in one and fail in the other — among them,
