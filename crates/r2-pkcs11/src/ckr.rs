@@ -8,7 +8,7 @@ use crate::catalog::ckr_name;
 /// CK_RV constants of cryptoki-sys widened to u64 (§4.5.5 narrowing rule).
 #[allow(
     dead_code,
-    reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
+    reason = "the CK_RV vocabulary; some codes only appear in tests"
 )]
 pub(crate) mod rv {
     use cryptoki_sys as sys;
@@ -52,6 +52,7 @@ pub(crate) mod rv {
         CKR_DEVICE_ERROR,
         CKR_GENERAL_ERROR,
         CKR_OPERATION_NOT_INITIALIZED,
+        CKR_OPERATION_ACTIVE,
         CKR_KEY_TYPE_INCONSISTENT,
         CKR_VENDOR_DEFINED,
         CKR_WRAPPED_KEY_LEN_RANGE,

@@ -192,10 +192,6 @@ fn native_plain(ckm: u64) -> Option<Mechanism<'static>> {
 
 /// `Some((ckm, param))` when the spec must go through RawFns (a runtime-length raw
 /// parameter that is not a 16-byte AES-CBC IV, S0 G3).
-#[allow(
-    dead_code,
-    reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
-)]
 fn raw_bytes(spec: &MechSpec) -> Option<(u64, &[u8])> {
     match spec {
         MechSpec::Bytes { ckm, param } => {
@@ -208,6 +204,20 @@ fn raw_bytes(spec: &MechSpec) -> Option<(u64, &[u8])> {
         }
         _ => None,
     }
+}
+
+/// CK_GCM_PARAMS over `iv`/`aad` (both must outlive the struct's use). `ulIvBits` is 0, as
+/// PyKCS11's `AES_GCM_Mechanism` sent it (it never sets the field; c2 parity — SoftHSM
+/// ignores it, a token reading it sees what it saw from c2).
+pub(crate) fn gcm_params(iv: &mut [u8], aad: &[u8], tag_bits: u64) -> BResult<sys::CK_GCM_PARAMS> {
+    Ok(sys::CK_GCM_PARAMS {
+        pIv: iv.as_mut_ptr(),
+        ulIvLen: len_ulong(iv.len())?,
+        ulIvBits: 0,
+        pAAD: aad.as_ptr() as *mut sys::CK_BYTE,
+        ulAADLen: len_ulong(aad.len())?,
+        ulTagBits: param_ulong(tag_bits)?,
+    })
 }
 
 /// Build the cryptoki `Mechanism` of `spec` in this frame (owned parameter copies and
@@ -246,18 +256,11 @@ fn with_mechanism<R>(spec: &MechSpec, f: impl FnOnce(&Mechanism<'_>) -> BResult<
         } => {
             let mut iv_copy = iv.clone();
             let aad_copy = aad.clone();
-            let params = sys::CK_GCM_PARAMS {
-                pIv: iv_copy.as_mut_ptr(),
-                ulIvLen: len_ulong(iv_copy.len())?,
-                ulIvBits: len_ulong(iv_copy.len().saturating_mul(8))?,
-                pAAD: aad_copy.as_ptr() as *mut sys::CK_BYTE,
-                ulAADLen: len_ulong(aad_copy.len())?,
-                ulTagBits: param_ulong(*tag_bits)?,
-            };
+            let params = gcm_params(&mut iv_copy, &aad_copy, *tag_bits)?;
             let mechanism = VendorDefinedMechanism::new(mech_type(*ckm)?, Some(&params));
             let result = f(&Mechanism::VendorDefined(mechanism));
             drop(iv_copy);
-            drop(aad_copy);
+            drop(aad_copy); // Zeroizing: the authenticated data (a GMAC message) is wiped
             result
         }
         MechSpec::Ctr {
@@ -369,10 +372,6 @@ pub(crate) struct CryptokiBackend {
     session: RefCell<Option<Session>>,
 }
 
-#[allow(
-    dead_code,
-    reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
-)]
 impl CryptokiBackend {
     pub(crate) fn new(config: &Pkcs11InstanceConfig) -> Self {
         Self {
@@ -410,7 +409,9 @@ impl CryptokiBackend {
         Ok(obj(handle)?.handle())
     }
 
-    /// Single-part encrypt/decrypt/sign through cryptoki or RawFns.
+    /// Single-part encrypt/decrypt/sign through cryptoki or RawFns. Empty input always goes
+    /// through RawFns, which runs only the Init and answers CKR_ARGUMENTS_BAD without calling
+    /// the token, as PyKCS11 did (the operation stays active — c2 parity on every token).
     fn crypt(
         &self,
         op: RawOp,
@@ -432,6 +433,16 @@ impl CryptokiBackend {
                 );
             }
             with_mechanism(mech, |m| {
+                if data.is_empty() {
+                    let mechanism = sys::CK_MECHANISM::from(m);
+                    return module.raw.crypt(
+                        op,
+                        session.handle(),
+                        &mechanism,
+                        key_handle.handle(),
+                        data,
+                    );
+                }
                 let out = match op {
                     RawOp::Encrypt => session
                         .encrypt(m, key_handle, data)
@@ -449,10 +460,6 @@ impl CryptokiBackend {
     }
 }
 
-#[allow(
-    dead_code,
-    reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
-)]
 fn is_signature_failure(err: &BackendError) -> bool {
     matches!(err, BackendError::Ckr(Ckr { code, .. })
         if *code == rv::CKR_SIGNATURE_INVALID || *code == rv::CKR_SIGNATURE_LEN_RANGE)
@@ -705,6 +712,17 @@ impl super::Backend for CryptokiBackend {
                 );
             }
             with_mechanism(mech, |m| {
+                if data.is_empty() || signature.is_empty() {
+                    // Init only, then CKR_ARGUMENTS_BAD as PyKCS11 did (see `crypt`)
+                    let mechanism = sys::CK_MECHANISM::from(m);
+                    return module.raw.verify(
+                        session.handle(),
+                        &mechanism,
+                        key_handle.handle(),
+                        data,
+                        signature,
+                    );
+                }
                 session
                     .verify(m, key_handle, data, signature)
                     .map_err(|e| convert(e, "C_Verify"))
@@ -756,6 +774,19 @@ impl super::Backend for CryptokiBackend {
                     wrapped,
                     template,
                 );
+            }
+            if wrapped.is_empty() {
+                // CKR_ARGUMENTS_BAD without a token call, as PyKCS11 did
+                return with_mechanism(mech, |m| {
+                    let mechanism = sys::CK_MECHANISM::from(m);
+                    module.raw.unwrap(
+                        session.handle(),
+                        &mechanism,
+                        unwrapping.handle(),
+                        wrapped,
+                        template,
+                    )
+                });
             }
             let attrs = attributes(template)?;
             let result = with_mechanism(mech, |m| {

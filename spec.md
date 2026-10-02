@@ -2617,6 +2617,22 @@ PKCS#11 environment and lifecycle rules (S0 spike 1, binding for R5a):
   `pPin=NULL, ulPinLen=0` (cryptoki `login(user, None)`), as PyKCS11 does — never a
   non-NULL empty buffer, which tokens count as CKR_PIN_INCORRECT (SoftHSM answers
   CKR_ARGUMENTS_BAD → "PKCS#11 login failed (CKR_ARGUMENTS_BAD)", c2 parity).
+- Empty one-shot input buffers — C_Encrypt/C_Decrypt/C_Sign data, C_Verify data or
+  signature, C_UnwrapKey's wrapped blob — never reach the token: PyKCS11 1.5.18's C++
+  wrappers (`CPKCS11Lib::C_Encrypt`/`C_Decrypt`/`C_Sign`/`C_Verify`/`C_UnwrapKey`) answer
+  `CKR_ARGUMENTS_BAD` locally for a zero-length buffer, after the Python layer already ran
+  the matching C_EncryptInit/C_DecryptInit/C_SignInit/C_VerifyInit. r2 does the same in
+  CryptokiBackend and RawFns (`raw::empty_input`): it runs only the Init (an Init failure
+  is reported as such) and answers CKR_ARGUMENTS_BAD (e.g. "PKCS#11 encrypt with AES-ECB
+  failed (CKR_ARGUMENTS_BAD)", also for an empty pkcs7 ECB decrypt, before any
+  unpadding); an empty unwrap blob is refused before any token call (no Init). The
+  operation the Init started is left active, so later operations in that session (any
+  operation Init, C_FindObjectsInit) fail with CKR_OPERATION_ACTIVE until the session is
+  closed — on every token and SoftHSM version, exactly as for c2 (passing NULL to SoftHSM
+  2.7.0's C_Encrypt/C_Decrypt would instead end the operation, and a token accepting an
+  empty input — legal in PKCS#11, e.g. HMAC/CMAC/GMAC of an empty message — would
+  succeed where c2 always failed).
+  Multi-part encrypt (the GMAC GCM-over-AAD construction) is unaffected.
 - Capability discovery folds `RawFns::mechanism_list(slot) -> Vec<u64>`;
   `Pkcs11::get_mechanism_list` MUST NOT be used (it drops every CKM without a TryFrom
   arm, incl. all vendor CKMs).
@@ -2632,8 +2648,9 @@ PKCS#11 environment and lifecycle rules (S0 spike 1, binding for R5a):
   CKR_ARGUMENTS_BAD — PyKCS11 `getAttributeValue`/`_fragmented` parity — or returned
   `ulValueLen == CK_UNAVAILABLE_INFORMATION`; any other CKR is an error); `Session::get_attributes` MUST NOT be used. ULONG values
   are native-endian `CK_ULONG` of `size_of::<CK_ULONG>()` bytes; a ULONG VALUE that happens
-  to equal `CK_UNAVAILABLE_INFORMATION` is a real value and is reported numerically (e.g.
-  `CKA_KEY_GEN_MECHANISM: 18446744073709551615`, §5.16 — c2/PyKCS11 parity); BOOL = 1 byte.
+  to equal `CK_UNAVAILABLE_INFORMATION` is a real value and is reported numerically,
+  unsigned (e.g. `CKA_KEY_GEN_MECHANISM: 18446744073709551615`, §5.16; PyKCS11's `GetNum`
+  returned a signed C long, so c2 showed `-1` — §11 D18); BOOL = 1 byte.
   A CKA_ID read of `Some(empty)` becomes `KeyRef.key_id = None` (c2 `or None`; the §4.3
   invariant) — `get_attr` itself still reports the bytes it got. CKA_LABEL and
   CKA_APPLICATION (PyKCS11's `isString` attributes) decode as UTF-8 with invalid sequences
@@ -2815,8 +2832,10 @@ pub(crate) enum MechSpec {
     Plain { ckm: u64 },
     /// pParameter = `param` verbatim (CBC IV, custom `iv`/`raw` packers); empty → NULL.
     Bytes { ckm: u64, param: Vec<u8> },
-    /// CK_GCM_PARAMS: owned IV copy, AAD always non-NULL (possibly empty), ulTagBits.
-    Gcm { ckm: u64, iv: Vec<u8>, aad: Vec<u8>, tag_bits: u64 },
+    /// CK_GCM_PARAMS: owned IV copy, AAD always non-NULL (possibly empty) and wiped on
+    /// drop (it is the GCM-over-AAD GMAC message), ulTagBits; ulIvBits sent as 0
+    /// (PyKCS11 parity).
+    Gcm { ckm: u64, iv: Vec<u8>, aad: Zeroizing<Vec<u8>>, tag_bits: u64 },
     /// CK_AES_CTR_PARAMS (CKM_AES_CTR): full 16-byte counter block.
     Ctr { counter_bits: u64, counter_block: [u8; 16] },
     /// CK_RSA_PKCS_OAEP_PARAMS, source = CKZ_DATA_SPECIFIED, empty label → NULL source data.
@@ -4924,8 +4943,12 @@ pub fn dump_template_file(path: &Path, class_key: &str, template: &KeyTemplate) 
 /// '{name}'" (hint "define it under templates.custom_attributes (code + kind)"); kind/value
 /// mismatch (c2 `_value_from_yaml`, param_name = name) → BOOL: "{name} expects true/false";
 /// ULONG: a bool → "{name} expects an integer", a non-int non-symbol → "{name} expects an
-/// integer or CKO_/CKK_/CKC_/CKM_ constant", a negative int → "template attribute {name}
-/// must not be negative" (c2 raised it later, at conversion — §11 D18); BYTES: "{name}
+/// integer or CKO_/CKK_/CKC_/CKM_ constant", a negative int n ≥ −2^63 in a
+/// NON_CREATION_ATTRS row → its 64-bit two's complement 2^64 + n (c2 dumped PyKCS11's signed
+/// C long: `CKA_KEY_GEN_MECHANISM: -1` of an imported object loads as
+/// 18446744073709551615 = CK_UNAVAILABLE_INFORMATION, what r2's own dump writes; the row
+/// arrives disabled — §11 D18), any other negative int → "template attribute {name} must
+/// not be negative" (c2 raised it later, at conversion — §11 D18); BYTES: "{name}
 /// expects a 0x… hex string" | "{name} has invalid hex" (`text::py_fromhex`); STR: "{name}
 /// expects a string". Values are typed by the §4.8.4 loader, so `CKA_TOKEN: yes` is a bool
 /// and `CKA_LABEL: yes` fails "expects a string", exactly as in c2.
@@ -5518,6 +5541,14 @@ impl FakeBackend {
     pub(crate) fn objects(&self) -> Vec<(u64, std::collections::BTreeMap<u64, Vec<u8>>)> { .. }
     /// The last MechSpec handed to a crypto call (packer tests).
     pub(crate) fn last_mechanism(&self) -> Option<MechSpec> { .. }
+    // R5b additions (crate-private, test-only):
+    /// The session is invalidated right after the next successful C_SetAttributeValue
+    /// (edit recovery tests).
+    pub(crate) fn invalidate_after_next_set(&self) { .. }
+    /// C_UnwrapKey fails with `rv` while the template carries attribute type `attr`.
+    pub(crate) fn reject_unwrap_with(&self, attr: u64, rv: u64) { .. }
+    /// The attribute types of every C_UnwrapKey template seen, in call order.
+    pub(crate) fn unwrap_templates(&self) -> Vec<Vec<u64>> { .. }
 }
 impl Backend for FakeBackend { .. }
 /// SoftHSM-like CKM set (c2 fake_pykcs11 DEFAULT_MECHANISMS, as codes; numeric order).
@@ -5555,8 +5586,12 @@ pub(crate) const DEFAULT_MECHANISMS: &[u64] = &[
 
 SoftHSM-flavored behavior (c2 verified): imported/generated keys default
 CKA_SENSITIVE=false, CKA_EXTRACTABLE=false unless the template says otherwise; CKA_VALUE
-reads return None unless extractable and not sensitive; one-shot encrypt of empty input
-fails (multi-part works); OAEP accepts SHA-1/MGF1-SHA1 with an empty label only
+reads return None unless extractable and not sensitive; one-shot encrypt, decrypt, sign
+or verify of empty data (or an empty signature) fails with CKR_ARGUMENTS_BAD and leaves the
+session's operation active (later operation Inits and `find_objects` answer
+CKR_OPERATION_ACTIVE until the session is closed), and unwrap of an empty blob fails with
+CKR_ARGUMENTS_BAD only — what PyKCS11's local empty-buffer refusal produced, §4.5.5
+(multi-part works); OAEP accepts SHA-1/MGF1-SHA1 with an empty label only
 (CKR_ARGUMENTS_BAD otherwise); CKA_KEY_GEN_MECHANISM of imported objects reads as
 CK_UNAVAILABLE_INFORMATION; `find_objects` returns matches in creation order (list_keys
 order tests, §4.5.2); objects may be created with a zero-length CKA_ID (R5a test: it lists
@@ -6565,9 +6600,9 @@ DC → IA5String; everything else UTF8String).
 
 | Mechanism | memory (openssl) | PKCS#11 (cryptoki) | Notes |
 |---|---|---|---|
-| AES-ECB | `symm::Crypter` over `Cipher::aes_{128,192,256}_ecb()` with `pad(false)`; PKCS7 (block 16) in r2 code when `padding=pkcs7` | `Mechanism::AesEcb` (`CKM_AES_ECB`); **no** `_PAD` variant exists → **Pkcs11Provider** applies/strips PKCS7 around the token call (padding is always provider-side, symmetric with memory) | `padding=none` requires 16-B-aligned input (checked, `Param`: `padding=none requires input length to be a multiple of 16 bytes`) |
+| AES-ECB | `symm::Crypter` over `Cipher::aes_{128,192,256}_ecb()` with `pad(false)`; PKCS7 (block 16) in r2 code when `padding=pkcs7` | `Mechanism::AesEcb` (`CKM_AES_ECB`); **no** `_PAD` variant exists → **Pkcs11Provider** applies/strips PKCS7 around the token call (padding is always provider-side, symmetric with memory) | `padding=none` requires 16-B-aligned input (checked, `Param`, param_name `padding`; each provider keeps its c2 text — memory: `padding=none requires input length to be a multiple of 16 bytes`, Pkcs11Provider: `data length must be a multiple of 16 with padding=none`) |
 | AES-CBC | `Crypter` over `aes_*_cbc()` with the IV and `pad(false)` + r2-owned PKCS7 | `padding=none` → `Mechanism::AesCbc(iv)` (`CKM_AES_CBC`); `padding=pkcs7` → `Mechanism::AesCbcPad(iv)` (`CKM_AES_CBC_PAD`) | memory-PKCS7 and `_PAD` must be byte-identical (KAT cross-check, §8; S0-verified); `iv` must be 16 bytes (`Param`) |
-| AES-GCM | `symm::Crypter` over `Cipher::aes_*_gcm()` (the `symm::encrypt_aead` computation, with AAD and data fed in ≤ 2³⁰-byte updates, §11 D12(m)), output **ct‖tag** truncated to `tag_bits/8`; decrypt sets the tag before `finalize` (a bad tag is an error) | `Mechanism::AesGcm(GcmParams::new(&mut iv_copy, &aad, tag_bits))` [V, S0] returns ct‖tag natively (`GcmParams` needs an owned mutable IV copy) | AAD: always pass a non-NULL (possibly empty) buffer — SoftHSM builds reject NULL [V] (cryptoki passes a non-NULL pointer with length 0 for empty AAD, S0 capture). **[U]** FIPS HSMs may ignore the supplied IV and append their own — detect via output length, surface "HSM-generated IV" to the operator. Tamper on SoftHSM: `CKR_GENERAL_ERROR` (2.6.1) / `CKR_ENCRYPTED_DATA_INVALID` (2.7.0) |
+| AES-GCM | `symm::Crypter` over `Cipher::aes_*_gcm()` (the `symm::encrypt_aead` computation, with AAD and data fed in ≤ 2³⁰-byte updates, §11 D12(m)), output **ct‖tag** truncated to `tag_bits/8`; decrypt sets the tag before `finalize` (a bad tag is an error) | a `CK_GCM_PARAMS` (owned mutable IV copy, AAD, `ulTagBits`) through `VendorDefinedMechanism` [V, S0] returns ct‖tag natively; `ulIvBits` is sent as 0 — PyKCS11's `AES_GCM_Mechanism` never set it (c2 parity; cryptoki's `GcmParams::new` would send 8·len(iv)) | AAD: always pass a non-NULL (possibly empty) buffer — SoftHSM builds reject NULL [V] (cryptoki passes a non-NULL pointer with length 0 for empty AAD, S0 capture). **[U]** FIPS HSMs may ignore the supplied IV and append their own — detect via output length, surface "HSM-generated IV" to the operator. Tamper on SoftHSM: `CKR_GENERAL_ERROR` (2.6.1) / `CKR_ENCRYPTED_DATA_INVALID` (2.7.0) |
 | AES-CTR | `Cipher::aes_*_ctr()` with the full 16-B counter block as IV (OpenSSL increments the whole block big-endian, = pyca) | `Mechanism::VendorDefined(VendorDefinedMechanism::new(MechanismType::AES_CTR, Some(&CK_AES_CTR_PARAMS { ulCounterBits: counter_bits, cb: counter_block })))` [V, S0] (cryptoki has no CTR variant; no `unsafe`) | default `counter_bits=128` reproduces pyca's semantics; cross-provider KAT required. Memory accepts only `counter_bits=128` and a full 16-byte `counter_block` (`Param`, c2 texts). SoftHSM refuses a counter that would wrap within `counter_bits` (`CKR_DATA_LEN_RANGE`) |
 | RSA-OAEP | `encrypt::Encrypter`/`Decrypter` with `Padding::PKCS1_OAEP`, `set_rsa_oaep_md(hash)`, `set_rsa_mgf1_md(mgf_hash)`, `set_rsa_oaep_label(label)` only when the label is non-empty | `Mechanism::RsaPkcsOaep(PkcsOaepParams::new(hash, mgf, PkcsOaepSource::empty() \| data_specified(&label)))` [V, S0]; tokens that reject non-SHA1 OAEP params (SoftHSM: SHA-1/MGF1-SHA1 with an empty label only) fall back to on-token raw RSA (`Mechanism::RsaX509`) + provider-side OAEP en/decoding (c2 L5/L13 fold-back), triggered by `CKR_ARGUMENTS_BAD` / `CKR_MECHANISM_PARAM_INVALID` | hash/MGF pair (CKM_SHAx, CKG_MGF1_SHAx); mgf_hash defaults to hash; an empty label is sent as NULL source data (c2 parity, S0 capture). Decrypt failures are detail-free (`RSA-OAEP decryption failed`) |
 | RSA-PKCS1 | `Encrypter`/`Decrypter` with `Padding::PKCS1` | `Mechanism::RsaPkcs` (`CKM_RSA_PKCS`) | decrypt failures detail-free (`RSA-PKCS1 decryption failed`). A malformed ciphertext or wrong key follows the linked OpenSSL (§11 D26): an error on OpenSSL < 3.2 (the system 3.0 of source builds), implicit rejection (pseudo-random plaintext, no error) on 3.2+ (the vendored release build, as pyca/c2) |
@@ -6891,9 +6926,10 @@ when a value has no typed decoding — SoftHSM returns two such values on ordina
 (`CKA_CERTIFICATE_CATEGORY`, and `CKA_KEY_GEN_MECHANISM = CK_UNAVAILABLE_INFORMATION` on
 every imported object; S0). Values are decoded by the attribute's catalog kind only: ULONG
 = native-endian `CK_ULONG`, BOOL = one byte, BYTES/STR as read. A ULONG is reported
-numerically even when it equals `CK_UNAVAILABLE_INFORMATION` (e.g.
-`CKA_KEY_GEN_MECHANISM: 18446744073709551615` on 64-bit platforms), exactly as PyKCS11
-decoded it for c2 — the R14 shared-token test confirms the dump matches c2's.
+numerically even when it equals `CK_UNAVAILABLE_INFORMATION`, as an unsigned value (e.g.
+`CKA_KEY_GEN_MECHANISM: 18446744073709551615` on 64-bit platforms). PyKCS11's `GetNum`
+returned a signed C long, so c2 showed every value ≥ 2^63 negative (`-1` there) — §11 D18;
+otherwise the R14 shared-token test confirms the dump matches c2's.
 
 **File format** — class-keyed sections mirroring `templates.pkcs11` (§7); section keys =
 the §4.8 class keys (`aes`, `rsa_private`, `rsa_public`, `ec_private`, `ec_public`,
@@ -6913,7 +6949,11 @@ default_flow_style=False)` (the §4.8.4 emitter port: block style, insertion ord
 quoting choices, `\uXXXX` escapes for non-ASCII text, width-80 folding), and it is loaded
 with PyYAML's YAML 1.1 typing (§4.8.4 loader: plain `yes` is a bool, `'yes'` a string): a
 file dumped by c2 seeds r2 and vice versa (R14 acceptance; the differential harness diffs
-dumps byte-for-byte).
+dumps byte-for-byte, except the §11 D18 ULONG values ≥ 2^63 that c2 wrote signed — e.g.
+`CKA_KEY_GEN_MECHANISM: -1` vs `18446744073709551615` in a dump of an imported object — and
+seeds r2 from a c2 dump of such an object, which loads through `load_seed_file`'s
+two's-complement rule for `NON_CREATION_ATTRS` rows and seeds the same disabled row r2's own
+dump does).
 
 **Seeding** — `generate`/`load`/`copy` accept `--template <path>`; the file is parsed up
 front (fail before any prompt), and a non-pkcs11 target raises `Param` (the editor never
@@ -7684,6 +7724,23 @@ merges).**
     `_private_material_attrs` caught only ValueError/TypeError, so it crashed; r2 raises
     KeyParse `private key material is not DER PKCS#8: {pyca detail}` (likewise
     `public key material is not DER SPKI: …`).
+  - (q) PKCS#11 crypto verbs where c2's own code raised a non-`ConsoleError` past `_op`
+    (R5b): a hash name outside sha1/sha224/sha256/sha384/sha512 reaching RSA-PKCS1 /
+    RSA-PSS / ECDSA sign or verify (c2 `KeyError` from `_COMBINED_*`, `ValueError` from
+    `hashlib.new`; unreachable through the ENUM-typed ops) → Param `unknown hash {name!r}`
+    (hint `valid hashes: sha1, sha224, sha256, sha384, sha512`, c2's `_check_hash` text);
+    the software RSA-OAEP fallback (token rejects the OAEP parameters) failing in OpenSSL —
+    e.g. a payload too long for the key — where pyca's `ValueError` escaped → Crypto
+    `RSA-OAEP encryption failed: <OpenSSL reason>` (the memory provider's text, §11 D11);
+    a negative `tag_bits` / `counter_bits` / `out_len`, or a counter block that is not 16
+    bytes, which PyKCS11's struct packing refused with `OverflowError` (negative widths) /
+    `ValueError` (counter block not 16 bytes) → the
+    token's CKR for an invalid value per the §4.5.5 narrowing rule
+    (`CKR_MECHANISM_PARAM_INVALID` → UnsupportedOperation `token does not support <context>
+    (or its parameters) (CKR_MECHANISM_PARAM_INVALID)`; a negative derive `out_len` as
+    CKA_VALUE_LEN → `CKR_ATTRIBUTE_VALUE_INVALID`); and an ECDH SPKI peer pyca loads only as
+    `UnsupportedAlgorithm` (a curve pyca does not support) → Param `peer is not a valid SPKI
+    public key: <pyca detail>`, like c2's ValueError case.
 - *Reason*: every expected failure must be a `ConsoleError`; OpenSSL would reject the CN
   with a different text anyway.
 - *Verified by*: R8 certops test (a), R6 keyparse/x509info/formats fixtures (b, h, i, j:
@@ -7707,7 +7764,12 @@ merges).**
   `unsettable_env_entries_are_errors_not_panics`), R5a capability/objects tests (m:
   `unknown_ckms_survive_the_unfiltered_mechanism_list`,
   `listed_vendor_mechanisms_resolve_by_pykcs11_name`; n: the pyca gate of
-  `key_material_is_gated_by_pycas_der_loaders`).
+  `key_material_is_gated_by_pycas_der_loaders`), R5b verbs/mechanisms tests (q:
+  `pkcs1_prefers_the_combined_ckm_else_digestinfo_over_bare_rsa_pkcs`,
+  `gcm_packer_integer_reads_are_strict`, `ctr_needs_a_full_counter_block`,
+  `oaep_software_fallback_failure_is_a_crypto_error`,
+  `derive_negative_out_len_is_the_tokens_value_invalid`, `derive_peer_rules`; SoftHSM
+  `softhsm_oaep_software_fallback_reports_its_own_openssl_reason`).
 
 **D13 — Ctrl-C while a command runs is honored at step boundaries.**
 - *Description*: c2's `KeyboardInterrupt` surfaced at the next Python bytecode after the
@@ -7827,7 +7889,8 @@ merges).**
   - an INT parameter outside i64 → `<name>: invalid integer <text!r>` (c2: unbounded);
   - a negative template ULONG → config: Config `<path>: must not be negative` at load;
     template file: Param `template attribute <name> must not be negative` at load (c2
-    raised the latter only at the first create flow);
+    raised the latter only at the first create flow), except a `NON_CREATION_ATTRS` row
+    with a value ≥ −2^63, which loads as its two's complement (next sub-entry);
   - `custom_mechanisms[].params[].default` is typed by its `kind` at load (`expected a
     <kind> default, got <T>`, `keyref parameters cannot have a default`, or a BYTES
     default's `decode_data` CodecError text) — also where c2 never read the default (a
@@ -7856,10 +7919,27 @@ merges).**
     superscript digits, for which c2's following `int()` then raised (unexpected-error
     path) and r2 answers "invalid choice …" / "… is not a row number";
   - `text::py_os_error_str` always renders the POSIX `[Errno n] …` form (CPython on Windows
-    prints `[WinError n] …` for some calls).
+    prints `[WinError n] …` for some calls);
+  - PKCS#11 ULONG attribute values ≥ 2^63 read back from a token (notably
+    `CKA_KEY_GEN_MECHANISM = CK_UNAVAILABLE_INFORMATION` on imported objects) are shown
+    unsigned (`18446744073709551615`) by `read_full_template`/`key template`; c2 showed
+    PyKCS11's signed C long (`GetNum` → `-1`, `-2`, …) and its template dump wrote
+    `CKA_KEY_GEN_MECHANISM: -1` (`AttrValue::Ulong` is unsigned, §4.3; §5.16). So that a
+    c2 dump of an imported object still seeds r2 (§5.16), `load_seed_file` maps a negative
+    value n ≥ −2^63 in a `NON_CREATION_ATTRS` row to 2^64 + n (`-1` →
+    CK_UNAVAILABLE_INFORMATION, the value r2's own dump of that object writes); the row
+    arrives disabled in both tools, as c2 seeded it. Only if the operator re-enables such a
+    row does r2 send the unsigned value to the token (whose CKR — e.g.
+    CKR_ATTRIBUTE_READ_ONLY — is then the error) where c2 raised Param `template attribute
+    <name> must not be negative` at conversion; a negative value in any other row is refused
+    at load (previous sub-entry).
 - *Reason*: `u64`/`i64`/`u32` types at the API boundary; typed config.
 - *Verified by*: R1 parse_ref/text tests, R2 decoder tests, R3 packer tests, R7 resolver
-  tests, R10 editor tests, R14 template-file tests.
+  tests, R10 editor tests, R14 template-file tests (incl. a c2 dump of an imported SoftHSM
+  object, `CKA_KEY_GEN_MECHANISM: -1`, seeding a disabled 18446744073709551615 row, and
+  `-1` in a non-NON_CREATION row refused at load), R13 differential dump/seed runs over an
+  imported object; R5b `tests::edit::full_dump_covers_catalog_and_identity` and SoftHSM
+  `softhsm_read_full_template_dumps_the_object` (unsigned CKA_KEY_GEN_MECHANISM).
 
 **D19 — Command-line parser texts (clap).**
 - *Description*: `r2 --help`, the usage line and argument-error texts are clap's (c2:
@@ -7965,14 +8045,16 @@ one OpenSSL's `X509` decoder accepts). Verified by R6 x509build tests
   legacy provider); r2's vendored build has the provider compiled in (§5.4, §9).
 - `CKA_VALUE_LEN` unwrap retry: c2's trigger set is ported verbatim; SoftHSM's
   `CKR_ATTRIBUTE_READ_ONLY` answer stays outside it (§5.4 field note).
-- ULONG attribute values equal to `CK_UNAVAILABLE_INFORMATION` are reported numerically, as
-  PyKCS11 did (§5.16).
 - `C_Initialize` arguments (`CKF_OS_LOCKING_OK`, no mutex functions) and per-path module
   sharing match PyKCS11 (§5.2); only the sharing key differs (canonical path, D21).
 - Random and salt-dependent encodings are not normative and may differ byte-wise between
   runs and builds in both implementations: PBKDF2 salt length of encrypted PKCS#8 (8 or 16
   bytes by OpenSSL version) and PKCS#12 MAC salt, OAEP/PSS/ECDSA outputs, certificate serial
   numbers. Their algorithms, iteration counts and parameters are normative (§5.6).
+- Empty one-shot PKCS#11 input (empty `-i` file): refused with CKR_ARGUMENTS_BAD after the
+  Init without calling the token, like PyKCS11, so the error and the stuck-operation
+  aftermath (CKR_OPERATION_ACTIVE for the rest of the session) match c2 on every token
+  (§4.5.5).
 - Wire-level mechanism-parameter details invisible at the console: an empty GCM AAD and an
   empty ECDH `shared_data` are passed as non-NULL zero-length pointers (c2: non-NULL resp.
   NULL); SoftHSM accepts both (§5.8, §5.10).

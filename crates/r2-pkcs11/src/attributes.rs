@@ -13,7 +13,7 @@ use crate::ckr::rv;
 /// Size of a native `CK_ULONG` (4 bytes on Windows, 8 on LP64).
 #[allow(
     dead_code,
-    reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
+    reason = "documents the native CK_ULONG width; used by tests"
 )]
 pub(crate) const ULONG_SIZE: usize = std::mem::size_of::<cryptoki_sys::CK_ULONG>();
 
@@ -268,10 +268,6 @@ pub(crate) fn encode_vendor_value(kind: AttrKind, value: &AttrValue) -> Result<V
 
 /// Inverse of `encode_vendor_value`: BOOL → any nonzero byte, ULONG → native-endian,
 /// STR → UTF-8 with replacement, BYTES → as-is.
-#[allow(
-    dead_code,
-    reason = "consumed by R5b's verbs (crypto/wrap/derive/edit)"
-)]
 pub(crate) fn decode_vendor_value(kind: AttrKind, data: &[u8]) -> AttrValue {
     match kind {
         AttrKind::Bool => AttrValue::Bool(data.iter().any(|b| *b != 0)),

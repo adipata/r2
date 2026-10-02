@@ -1,8 +1,9 @@
 //! FakeBackend — in-memory `Backend` double for r2-pkcs11's own tests (spec §4.10.4); a port
 //! of c2's `tests/support/fake_pykcs11.py` behind the raw §4.5.6 seam. SoftHSM-flavored:
 //! imported/generated keys default CKA_SENSITIVE=false, CKA_EXTRACTABLE=false; CKA_VALUE
-//! reads return None unless extractable and not sensitive; one-shot encrypt of empty input
-//! fails (multi-part works); OAEP accepts only SHA-1/MGF1-SHA1 with an empty label;
+//! reads return None unless extractable and not sensitive; empty one-shot input
+//! (encrypt/decrypt/sign/verify) is CKR_ARGUMENTS_BAD and leaves the session's operation
+//! active, as PyKCS11 left it (an empty unwrap blob is CKR_ARGUMENTS_BAD only); OAEP accepts only SHA-1/MGF1-SHA1 with an empty label;
 //! imported key objects read CKA_KEY_GEN_MECHANISM = CK_UNAVAILABLE_INFORMATION;
 //! `find_objects` returns matches in creation order.
 use std::cell::RefCell;
@@ -95,6 +96,10 @@ struct Object {
 struct Session {
     slot: u64,
     invalidated: bool,
+    /// An empty one-shot input left its operation active (PyKCS11 refused the buffer after
+    /// the `*Init`): every later operation Init and C_FindObjectsInit in this session
+    /// answers CKR_OPERATION_ACTIVE until the session is closed (SoftHSM parity).
+    op_active: bool,
 }
 
 #[derive(Default)]
@@ -119,7 +124,26 @@ struct State {
     refused_reads: BTreeMap<(u64, u64), u64>,
     calls: Vec<&'static str>,
     last_mechanism: Option<MechSpec>,
+    // ---- R5b knobs ----
+    /// Invalidate the session right after the next successful `set_attrs` (the write
+    /// landed, then the token dropped the session).
+    invalidate_after_set: bool,
+    /// `unwrap_key` fails with this CKR whenever its template carries this attribute.
+    reject_unwrap_attr: Option<(u64, u64)>,
+    /// The attribute types of every `unwrap_key` template, in call order.
+    unwrap_templates: Vec<Vec<u64>>,
 }
+
+/// The methods whose token call starts with an operation Init (or C_FindObjectsInit) and so
+/// answers CKR_OPERATION_ACTIVE while a refused empty input left an operation active.
+const OPERATION_INITS: &[&str] = &[
+    "find_objects",
+    "encrypt",
+    "encrypt_multipart",
+    "decrypt",
+    "sign",
+    "verify",
+];
 
 /// SoftHSM-like CKM set (c2 fake_pykcs11 DEFAULT_MECHANISMS, as codes; numeric order).
 pub(crate) const DEFAULT_MECHANISMS: &[u64] = &[
@@ -235,11 +259,9 @@ impl FakeBackend {
             .refused_reads
             .insert((object, attribute), rv);
     }
-    #[allow(dead_code, reason = "failure/state knobs for R5b's verb tests")]
     pub(crate) fn fail_always(&self, method: &'static str, rv: u64) {
         self.state.borrow_mut().fail_always.push((method, rv));
     }
-    #[allow(dead_code, reason = "failure/state knobs for R5b's verb tests")]
     pub(crate) fn clear_failures(&self) {
         let mut state = self.state.borrow_mut();
         state.fail_next.clear();
@@ -255,7 +277,6 @@ impl FakeBackend {
     }
     /// Attribute types that C_SetAttributeValue refuses with CKR_ATTRIBUTE_READ_ONLY
     /// (CKA_SENSITIVE true→false / CKA_EXTRACTABLE false→true one-direction rules are built in).
-    #[allow(dead_code, reason = "failure/state knobs for R5b's verb tests")]
     pub(crate) fn set_read_only(&self, attrs: &[u64]) {
         self.state.borrow_mut().read_only = attrs.iter().copied().collect();
     }
@@ -335,7 +356,6 @@ impl FakeBackend {
             .map(|t| t.label.clone())
     }
     /// C_DeriveKey refuses extractable secret templates (§5.10 [U]).
-    #[allow(dead_code, reason = "failure/state knobs for R5b's verb tests")]
     pub(crate) fn set_forbid_extractable_secrets(&self, forbid: bool) {
         self.state.borrow_mut().forbid_extractable_secrets = forbid;
     }
@@ -371,6 +391,23 @@ impl FakeBackend {
         new_handle
     }
 
+    // ---- R5b knobs (crate-private test hooks) ----
+
+    /// The next successful `set_attrs` lands, then the session is invalidated (c2's
+    /// `set_then_drop` patch).
+    pub(crate) fn invalidate_after_next_set(&self) {
+        self.state.borrow_mut().invalidate_after_set = true;
+    }
+    /// `unwrap_key` answers `rv` whenever its template carries attribute `attr` (c2's
+    /// "picky" unwrapKey patch).
+    pub(crate) fn reject_unwrap_with(&self, attr: u64, rv: u64) {
+        self.state.borrow_mut().reject_unwrap_attr = Some((attr, rv));
+    }
+    /// The attribute types of every `unwrap_key` template, in call order.
+    pub(crate) fn unwrap_templates(&self) -> Vec<Vec<u64>> {
+        self.state.borrow().unwrap_templates.clone()
+    }
+
     // ---- internals ----
 
     /// Record the call and apply injected failures.
@@ -399,10 +436,22 @@ impl FakeBackend {
         let Some(token) = state.slots.get(&session.slot) else {
             return Err(fail(rv::CKR_SESSION_HANDLE_INVALID, method));
         };
+        if session.op_active && OPERATION_INITS.contains(&method) {
+            return Err(fail(rv::CKR_OPERATION_ACTIVE, method));
+        }
         if need_login && !token.logged_in {
             return Err(fail(rv::CKR_USER_NOT_LOGGED_IN, method));
         }
         Ok(session.slot)
+    }
+
+    /// PyKCS11's empty one-shot input: the Init succeeded, the single-part call never
+    /// reached the token — the operation stays active and the answer is CKR_ARGUMENTS_BAD.
+    fn empty_input(&self, method: &'static str) -> BackendError {
+        if let Some(session) = self.state.borrow_mut().session.as_mut() {
+            session.op_active = true;
+        }
+        fail(rv::CKR_ARGUMENTS_BAD, method)
     }
 
     fn require_mechanism(&self, slot: u64, spec: &MechSpec, method: &'static str) -> BResult<u64> {
@@ -525,10 +574,10 @@ impl FakeBackend {
         let method = if encrypt { "encrypt" } else { "decrypt" };
         let slot = self.check(method, true)?;
         let code = self.require_mechanism(slot, mech, method)?;
-        if encrypt && data.is_empty() {
-            return Err(fail(rv::CKR_ARGUMENTS_BAD, method));
-        }
         let secret = self.secret_of(key, method)?;
+        if data.is_empty() {
+            return Err(self.empty_input(method));
+        }
         if let MechSpec::Gcm {
             iv, aad, tag_bits, ..
         } = mech
@@ -649,6 +698,7 @@ impl Backend for FakeBackend {
         state.session = Some(Session {
             slot,
             invalidated: false,
+            op_active: false,
         });
         state.sessions_opened += 1;
         Ok(())
@@ -827,6 +877,11 @@ impl Backend for FakeBackend {
         for (code, value) in template {
             obj.attrs.insert(*code, value.to_vec());
         }
+        if std::mem::take(&mut state.invalidate_after_set)
+            && let Some(session) = state.session.as_mut()
+        {
+            session.invalidated = true;
+        }
         Ok(())
     }
 
@@ -965,6 +1020,9 @@ impl Backend for FakeBackend {
         let slot = self.check("sign", true)?;
         let code = self.require_mechanism(slot, mech, "sign")?;
         let secret = self.secret_of(key, "sign")?;
+        if data.is_empty() {
+            return Err(self.empty_input("sign"));
+        }
         Ok(Self::signature(&secret, code, data))
     }
 
@@ -972,6 +1030,9 @@ impl Backend for FakeBackend {
         let slot = self.check("verify", true)?;
         let code = self.require_mechanism(slot, mech, "verify")?;
         let secret = self.secret_of(key, "verify")?;
+        if data.is_empty() || signature.is_empty() {
+            return Err(self.empty_input("verify"));
+        }
         Ok(Self::signature(&secret, code, data) == signature)
     }
 
@@ -1009,6 +1070,21 @@ impl Backend for FakeBackend {
     ) -> BResult<u64> {
         let slot = self.check("unwrap_key", true)?;
         let code = self.require_mechanism(slot, mech, "unwrap_key")?;
+        if wrapped.is_empty() {
+            // PyKCS11 refused it before any token call: no operation is left active
+            return Err(fail(rv::CKR_ARGUMENTS_BAD, "unwrap_key"));
+        }
+        {
+            let mut state = self.state.borrow_mut();
+            state
+                .unwrap_templates
+                .push(template.iter().map(|(t, _)| *t).collect());
+            if let Some((attr, rv)) = state.reject_unwrap_attr
+                && template.iter().any(|(t, _)| *t == attr)
+            {
+                return Err(fail(rv, "unwrap_key"));
+            }
+        }
         let stream = keystream(
             &self.secret_of(unwrapping_key, "unwrap_key")?,
             format!("wrap|{code}").as_bytes(),

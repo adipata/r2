@@ -7,10 +7,6 @@
 //! calls with a runtime-length raw mechanism parameter, and `C_WrapKey` with output
 //! truncation. dlopen is refcounted, so the second open maps the module cryptoki already
 //! loaded and initialized.
-#![allow(
-    dead_code,
-    reason = "the crypto/wrap/derive shims are consumed by R5b's verbs"
-)]
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -48,6 +44,18 @@ fn check(code: CK_RV, function: &'static str) -> BResult<()> {
 /// Checked usize/u64 → CK_ULONG (§4.5.5 narrowing rule).
 pub(crate) fn ulong(value: usize, code: u64, function: &'static str) -> BResult<CK_ULONG> {
     CK_ULONG::try_from(value).map_err(|_| BackendError::Ckr(Ckr { code, function }))
+}
+
+/// PyKCS11's local empty-input refusal: its `C_Encrypt`/`C_Decrypt`/`C_Sign`/`C_Verify`/
+/// `C_UnwrapKey` wrappers answer CKR_ARGUMENTS_BAD for a zero-length input buffer WITHOUT
+/// calling the token — after the Python layer already ran the matching `*Init`, so the
+/// operation is left active on every token (the session's next operation fails with
+/// CKR_OPERATION_ACTIVE, as it did for c2). r2 never hands the token an empty one-shot input.
+fn empty_input(function: &'static str) -> BackendError {
+    BackendError::Ckr(Ckr {
+        code: rv::CKR_ARGUMENTS_BAD,
+        function,
+    })
 }
 
 /// A `CK_MECHANISM` whose `pParameter` points at `param` verbatim (empty → NULL, c2 parity).
@@ -273,7 +281,9 @@ impl RawFns {
         Ok(out)
     }
 
-    /// C_{Encrypt,Decrypt,Sign}Init + the single-part call with a raw mechanism.
+    /// C_{Encrypt,Decrypt,Sign}Init + the single-part call with a raw mechanism. Empty
+    /// input runs only the Init and answers CKR_ARGUMENTS_BAD (PyKCS11 parity, see
+    /// [`empty_input`]).
     pub(crate) fn crypt(
         &self,
         op: RawOp,
@@ -284,12 +294,16 @@ impl RawFns {
     ) -> BResult<Zeroizing<Vec<u8>>> {
         let data_len = ulong(data.len(), rv::CKR_DATA_LEN_RANGE, "raw")?;
         let mut mech = *mechanism;
-        let input = data.as_ptr() as *mut CK_BYTE;
+        let input = data.as_ptr().cast_mut();
+        let empty = data.is_empty();
         match op {
             RawOp::Encrypt => {
                 let (init, run) = (entry!(self, C_EncryptInit), entry!(self, C_Encrypt));
                 // SAFETY: `mech` and its parameter live in the caller's frame for the call.
                 check(unsafe { init(session, &mut mech, key) }, "C_EncryptInit")?;
+                if empty {
+                    return Err(empty_input("C_Encrypt"));
+                }
                 // SAFETY: input/output buffers are valid for the announced lengths.
                 Self::two_call(
                     &|o, n| unsafe { run(session, input, data_len, o, n) },
@@ -300,6 +314,9 @@ impl RawFns {
                 let (init, run) = (entry!(self, C_DecryptInit), entry!(self, C_Decrypt));
                 // SAFETY: as above.
                 check(unsafe { init(session, &mut mech, key) }, "C_DecryptInit")?;
+                if empty {
+                    return Err(empty_input("C_Decrypt"));
+                }
                 // SAFETY: as above.
                 Self::two_call(
                     &|o, n| unsafe { run(session, input, data_len, o, n) },
@@ -310,6 +327,9 @@ impl RawFns {
                 let (init, run) = (entry!(self, C_SignInit), entry!(self, C_Sign));
                 // SAFETY: as above.
                 check(unsafe { init(session, &mut mech, key) }, "C_SignInit")?;
+                if empty {
+                    return Err(empty_input("C_Sign"));
+                }
                 // SAFETY: as above.
                 Self::two_call(
                     &|o, n| unsafe { run(session, input, data_len, o, n) },
@@ -319,7 +339,8 @@ impl RawFns {
         }
     }
 
-    /// C_VerifyInit + C_Verify with a raw mechanism.
+    /// C_VerifyInit + C_Verify with a raw mechanism. Empty data or an empty signature runs
+    /// only the Init and answers CKR_ARGUMENTS_BAD (PyKCS11 parity, see [`empty_input`]).
     pub(crate) fn verify(
         &self,
         session: CK_SESSION_HANDLE,
@@ -334,14 +355,17 @@ impl RawFns {
         let mut mech = *mechanism;
         // SAFETY: `mech` and its parameter live in the caller's frame for the call.
         check(unsafe { init(session, &mut mech, key) }, "C_VerifyInit")?;
+        if data.is_empty() || signature.is_empty() {
+            return Err(empty_input("C_Verify"));
+        }
         // SAFETY: data and signature are valid for their announced lengths (read only).
         check(
             unsafe {
                 run(
                     session,
-                    data.as_ptr() as *mut CK_BYTE,
+                    data.as_ptr().cast_mut(),
                     data_len,
-                    signature.as_ptr() as *mut CK_BYTE,
+                    signature.as_ptr().cast_mut(),
                     sig_len,
                 )
             },
@@ -371,7 +395,8 @@ impl RawFns {
         Ok(blob.to_vec())
     }
 
-    /// C_UnwrapKey with a raw mechanism and a raw template.
+    /// C_UnwrapKey with a raw mechanism and a raw template. An empty wrapped blob answers
+    /// CKR_ARGUMENTS_BAD without calling the token (PyKCS11 parity, see [`empty_input`]).
     pub(crate) fn unwrap(
         &self,
         session: CK_SESSION_HANDLE,
@@ -380,6 +405,9 @@ impl RawFns {
         wrapped: &[u8],
         template: &[RawAttr],
     ) -> BResult<u64> {
+        if wrapped.is_empty() {
+            return Err(empty_input("C_UnwrapKey"));
+        }
         let f = entry!(self, C_UnwrapKey);
         let mut attrs = raw_template(template)?;
         let mut mech = *mechanism;
@@ -394,7 +422,7 @@ impl RawFns {
                     session,
                     &mut mech,
                     unwrapping_key,
-                    wrapped.as_ptr() as *mut CK_BYTE,
+                    wrapped.as_ptr().cast_mut(),
                     wrapped_len,
                     attrs.as_mut_ptr(),
                     count,
