@@ -1462,3 +1462,55 @@ fn generate_random_beyond_rand_bytes_range_is_a_crypto_error() {
     assert_eq!(err.message, "random number generation failed");
     assert_eq!(err.hint, None);
 }
+
+// ---------------------------------------------------------------------------------------
+// RSA 8192 (§5.3, §11 D32; c2's generate stopped at 4096)
+// ---------------------------------------------------------------------------------------
+
+/// An 8192-bit keypair works with its 1024-byte modulus: PSS sign/verify, OAEP and RAW
+/// encrypt/decrypt, PKCS#8 export. The key is a committed test vector
+/// (`support/rsa8192.der`, PKCS#8 from `openssl genpkey … rsa_keygen_bits:8192`): OpenSSL's 8K prime
+/// search takes 5–60 s here, so real 8K generation is exercised on SoftHSM
+/// (`softhsm_rsa_8192_generate_sign_and_oaep`) and the console size list on FakeProvider.
+#[test]
+fn rsa_8192_signs_encrypts_and_exports() {
+    let provider = make();
+    let key = PKey::private_key_from_der(include_bytes!("support/rsa8192.der")).unwrap();
+    assert_eq!(key.bits(), 8192);
+    let rsa = import_private(&provider, &key, KeyAlgorithm::Rsa, "rsa8k", None, None);
+    let rsa_pub = import_public(&provider, &key, KeyAlgorithm::Rsa, "rsa8k-pub", None);
+    assert_eq!((rsa.size_bits, rsa_pub.size_bits), (Some(8192), Some(8192)));
+
+    let pss = mech("RSA-PSS", &[("hash", text("sha256"))]);
+    let signature = provider.sign(&rsa, &pss, b"r2 8k").unwrap();
+    assert_eq!(signature.len(), 1024);
+    assert!(
+        provider
+            .verify(&rsa_pub, &pss, b"r2 8k", &signature)
+            .unwrap()
+    );
+    assert!(
+        !provider
+            .verify(&rsa_pub, &pss, b"r2 8K", &signature)
+            .unwrap()
+    );
+
+    let oaep = mech("RSA-OAEP", &[("hash", text("sha512"))]);
+    let ciphertext = provider.encrypt(&rsa_pub, &oaep, b"secret").unwrap();
+    assert_eq!(ciphertext.len(), 1024);
+    assert_eq!(
+        &*provider.decrypt(&rsa, &oaep, &ciphertext).unwrap(),
+        b"secret"
+    );
+
+    let raw = mech("RSA-RAW", &[]);
+    let ciphertext = provider.encrypt(&rsa_pub, &raw, b"\x01\x02").unwrap();
+    assert_eq!(
+        *provider.decrypt(&rsa, &raw, &ciphertext).unwrap(),
+        left_pad(b"\x01\x02", 1024)
+    );
+
+    let material = provider.export_key(&rsa).unwrap();
+    let exported = PKey::private_key_from_der(&material.data).unwrap();
+    assert_eq!(exported.bits(), 8192);
+}

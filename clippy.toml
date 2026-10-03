@@ -24,5 +24,5 @@ disallowed-methods = [
     { path = "cryptoki::context::Pkcs11::get_token_info", reason = "parses utcTime and fails on a non-digit clock; use RawFns::token_info" },
     { path = "cryptoki::session::Session::get_attributes", reason = "fails whole calls / omits refusals; use RawFns::get_attr" },
     { path = "cryptoki::session::Session::wrap_key", reason = "no truncation; use RawFns::wrap" },
-    { path = "std::io::IsTerminal::is_terminal", reason = "use crossterm::tty::IsTty (one allowed site: open_console_io)" },
+    { path = "std::io::IsTerminal::is_terminal", reason = "use crossterm::tty::IsTty (allowed sites: open_console_io; the r2-cli startup banner, §11 D33)" },
 ]

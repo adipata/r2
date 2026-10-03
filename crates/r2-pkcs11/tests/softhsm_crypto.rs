@@ -1382,3 +1382,57 @@ fn softhsm_generate_random_requires_login() {
     assert_eq!(err.message, "login required: run `login softhsm`");
     provider.shutdown().unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// RSA 8192 (§5.3, §11 D32; SoftHSM 2.6/2.7 advertise RSA up to 16384 bits)
+// ---------------------------------------------------------------------------
+
+/// C_GenerateKeyPair with CKA_MODULUS_BITS 8192 (session objects), then PSS sign/verify
+/// and OAEP encrypt/decrypt on the token, cross-checked with OpenSSL on the exported
+/// public key. One keygen only (SoftHSM's 8K prime search takes ~20 s here).
+#[test]
+fn softhsm_rsa_8192_generate_sign_and_oaep() {
+    let _lock = r2_testkit::global_state_lock();
+    let provider = logged_in();
+    let label = unique_label();
+    let mut request = GenerateRequest::new(KeyAlgorithm::Rsa, label.as_str());
+    request.size_bits = Some(8192);
+    request.template = Some(session_template(&["CKA_SIGN", "CKA_DECRYPT"]));
+    request.public_template = Some(KeyTemplate::new(vec![
+        boolean("CKA_TOKEN", false),
+        boolean("CKA_VERIFY", true),
+        boolean("CKA_ENCRYPT", true),
+    ]));
+    let private = provider.generate_key(&request).unwrap();
+    assert_eq!(private.size_bits, Some(8192));
+    let public = public_of(&provider, label.as_str());
+    let pkey = public_pkey(&provider, &public);
+    assert_eq!(pkey.bits(), 8192);
+
+    let pss = mech("RSA-PSS", vec![("hash", e("sha256"))]);
+    let signature = provider.sign(&private, &pss, b"r2 8k").unwrap();
+    assert_eq!(signature.len(), 1024);
+    assert!(
+        provider
+            .verify(&public, &pss, b"r2 8k", &signature)
+            .unwrap()
+    );
+    let mut verifier = Verifier::new(MessageDigest::sha256(), &pkey).unwrap();
+    verifier
+        .set_rsa_padding(openssl::rsa::Padding::PKCS1_PSS)
+        .unwrap();
+    verifier.update(b"r2 8k").unwrap();
+    assert!(
+        verifier.verify(&signature).unwrap(),
+        "OpenSSL accepts the token's signature"
+    );
+
+    let oaep = mech("RSA-OAEP", vec![("hash", e("sha1"))]);
+    let ciphertext = provider.encrypt(&public, &oaep, b"secret").unwrap();
+    assert_eq!(ciphertext.len(), 1024);
+    assert_eq!(
+        &*provider.decrypt(&private, &oaep, &ciphertext).unwrap(),
+        b"secret"
+    );
+    provider.shutdown().unwrap();
+}

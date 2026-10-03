@@ -18,7 +18,8 @@ use zeroize::Zeroizing;
 use crate::context::AppContext;
 use crate::testing::CtxBuilder;
 
-const USAGE: &str = "random <provider> [<length>] [--out <path>] [--outformat raw|hex|b64]";
+const USAGE: &str =
+    "random <provider> [<length> | length=<n>] [--out <path>] [--outformat raw|hex|b64]";
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -115,10 +116,7 @@ fn random_renders_the_hex_result() {
     // §4.9.2: a Hex renderable titled with what the bytes are
     assert_eq!(
         io.renderables(),
-        [Renderable::Hex {
-            data: expected.clone(),
-            title: Some("random — mem".to_owned()),
-        }]
+        [r2_core::io::hex(&expected, Some("random — mem"))]
     );
     let text = io.text();
     assert!(text.contains("random — mem"));
@@ -145,7 +143,7 @@ fn successive_random_draws_differ() {
         .renderables()
         .into_iter()
         .map(|r| match r {
-            Renderable::Hex { data, .. } => data,
+            Renderable::Hex { data, .. } => data.to_vec(),
             other => panic!("not a hex result: {other:?}"),
         })
         .collect();
@@ -266,10 +264,7 @@ fn random_length_is_prompted_and_reprompted_after_errors() {
     assert_eq!(io.output().len(), 3);
     assert_eq!(
         io.renderables()[2],
-        Renderable::Hex {
-            data: first_draw(24),
-            title: Some("random — mem".to_owned()),
-        }
+        r2_core::io::hex(&first_draw(24), Some("random — mem"))
     );
     // the rejected answers never reached the provider
     assert_eq!(random_calls(&mem), [call(&["generate_random", "24"])]);
@@ -367,15 +362,115 @@ fn random_too_many_arguments() {
 }
 
 #[test]
-fn random_rejects_name_value_tokens() {
-    let (ctx, _) = make_ctx(&scripted(&[]));
-    let err = run_err(&ctx, "random mem length=16");
-    assert_eq!(err.kind, ErrorKind::Generic);
-    assert_eq!(err.message, "unexpected name=value token 'length=…'");
+fn random_takes_the_length_as_length_equals_n_too() {
+    let io = scripted(&[]);
+    let (ctx, mem) = make_ctx(&io);
+    run_line(&ctx, "random mem length=16").unwrap();
     assert_eq!(
-        err.hint.as_deref(),
-        Some(&*format!("usage: {USAGE} (quote values containing '=')"))
+        io.renderables(),
+        [r2_core::io::hex(&first_draw(16), Some("random — mem"))]
     );
+    assert!(mem.calls().contains(&call(&["generate_random", "16"])));
+}
+
+#[test]
+fn random_length_given_twice_is_an_error() {
+    let (ctx, mem) = make_ctx(&scripted(&[]));
+    let err = run_err(&ctx, "random mem 16 length=16");
+    assert_eq!(err.kind, ErrorKind::Generic);
+    assert_eq!(err.message, "the length is given twice");
+    assert_eq!(err.hint.as_deref(), Some(&*format!("usage: {USAGE}")));
+    assert!(!mem.calls().iter().any(|c| c[0] == "generate_random"));
+}
+
+#[test]
+fn random_rejects_other_name_value_tokens() {
+    let (ctx, _) = make_ctx(&scripted(&[]));
+    let err = run_err(&ctx, "random mem foo=1");
+    assert_eq!(err.param_name(), Some("foo"));
+    assert_eq!(err.message, "unknown parameter 'foo' for random");
+    assert_eq!(err.hint.as_deref(), Some("valid parameters: length"));
+}
+
+/// The argument checks run in a fixed order (§5.17): options and arity first, then
+/// --out/--outformat, then the provider (and its login state), then the length.
+#[test]
+fn random_argument_errors_come_in_order() {
+    let hsm = Rc::new(FakeProvider::new("hsm").with_type_name("pkcs11"));
+    hsm.logout().unwrap();
+    let mem = Rc::new(FakeProvider::new("mem"));
+    let io = scripted(&[]);
+    let ctx = CtxBuilder::new(dyn_io(&io))
+        .providers(registry(&[Rc::clone(&hsm), Rc::clone(&mem)]))
+        .build();
+    for (line, kind, message) in [
+        // --outformat without --out is caught before the unknown provider
+        (
+            "random nosuch 16 --outformat hex",
+            ErrorKind::Generic,
+            "--outformat requires --out",
+        ),
+        // arity before the provider lookup
+        (
+            "random nosuch 1 2 3",
+            ErrorKind::Generic,
+            "too many arguments",
+        ),
+        // unknown options before the length
+        (
+            "random mem length=1 --in x",
+            ErrorKind::Generic,
+            "unknown option --in",
+        ),
+        // the --outformat value before the login check and the length range
+        (
+            "random hsm 0 --out x --outformat nope",
+            ErrorKind::Generic,
+            "invalid --outformat 'nope'",
+        ),
+        // login before the length range
+        (
+            "random hsm 0",
+            ErrorKind::AuthRequired,
+            "login required: run `login hsm`",
+        ),
+        // the double length before the provider is touched
+        (
+            "random mem 1 length=1",
+            ErrorKind::Generic,
+            "the length is given twice",
+        ),
+    ] {
+        let err = run_err(&ctx, line);
+        assert_eq!(
+            (&err.kind, err.message.as_str()),
+            (&kind, message),
+            "{line}"
+        );
+    }
+    assert!(random_calls(&hsm).is_empty());
+    assert!(random_calls(&mem).is_empty());
+    assert!(io.prompts().is_empty());
+    assert!(io.output().is_empty());
+}
+
+/// A mistyped command name suggests `random` (difflib close match, §5.1).
+#[test]
+fn unknown_commands_suggest_random() {
+    let (ctx, _) = make_ctx(&scripted(&[]));
+    let err = run_err(&ctx, "randon 16");
+    assert_eq!(err.kind, ErrorKind::UnknownOperation);
+    assert_eq!(err.message, "unknown command 'randon'");
+    assert_eq!(err.hint.as_deref(), Some("did you mean: random"));
+    let err = run_err(&ctx, "read");
+    assert_eq!(err.kind, ErrorKind::UnknownOperation);
+    assert_eq!(err.message, "unknown command 'read'");
+    assert_eq!(err.hint.as_deref(), Some("did you mean: random"));
+    // and so does `help`
+    let err = run_err(&ctx, "help rando");
+    assert_eq!(err.kind, ErrorKind::UnknownOperation);
+    assert_eq!(err.message, "unknown command 'rando'");
+    assert_eq!(err.hint.as_deref(), Some("did you mean: random"));
 }
 
 #[test]
@@ -394,7 +489,7 @@ fn random_outformat_requires_out() {
     assert_eq!(err.message, "--outformat requires --out");
     assert_eq!(
         err.hint.as_deref(),
-        Some("console output is always the grouped hex dump (§5.1)")
+        Some("console output is always the hex result (§5.1)")
     );
     assert!(random_calls(&mem).is_empty());
 }
@@ -449,21 +544,18 @@ fn random_on_a_logged_in_pkcs11_presented_provider() {
         .to_vec();
     assert_eq!(
         io.renderables(),
-        [Renderable::Hex {
-            data: expected,
-            title: Some("random — hsm".to_owned()),
-        }]
+        [r2_core::io::hex(&expected, Some("random — hsm"))]
     );
 }
 
-/// CKR_RANDOM_NO_RNG (0x121) as the §5.2 choke point would report it.
+/// CKR_RANDOM_NO_RNG (0x121) exactly as the §5.2 choke point reports it (message, CKR,
+/// no hint — see r2-pkcs11 `generate_random_ckr_failures_go_through_the_choke_point`).
 fn no_rng() -> ConsoleError {
     ConsoleError::pkcs11(
-        "C_GenerateRandom failed: CKR_RANDOM_NO_RNG",
+        "PKCS#11 random generation failed (CKR_RANDOM_NO_RNG)",
         0x121,
         "CKR_RANDOM_NO_RNG",
     )
-    .with_hint("the token has no random number generator")
 }
 
 /// A provider error from generate_random reaches the REPL unchanged; nothing is printed.
@@ -486,6 +578,8 @@ fn random_provider_error_propagates_unchanged() {
         .build();
     let err = run_err(&ctx, "random mem 16");
     assert_eq!(err, no_rng());
+    assert_eq!(err.ckr(), Some((0x121, "CKR_RANDOM_NO_RNG")));
+    assert_eq!(err.hint, None);
     assert!(io.output().is_empty(), "{:?}", io.output());
 }
 

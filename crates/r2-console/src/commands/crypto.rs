@@ -22,19 +22,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use indexmap::IndexMap;
 use r2_core::datainput::{DataInput, DataOutput, InFormat, OutFormat};
 use r2_core::error::{ConsoleError, ErrorKind};
-use r2_core::io::{Renderable, Span, Tone, busy_with, hex, table};
+use r2_core::io::{Renderable, Span, Tone, busy_with, hex_timed, table};
 use r2_core::keys::{Curve, KeyAlgorithm, KeyClass, KeyInfo, KeyRef, parse_ref};
 use r2_core::params::{ParamKind, ParamSpec, ParamStruct, ParamValue, Params, Verb};
-use r2_core::runtime::check_interrupt;
+use r2_core::runtime::{check_interrupt, take_operation_time, timed, timing_suffix};
 use r2_core::text::{py_path, py_repr};
 use r2_ops::{OperationSpec, ParamResolver};
 use r2_provider::{AuthState, KeySelector, MechanismInvocation, Provider};
 use zeroize::Zeroizing;
 
-use crate::cmdutil::{completed_args, positional, previous_token, reject_named, require_usable};
+use crate::cmdutil::{completed_args, positional, previous_token, require_usable};
 use crate::commands::Command;
 use crate::completer::{browsable, complete_paths, complete_provider_names, complete_refs};
 use crate::context::AppContext;
@@ -225,7 +224,7 @@ fn make_output(args: &BoundArgs) -> r2_core::Result<Option<DataOutput>> {
     let Some(out) = out else {
         if fmt.is_some() {
             return Err(ConsoleError::generic("--outformat requires --out")
-                .with_hint("console output is always the grouped hex dump (§5.1)"));
+                .with_hint("console output is always the hex result (§5.1)"));
         }
         return Ok(None);
     };
@@ -242,7 +241,9 @@ fn emit(
 ) -> r2_core::Result<()> {
     check_interrupt()?; // §11 D13: the flag is honored before writing output
     let Some(output) = output else {
-        ctx.io.print(hex(data, Some(title)));
+        // §11 D31: the provider time of the verb, after the byte count
+        ctx.io
+            .print(hex_timed(data, Some(title), take_operation_time()));
         return Ok(());
     };
     output.write(data, ctx.io.as_ref())?;
@@ -252,8 +253,9 @@ fn emit(
         .map(|path| path.display().to_string())
         .unwrap_or_default();
     ctx.io.print(Renderable::Text(format!(
-        "wrote {} bytes to {shown}",
-        data.len()
+        "wrote {} bytes to {shown}{}",
+        data.len(),
+        timing_suffix()
     )));
     Ok(())
 }
@@ -297,7 +299,8 @@ fn busy_labeled<T>(
     check_interrupt()?;
     provider.initialize()?;
     check_interrupt()?;
-    let value = busy_with(ctx.io.as_ref(), message, f)?;
+    // §11 D31: only the provider call is timed (not initialize, prompts or output)
+    let value = busy_with(ctx.io.as_ref(), message, || timed(f))?;
     check_interrupt()?;
     Ok(value)
 }
@@ -356,8 +359,13 @@ impl VerbShape {
             Some(spec) => spec,
             None => select_mechanism(ctx, self.verb, &key, provider.as_ref())?,
         };
-        let params =
-            ParamResolver::new(ctx.io.as_ref(), &ctx.providers).resolve(spec, &args.named)?;
+        let mut resolver = ParamResolver::new(ctx.io.as_ref(), &ctx.providers);
+        if matches!(self.verb, Verb::Encrypt | Verb::Sign) {
+            // §11 D30: an IV left empty at its prompt comes from the key's provider RNG
+            // (decrypt/verify need the original one and never get an RNG)
+            resolver = resolver.with_rng(provider.as_ref());
+        }
+        let params = resolver.resolve(spec, &args.named)?;
         Ok(Resolved {
             provider,
             key,
@@ -571,10 +579,18 @@ impl Command for VerifyCommand {
         } else {
             ("signature INVALID", Tone::Error)
         };
-        ctx.io.print(Renderable::Styled(vec![vec![Span {
+        let mut line = vec![Span {
             text: text.to_owned(),
             tone,
-        }]]));
+        }];
+        let timing = timing_suffix(); // §11 D31
+        if !timing.is_empty() {
+            line.push(Span {
+                text: timing,
+                tone: Tone::Plain,
+            });
+        }
+        ctx.io.print(Renderable::Styled(vec![line]));
         Ok(Flow::Continue)
     }
     fn complete(&self, ctx: &AppContext, tokens: &[String], cursor_token: &str) -> Vec<String> {
@@ -630,8 +646,9 @@ impl Command for DeriveCommand {
                 .with_hint(format!("result key: {}", resident.key_ref.display())));
             }
             ctx.io.print(Renderable::Text(format!(
-                "derived key (provider-resident): {}",
-                resident.key_ref.display()
+                "derived key (provider-resident): {}{}",
+                resident.key_ref.display(),
+                timing_suffix()
             )));
         } else {
             return Err(ConsoleError::crypto(
@@ -829,7 +846,8 @@ impl Command for OpsCommand {
 // random (§5.17, §11 D29 — r2 only)
 // ---------------------------------------------------------------------------
 
-const RANDOM_USAGE: &str = "random <provider> [<length>] [--out <path>] [--outformat raw|hex|b64]";
+const RANDOM_USAGE: &str =
+    "random <provider> [<length> | length=<n>] [--out <path>] [--outformat raw|hex|b64]";
 /// The largest `random` request in bytes (§5.17).
 const RANDOM_MAX_BYTES: i64 = 1_048_576;
 
@@ -872,7 +890,7 @@ fn random_spec() -> OperationSpec {
     }
 }
 
-/// `random <provider> [<length>]`: `<length>` bytes from the provider's RNG (memory:
+/// `random <provider> [<length> | length=<n>]`: `<length>` bytes from the provider's RNG (memory:
 /// OpenSSL; PKCS#11: C_GenerateRandom on the logged-in session — never C_SeedRandom),
 /// shown as the hex result titled "random — <provider>" or written with --out/--outformat.
 struct RandomCommand;
@@ -889,9 +907,12 @@ impl Command for RandomCommand {
     }
     fn run(&self, ctx: &AppContext, args: &BoundArgs) -> r2_core::Result<Flow> {
         check_options(args, &["out", "outformat"], RANDOM_USAGE)?;
-        reject_named(args, RANDOM_USAGE, "values")?;
         if args.positionals.len() > 2 {
             return Err(ConsoleError::generic("too many arguments")
+                .with_hint(format!("usage: {RANDOM_USAGE}")));
+        }
+        if args.positionals.len() == 2 && args.named.contains_key("length") {
+            return Err(ConsoleError::generic("the length is given twice")
                 .with_hint(format!("usage: {RANDOM_USAGE}")));
         }
         let output = make_output(args)?;
@@ -899,7 +920,9 @@ impl Command for RandomCommand {
             .providers
             .get(positional(args, 0, "provider", RANDOM_USAGE)?)?;
         require_usable(provider.as_ref())?; // auth first, before the length prompt
-        let mut given = IndexMap::new();
+        // `length=<n>` or the positional; any other name=value token is the resolver's
+        // "unknown parameter" error
+        let mut given = args.named.clone();
         if let Some(length) = args.positionals.get(1) {
             given.insert("length".to_owned(), length.clone());
         }

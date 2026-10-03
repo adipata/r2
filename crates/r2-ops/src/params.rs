@@ -5,15 +5,17 @@
 // (copy that param's already-resolved value) when set; else `default` when not required;
 // else `io.prompt(param)` until the answer parses. Unknown names in `given` → ParamError
 // listing the valid names. Ctrl-C / Ctrl-D inside the prompt arrive from the IO as UserAbort
-// and propagate.
+// and propagate. §11 D30: with an RNG provider (`with_rng`), a BYTES param declaring
+// `random` is prompted with ", empty = random" and an empty answer draws that many bytes
+// from the provider, announced as "<label> (random): <hex>".
 use std::collections::HashSet;
 
 use indexmap::IndexMap;
 use r2_core::codec::decode_data;
 use r2_core::error::{ConsoleError, ErrorKind, Result};
-use r2_core::io::ConsoleIo;
+use r2_core::io::{ConsoleIo, Renderable};
 use r2_core::text::{py_repr, py_strip};
-use r2_provider::ProviderRegistry;
+use r2_provider::{Provider, ProviderRegistry};
 
 use crate::model::{OperationSpec, ParamKind, ParamSpec, ParamValue, Params};
 
@@ -32,10 +34,24 @@ const BOOL_VALUES: [(&str, bool); 8] = [
 pub struct ParamResolver<'a> {
     io: &'a dyn ConsoleIo,
     providers: &'a ProviderRegistry,
+    rng: Option<&'a dyn Provider>,
 }
 impl<'a> ParamResolver<'a> {
     pub fn new(io: &'a dyn ConsoleIo, providers: &'a ProviderRegistry) -> Self {
-        Self { io, providers }
+        Self {
+            io,
+            providers,
+            rng: None,
+        }
+    }
+    /// §11 D30: the provider whose RNG fills `random` params left empty at the prompt (the
+    /// key's own provider; encrypt/sign and `export --kek` only — decrypt/verify/unwrap
+    /// need the original IV and never pass one).
+    pub fn with_rng(self, provider: &'a dyn Provider) -> Self {
+        Self {
+            rng: Some(provider),
+            ..self
+        }
     }
     /// Algorithm below. `given` = BoundArgs.named (name=value tokens, line order).
     pub fn resolve(
@@ -101,10 +117,34 @@ impl<'a> ParamResolver<'a> {
     }
 
     /// Prompt until the answer parses; a ParamError is shown and the prompt repeats; any
-    /// other error (the IO's UserAbort) propagates.
+    /// other error (the IO's UserAbort) propagates. §11 D30: a `random` BYTES param with an
+    /// RNG is prompted as "IV (16 bytes, empty = random)"; an empty answer draws the bytes
+    /// (an RNG failure propagates) and prints "IV (random): <hex>".
     fn prompt(&self, param: &ParamSpec) -> Result<ParamValue> {
+        let random = match (param.random, self.rng) {
+            (Some(len), Some(rng)) if param.kind == ParamKind::Bytes => Some((len, rng)),
+            _ => None,
+        };
+        let shown = match random {
+            Some(_) => ParamSpec {
+                prompt: random_prompt(&param.prompt),
+                ..param.clone()
+            },
+            None => param.clone(),
+        };
         loop {
-            let text = self.io.prompt(param)?;
+            let text = self.io.prompt(&shown)?;
+            if let Some((len, rng)) = random
+                && py_strip(&text).is_empty()
+            {
+                let bytes = rng.generate_random(len)?;
+                let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+                self.io.print(Renderable::Text(format!(
+                    "{} (random): {hex}",
+                    prompt_label(&param.prompt)
+                )));
+                return Ok(ParamValue::Bytes(bytes.to_vec()));
+            }
             match self.parse_value(param, &text) {
                 Ok(value) => return Ok(value),
                 Err(err) if matches!(err.kind, ErrorKind::Param { .. }) => {
@@ -203,5 +243,22 @@ impl<'a> ParamResolver<'a> {
                     .with_hint_opt(err.hint),
             ),
         }
+    }
+}
+
+/// "IV (16 bytes)" → "IV (16 bytes, empty = random)"; a prompt without a trailing
+/// parenthesis gains " (empty = random)" (§11 D30).
+fn random_prompt(prompt: &str) -> String {
+    match prompt.strip_suffix(')') {
+        Some(head) if head.contains('(') => format!("{head}, empty = random)"),
+        _ => format!("{prompt} (empty = random)"),
+    }
+}
+
+/// The prompt without its parenthesized note: "IV / nonce (12 bytes typical)" → "IV / nonce".
+fn prompt_label(prompt: &str) -> &str {
+    match prompt.rfind(" (") {
+        Some(at) if prompt.ends_with(')') => &prompt[..at],
+        _ => prompt,
     }
 }

@@ -151,7 +151,8 @@ fn test_aes_gcm_interactive_fallbacks() {
     assert_clean(&io);
     let prompts = io.prompts();
     assert!(prompts.contains(&"Select encrypt mechanism for mem:aeskey".to_owned()));
-    assert!(prompts.contains(&"IV / nonce (12 bytes typical)".to_owned()));
+    // §11 D30: encrypt prompts note the random fallback
+    assert!(prompts.contains(&"IV / nonce (12 bytes typical, empty = random)".to_owned()));
     assert!(prompts.contains(&"Data (hex, base64 or PEM)".to_owned()));
     let expected = unhex(GCM_48);
     let text = io.text();
@@ -306,7 +307,7 @@ fn test_ops_key_filter_restricts_to_the_key() {
 fn command_errors_render_as_error_lines() {
     let (io, _) = run_session(&["encrypt mem:aeskey ecb 0xdeadbeef --outformat hex"]);
     assert!(io.output().contains(
-        &"error: --outformat requires --out (hint: console output is always the grouped hex dump (§5.1))"
+        &"error: --outformat requires --out (hint: console output is always the hex result (§5.1))"
             .to_owned()
     ));
 }

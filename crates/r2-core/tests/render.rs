@@ -356,6 +356,31 @@ fn caret_column_is_display_width() {
     assert_eq!(lines[1].last().unwrap().tone, Tone::Error);
 }
 
+/// §11 D31: a timed hex result shows the provider time after the byte count (an empty
+/// one as its only footer text); the borders widen to keep it whole.
+#[test]
+fn hex_result_footer_shows_the_operation_time() {
+    use std::time::Duration;
+    let data = r2_core::text::py_fromhex("c0fe").unwrap();
+    let timed = r2_core::io::hex_timed(
+        &data,
+        Some("plaintext — AES-CBC"),
+        Some(Duration::from_millis(4)),
+    );
+    assert_eq!(
+        render_plain(&timed, &at(80)),
+        "╭─ plaintext — AES-CBC ─╮\nc0fe\n╰────── 2 bytes in 4ms ─╯"
+    );
+    assert_eq!(render(&timed, &at(80)), render_plain(&timed, &at(80)));
+    let empty = r2_core::io::hex_timed(&[], Some("plaintext"), Some(Duration::from_micros(412)));
+    let text = render_plain(&empty, &at(80));
+    assert!(text.contains("(empty — 0 bytes)"), "{text}");
+    assert!(text.ends_with(" in 412µs ─╯"), "{text}");
+    // untimed: c2's footer
+    let plain = render_plain(&hex(&data, Some("plaintext — AES-CBC")), &at(80));
+    assert!(plain.ends_with("─ 2 bytes ─╯"), "{plain}");
+}
+
 /// c2 `test_hex_panel_groups_and_length`, under §11 D28: one unbroken line, not groups.
 #[test]
 fn test_hex_panel_one_line_and_length() {
@@ -747,8 +772,9 @@ fn renderable_from_strings_is_text() {
     assert_eq!(
         hex(&[1], Some("h")),
         Renderable::Hex {
-            data: vec![1],
-            title: Some("h".into())
+            data: zeroize::Zeroizing::new(vec![1]),
+            title: Some("h".into()),
+            elapsed: None,
         }
     );
     assert_eq!(

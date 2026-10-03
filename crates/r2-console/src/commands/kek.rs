@@ -12,7 +12,7 @@ use r2_core::codec::decode_data;
 use r2_core::datainput::{DataInput, DataOutput, InFormat, OutFormat};
 use r2_core::error::ConsoleError;
 use r2_core::io::{Renderable, table};
-use r2_core::runtime::check_interrupt;
+use r2_core::runtime::{check_interrupt, timing_suffix};
 use r2_core::text::{py_path, py_repr, py_strip};
 use r2_ops::ParamResolver;
 use r2_provider::Provider;
@@ -154,9 +154,10 @@ pub fn run_load(
     check_interrupt()?; // §11 D13: step boundary after the provider verb
     ctx.io.print(table(
         Some(&format!(
-            "unwrapped into {} ({})",
+            "unwrapped into {} ({}){}",
             provider.name(),
-            entry.spec.mechanism
+            entry.spec.mechanism,
+            timing_suffix()
         )),
         &["ref", "class", "algorithm"],
         vec![vec![
@@ -228,8 +229,11 @@ pub fn run_export(ctx: &AppContext, args: &BoundArgs) -> r2_core::Result<()> {
         None => wrapload::select_mech(ctx.io.as_ref(), &kek, provider, Direction::Wrap)?,
     };
     reject_unknown_params(args, &entry)?;
-    let params =
-        ParamResolver::new(ctx.io.as_ref(), &ctx.providers).resolve(&entry.spec, &args.named)?;
+    // §11 D30: a CBC/GCM IV left empty at its prompt comes from the KEK provider's RNG
+    // (`load --kek` never passes one — the unwrap needs the blob's own IV)
+    let params = ParamResolver::new(ctx.io.as_ref(), &ctx.providers)
+        .with_rng(provider)
+        .resolve(&entry.spec, &args.named)?;
 
     check_interrupt()?; // §11 D13: never issue C_WrapKey after a Ctrl-C
     let blob = wrapload::wrap_for_export(provider, &kek, &entry, params, &key)?;
@@ -242,11 +246,12 @@ pub fn run_export(ctx: &AppContext, args: &BoundArgs) -> r2_core::Result<()> {
         format!(", {outformat}-encoded")
     };
     ctx.io.print(Renderable::Text(format!(
-        "wrote {}: {}-byte blob wrapped under {} with {}{encoding}",
+        "wrote {}: {}-byte blob wrapped under {} with {}{}{encoding}",
         path.display(),
         blob.len(),
         kek.key_ref.display(),
-        entry.spec.mechanism
+        entry.spec.mechanism,
+        timing_suffix()
     )));
     Ok(())
 }

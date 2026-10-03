@@ -14,7 +14,7 @@ use r2_core::error::ConsoleError;
 use r2_core::io::{Renderable, table};
 use r2_core::keys::{Curve, KeyAlgorithm, KeyClass, KeyInfo, display_refs};
 use r2_core::params::{ParamKind, ParamSpec, ParamStruct, ParamValue, Verb};
-use r2_core::runtime::check_interrupt;
+use r2_core::runtime::{check_interrupt, timed, timing_suffix};
 use r2_core::template::{AttrKind, AttrValue, KeyTemplate, TemplateAttr};
 use r2_core::text::{py_fromhex, py_path, py_repr, py_strip};
 use r2_core::x509info::certificate_details;
@@ -572,6 +572,9 @@ fn edit_sibling(
 // generate
 // ---------------------------------------------------------------------------------------
 
+/// RSA modulus sizes `generate` offers: c2's three plus 8192 (§5.3, §11 D32).
+const RSA_SIZES: [&str; 4] = ["2048", "3072", "4096", "8192"];
+
 const GENERATE_USAGE: &str = "generate <provider> <aes|rsa|ec|generic> [size=<bits>] \
                               [curve=<name>] [--label <l>] [--id <hex>] [--template <path>]";
 
@@ -622,7 +625,7 @@ fn generate_spec(kind: &str) -> Option<OperationSpec> {
             "RSA keypair generation parameters",
             ParamSpec::new("size", ParamKind::Enum, "RSA modulus size (bits)")
                 .optional(Some(ParamValue::Enum("2048".into())))
-                .choices(&["2048", "3072", "4096"]),
+                .choices(&RSA_SIZES),
         ),
         "ec" => (
             KeyAlgorithm::Ec,
@@ -740,7 +743,7 @@ impl Command for GenerateCommand {
         request.key_id = key_id;
         request.template = template;
         request.public_template = public_template;
-        let info = provider.generate_key(&request)?;
+        let info = timed(|| provider.generate_key(&request))?; // §11 D31
         let what = match (size_bits, &curve) {
             (Some(bits), _) if bits != 0 => format!("{bits}-bit {}", algorithm.as_str()),
             (_, Some(curve)) => format!("{} {}", curve.as_str(), algorithm.as_str()),
@@ -749,14 +752,19 @@ impl Command for GenerateCommand {
         if info.key_class == KeyClass::Secret {
             text(
                 ctx,
-                format!("generated {} ({what})", info.key_ref.display()),
+                format!(
+                    "generated {} ({what}){}",
+                    info.key_ref.display(),
+                    timing_suffix()
+                ),
             );
         } else {
             text(
                 ctx,
                 format!(
-                    "generated {what} keypair {} (public key shares the label/id)",
-                    info.key_ref.display()
+                    "generated {what} keypair {} (public key shares the label/id){}",
+                    info.key_ref.display(),
+                    timing_suffix()
                 ),
             );
         }
@@ -778,7 +786,7 @@ impl Command for GenerateCommand {
             Some("ec") => candidates.extend(CURVES.iter().map(|c| format!("curve={c}"))),
             Some("aes") => candidates.extend(["128", "192", "256"].map(|s| format!("size={s}"))),
             Some("rsa") => {
-                candidates.extend(["2048", "3072", "4096"].map(|s| format!("size={s}")));
+                candidates.extend(RSA_SIZES.map(|s| format!("size={s}")));
             }
             Some("generic") => {
                 candidates.extend(GENERIC_SIZE_SUGGESTIONS.map(|s| format!("size={s}")));
@@ -908,7 +916,11 @@ impl Command for LoadCommand {
             })
             .collect();
         ctx.io.print(table(
-            Some(&format!("loaded into {}", provider.name())),
+            Some(&format!(
+                "loaded into {}{}",
+                provider.name(),
+                timing_suffix()
+            )),
             &["ref", "class", "algorithm"],
             rows,
         ));
@@ -1034,7 +1046,11 @@ impl Command for ExportCommand {
                         "cert",
                     ));
                 }
-                cert_der = Some(cert_provider.export_key(&cert_info)?.data.to_vec());
+                cert_der = Some(
+                    timed(|| cert_provider.export_key(&cert_info))?
+                        .data
+                        .to_vec(),
+                );
             }
             let password = match password {
                 Some(password) => password,
@@ -1059,9 +1075,10 @@ impl Command for ExportCommand {
         text(
             ctx,
             format!(
-                "wrote {} bytes to {} ({resolved})",
+                "wrote {} bytes to {} ({resolved}){}",
                 payload.len(),
-                path.display()
+                path.display(),
+                timing_suffix()
             ),
         );
         Ok(Flow::Continue)
@@ -1144,9 +1161,10 @@ impl Command for CsrCommand {
         text(
             ctx,
             format!(
-                "wrote CSR for {} to {} (subject: {subject})",
+                "wrote CSR for {} to {} (subject: {subject}){}",
                 key.key_ref.display(),
-                path.display()
+                path.display(),
+                timing_suffix()
             ),
         );
         Ok(Flow::Continue)

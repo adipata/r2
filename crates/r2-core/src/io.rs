@@ -1,8 +1,11 @@
 // Interaction traits and the Renderable model (spec §4.9.1/§4.9.2; owner R1).
+use std::time::Duration;
+
 use crate::error::{ConsoleError, ErrorKind, Result};
 use crate::params::ParamSpec;
 use crate::template::KeyTemplate;
 use secrecy::SecretString;
+use zeroize::Zeroizing;
 
 /// One REPL read at the command prompt.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -164,10 +167,13 @@ pub enum Renderable {
     Styled(Vec<Line>),
     Table(TableData),
     /// Hex result: the panel's titled top and "{n} bytes" bottom borders around one unbroken
-    /// line of hex (§4.9.2, §11 D28).
+    /// line of hex (§4.9.2, §11 D28). `data` is wiped on drop (it may be plaintext or a
+    /// derived secret, D3); `elapsed` = the provider time shown after the byte count
+    /// ("16 bytes in 4ms", §11 D31).
     Hex {
-        data: Vec<u8>,
+        data: Zeroizing<Vec<u8>>,
         title: Option<String>,
+        elapsed: Option<Duration>,
     },
     Panel(PanelData),
 }
@@ -241,10 +247,15 @@ pub fn table(title: Option<&str>, columns: &[&str], rows: Vec<Vec<String>>) -> R
         rows,
     })
 }
-/// Hex result (c2 `render.hex_panel`, laid out per §11 D28).
+/// Hex result (c2 `render.hex_panel`, laid out per §11 D28), without timing.
 pub fn hex(data: &[u8], title: Option<&str>) -> Renderable {
+    hex_timed(data, title, None)
+}
+/// Hex result whose footer also shows the provider time `elapsed` (§11 D31).
+pub fn hex_timed(data: &[u8], title: Option<&str>, elapsed: Option<Duration>) -> Renderable {
     Renderable::Hex {
-        data: data.to_vec(),
+        data: Zeroizing::new(data.to_vec()),
         title: title.map(str::to_owned),
+        elapsed,
     }
 }

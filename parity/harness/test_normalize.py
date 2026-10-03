@@ -224,5 +224,95 @@ class RandomHelpRow(unittest.TestCase):
         self.assertEqual(c2, ["random Generate random bytes with a provider's RNG"])
 
 
+class RandomIvPrompt(unittest.TestCase):
+    """§11 D30: r2's "empty = random" note on IV prompts compares as c2's prompt."""
+
+    INPUTS = ["encrypt mem:k cbc c0fe", "0x00112233445566778899aabbccddeeff"]
+
+    def r2(self, prompt: str) -> list[str]:
+        out = f"r2> {self.INPUTS[0]}\n{prompt}: {self.INPUTS[1]}\nok\n"
+        return normalize(out, "r2", "/w", "/f", self.INPUTS)
+
+    def c2(self, prompt: str) -> list[str]:
+        answer = f"{prompt}: {self.INPUTS[1]}"
+        out = f"c2> {self.INPUTS[0]}{PAD}c2> {self.INPUTS[0]}\r\n{answer}{PAD}{answer}\r\nok\n"
+        return normalize(out, "c2", "/w", "/f", self.INPUTS)
+
+    def test_the_note_is_removed_from_r2_prompts(self) -> None:
+        r2 = self.r2("IV (16 bytes, empty = random)")
+        self.assertEqual(r2, self.c2("IV (16 bytes)"))
+        self.assertIn("PROMPT: IV (16 bytes): 0x00112233445566778899aabbccddeeff", r2)
+
+    def test_a_changed_prompt_is_still_a_difference(self) -> None:
+        self.assertNotEqual(self.r2("IV (32 bytes, empty = random)"), self.c2("IV (16 bytes)"))
+
+    def test_c2_output_is_untouched(self) -> None:
+        c2 = normalize("IV (16 bytes, empty = random): x", "c2", "/w", "/f")
+        self.assertEqual(c2, ["IV (16 bytes, empty = random): x"])
+
+
+class OperationTiming(unittest.TestCase):
+    """§11 D31: r2's provider time is removed wherever it sits, nothing else."""
+
+    def same(self, c2: str, r2: str) -> None:
+        self.assertEqual(normalize(c2, "c2", "/w", "/f"), normalize(r2, "r2", "/w", "/f"))
+
+    def test_text_results(self) -> None:
+        for unit in ("412µs", "4ms", "1.23s"):
+            self.same(
+                "generated mem:k (256-bit aes)",
+                f"generated mem:k (256-bit aes) in {unit}",
+            )
+
+    def test_hex_footer_and_empty_result(self) -> None:
+        self.same(
+            "╭─ ciphertext — AES-CBC ───────╮\n│ c3180a43 │\n╰─────── 4 bytes ─╯",
+            "╭─ ciphertext — AES-CBC ───────╮\nc3180a43\n╰─────── 4 bytes in 4ms ─╯",
+        )
+        self.same(
+            "╭─ plaintext ──────────╮\n│ (empty — 0 bytes) │\n╰────────────────────╯",
+            "╭─ plaintext ──────────╮\n│ (empty — 0 bytes) │\n╰──────────── in 3ms ─╯",
+        )
+
+    def test_wrapped_suffix_and_centered_title(self) -> None:
+        # rich wraps the suffix like any other words, also between "in" and the time
+        self.same("wrote 4 bytes to /w/d1.\nbin (raw)", "wrote 4 bytes to /w/d1.\nbin (raw) in\n4ms")
+        self.same("wrote 4 bytes to /w/d1.\nbin (raw)", "wrote 4 bytes to /w/d1.\nbin (raw)\nin 4ms")
+        self.same(
+            "     unwrapped into mem\n (AES-KEY-WRAP-PAD)",
+            "     unwrapped into mem\n (AES-KEY-WRAP-PAD) in\n        45µs",
+        )
+
+    def test_a_changed_count_or_text_is_still_a_difference(self) -> None:
+        c2 = normalize("╰─── 16 bytes ─╯", "c2", "/w", "/f")
+        self.assertNotEqual(c2, normalize("╰─── 17 bytes in 4ms ─╯", "r2", "/w", "/f"))
+        c2 = normalize("signature VALID", "c2", "/w", "/f")
+        self.assertNotEqual(c2, normalize("signature INVALID in 4ms", "r2", "/w", "/f"))
+
+    def test_c2_output_is_untouched(self) -> None:
+        self.assertEqual(normalize("done in 4ms", "c2", "/w", "/f"), ["done in 4ms"])
+        # only a well-formed time is removed
+        self.assertEqual(normalize("done in 4 ms", "r2", "/w", "/f"), ["done in 4 ms"])
+
+
+class RsaSizeChoices(unittest.TestCase):
+    """§11 D32: r2's RSA size hint also lists 8192; the rest of the hint is compared."""
+
+    def test_the_8192_choice_is_normalized_away(self) -> None:
+        c2 = normalize("size: invalid choice '1000'\nhint: choices: 2048, 3072, 4096", "c2", "/w", "/f")
+        r2 = normalize(
+            "size: invalid choice '1000'\nhint: choices: 2048, 3072, 4096, 8192", "r2", "/w", "/f"
+        )
+        self.assertEqual(c2, r2)
+
+    def test_other_lists_still_differ(self) -> None:
+        c2 = normalize("hint: choices: 2048, 3072, 4096", "c2", "/w", "/f")
+        self.assertNotEqual(c2, normalize("hint: choices: 2048, 4096, 8192", "r2", "/w", "/f"))
+        self.assertEqual(
+            normalize("hint: choices: 2048, 3072, 4096, 8192", "c2", "/w", "/f"),
+            ["hint: choices: 2048, 3072, 4096, 8192"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,6 @@
 // ParamResolver tests via ScriptedIo (spec §4.6.4) — the port of c2 tests/unit/test_params.py
 // (R7). Covers inline-vs-prompted parity, defaults + default_from, ENUM completion data,
-// per-kind parsing, unknown names, and UserAbort on Ctrl-C / Ctrl-D.
+// per-kind parsing, unknown names, UserAbort on Ctrl-C / Ctrl-D, and the §11 D30 random fallback.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -564,4 +564,326 @@ fn parse_value_is_the_shared_parser() {
         enum_value("sha1")
     );
     assert_param_error(&resolver.parse_value(&spec, "md5").unwrap_err());
+}
+
+// ---------------------------------------------------------------------------
+// §11 D30: random fallback for caller-chosen bytes (ParamResolver::with_rng)
+// ---------------------------------------------------------------------------
+
+const RNG: &str = "rng";
+
+/// Resolve with `rng` attached as the resolver's RNG provider.
+fn resolve_rng(
+    registry: &ProviderRegistry,
+    io: &ScriptedIo,
+    rng: &FakeProvider,
+    spec: &OperationSpec,
+    pairs: &[(&str, &str)],
+) -> Result<Params> {
+    ParamResolver::new(io, registry)
+        .with_rng(rng)
+        .resolve(spec, &given(pairs))
+}
+
+/// The bytes the `n`-th draws of a fresh twin FakeProvider named RNG produce (deterministic).
+fn twin_draws(lens: &[usize]) -> Vec<Vec<u8>> {
+    let twin = FakeProvider::new(RNG);
+    lens.iter()
+        .map(|len| twin.generate_random(*len).unwrap().to_vec())
+        .collect()
+}
+
+fn lower_hex(data: &[u8]) -> String {
+    data.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn random_calls(lens: &[usize]) -> Vec<Vec<String>> {
+    lens.iter()
+        .map(|len| vec!["generate_random".to_owned(), len.to_string()])
+        .collect()
+}
+
+#[test]
+fn random_iv_cbc_empty_answer_draws_from_rng() {
+    let registry = providers();
+    let reg = builtins();
+    let cbc = reg.get("aes.encrypt.cbc").unwrap();
+    let rng = FakeProvider::new(RNG);
+    let io = ScriptedIo::new([""]);
+    let values = resolve_rng(&registry, &io, &rng, cbc, &[]).unwrap();
+    let expected = twin_draws(&[16]).remove(0);
+    assert_eq!(expected.len(), 16);
+    assert_eq!(
+        values,
+        params(vec![
+            ("iv", ParamValue::Bytes(expected.clone())),
+            ("padding", enum_value("pkcs7")), // defaulted, never prompted
+        ])
+    );
+    assert_eq!(io.prompts(), ["IV (16 bytes, empty = random)"]);
+    assert_eq!(
+        io.output(),
+        [format!("IV (random): {}", lower_hex(&expected))]
+    );
+    assert_eq!(
+        io.renderables(),
+        [r2_core::io::Renderable::Text(format!(
+            "IV (random): {}",
+            lower_hex(&expected)
+        ))]
+    );
+    assert_eq!(rng.calls(), random_calls(&[16]));
+    assert_eq!(io.remaining(), 0);
+}
+
+#[test]
+fn random_iv_whitespace_only_answer_counts_as_empty() {
+    let registry = providers();
+    let reg = builtins();
+    let cbc = reg.get("aes.encrypt.cbc").unwrap();
+    for blank in ["   ", "\t", " \u{1f} "] {
+        let rng = FakeProvider::new(RNG);
+        let io = ScriptedIo::new([blank]);
+        let values = resolve_rng(&registry, &io, &rng, cbc, &[]).unwrap();
+        let expected = twin_draws(&[16]).remove(0);
+        assert_eq!(
+            values["iv"],
+            ParamValue::Bytes(expected.clone()),
+            "{blank:?}"
+        );
+        assert_eq!(io.prompts(), ["IV (16 bytes, empty = random)"]);
+        assert_eq!(
+            io.output(),
+            [format!("IV (random): {}", lower_hex(&expected))]
+        );
+        assert_eq!(rng.calls(), random_calls(&[16]));
+    }
+}
+
+#[test]
+fn random_iv_successive_draws_follow_the_rng_sequence() {
+    let registry = providers();
+    let reg = builtins();
+    let cbc = reg.get("aes.encrypt.cbc").unwrap();
+    let rng = FakeProvider::new(RNG);
+    let io = ScriptedIo::new(["", ""]);
+    let resolver = ParamResolver::new(&io, &registry).with_rng(&rng);
+    let first = resolver.resolve(cbc, &given(&[])).unwrap();
+    let second = resolver.resolve(cbc, &given(&[])).unwrap();
+    let draws = twin_draws(&[16, 16]);
+    assert_ne!(draws[0], draws[1]);
+    assert_eq!(first["iv"], ParamValue::Bytes(draws[0].clone()));
+    assert_eq!(second["iv"], ParamValue::Bytes(draws[1].clone()));
+    assert_eq!(rng.calls(), random_calls(&[16, 16]));
+}
+
+#[test]
+fn random_iv_non_empty_answer_is_parsed_without_drawing() {
+    let registry = providers();
+    let reg = builtins();
+    let cbc = reg.get("aes.encrypt.cbc").unwrap();
+    let rng = FakeProvider::new(RNG);
+    let io = ScriptedIo::new(["0b".repeat(16)]);
+    let values = resolve_rng(&registry, &io, &rng, cbc, &[]).unwrap();
+    assert_eq!(values["iv"], ParamValue::Bytes(vec![0x0b; 16]));
+    assert_eq!(io.prompts(), ["IV (16 bytes, empty = random)"]);
+    assert!(io.output().is_empty());
+    assert!(rng.calls().is_empty());
+}
+
+#[test]
+fn random_iv_invalid_answer_reprompts_then_empty_draws() {
+    // a non-empty answer goes through the normal parser (errors shown, prompt repeats); the
+    // random fallback is still offered on the re-prompt
+    let registry = providers();
+    let reg = builtins();
+    let cbc = reg.get("aes.encrypt.cbc").unwrap();
+    let rng = FakeProvider::new(RNG);
+    let io = ScriptedIo::new(["deadbeef", ""]);
+    let values = resolve_rng(&registry, &io, &rng, cbc, &[]).unwrap();
+    let expected = twin_draws(&[16]).remove(0);
+    assert_eq!(values["iv"], ParamValue::Bytes(expected.clone()));
+    assert_eq!(
+        io.prompts(),
+        [
+            "IV (16 bytes, empty = random)",
+            "IV (16 bytes, empty = random)"
+        ]
+    );
+    assert_eq!(
+        io.output(),
+        [
+            "error: iv: expected exactly 16 bytes, got 4".to_owned(),
+            format!("IV (random): {}", lower_hex(&expected)),
+        ]
+    );
+    assert_eq!(rng.calls(), random_calls(&[16]));
+}
+
+#[test]
+fn without_rng_empty_iv_answer_is_an_error_and_reprompts() {
+    // no with_rng: the pre-D30 prompt text and the codec's "empty input" ParamError
+    let registry = providers();
+    let reg = builtins();
+    let cbc = reg.get("aes.encrypt.cbc").unwrap();
+    let io = ScriptedIo::new(["".to_owned(), "0b".repeat(16)]);
+    let values = resolve(&registry, &io, cbc, &[]).unwrap();
+    assert_eq!(values["iv"], ParamValue::Bytes(vec![0x0b; 16]));
+    assert_eq!(io.prompts(), ["IV (16 bytes)", "IV (16 bytes)"]);
+    assert_eq!(
+        io.output(),
+        ["error: iv: empty input (hint: paste hex, base64 or PEM data)"]
+    );
+}
+
+#[test]
+fn mirrored_decrypt_and_verify_never_draw_random() {
+    // decrypt/verify need the IV the data was made with: the mirror clears `random`, so an
+    // attached RNG changes nothing
+    let registry = providers();
+    let reg = builtins();
+    for (id, prompt, length) in [
+        ("aes.decrypt.cbc", "IV (16 bytes)", 16),
+        ("aes.verify.gmac", "IV (12 bytes)", 12),
+        ("aes.decrypt.gcm", "IV / nonce (12 bytes typical)", 12),
+        ("aes.decrypt.ctr", "Initial counter block (16 bytes)", 16),
+    ] {
+        let spec = reg.get(id).unwrap();
+        let rng = FakeProvider::new(RNG);
+        let io = ScriptedIo::new(["".to_owned(), "0c".repeat(length)]);
+        let values = resolve_rng(&registry, &io, &rng, spec, &[]).unwrap();
+        let name = &spec.params[0].name;
+        assert_eq!(values[name], ParamValue::Bytes(vec![0x0c; length]), "{id}");
+        assert_eq!(io.prompts(), [prompt, prompt], "{id}");
+        assert_eq!(
+            io.output(),
+            [format!(
+                "error: {name}: empty input (hint: paste hex, base64 or PEM data)"
+            )],
+            "{id}"
+        );
+        assert!(rng.calls().is_empty(), "{id}");
+    }
+}
+
+#[test]
+fn random_rows_gcm_ctr_gmac_prompts_labels_and_lengths() {
+    let registry = providers();
+    let reg = builtins();
+    for (id, name, prompt, label, len) in [
+        (
+            "aes.encrypt.gcm",
+            "iv",
+            "IV / nonce (12 bytes typical, empty = random)",
+            "IV / nonce",
+            12,
+        ),
+        (
+            "aes.encrypt.ctr",
+            "counter_block",
+            "Initial counter block (16 bytes, empty = random)",
+            "Initial counter block",
+            16,
+        ),
+        (
+            "aes.sign.gmac",
+            "iv",
+            "IV (12 bytes, empty = random)",
+            "IV",
+            12,
+        ),
+    ] {
+        let spec = reg.get(id).unwrap();
+        let rng = FakeProvider::new(RNG);
+        let io = ScriptedIo::new([""]);
+        let values = resolve_rng(&registry, &io, &rng, spec, &[]).unwrap();
+        let expected = twin_draws(&[len]).remove(0);
+        assert_eq!(expected.len(), len, "{id}");
+        assert_eq!(values[name], ParamValue::Bytes(expected.clone()), "{id}");
+        assert_eq!(io.prompts(), [prompt], "{id}"); // the other params are defaulted
+        assert_eq!(
+            io.output(),
+            [format!("{label} (random): {}", lower_hex(&expected))],
+            "{id}"
+        );
+        assert_eq!(rng.calls(), random_calls(&[len]), "{id}");
+    }
+}
+
+#[test]
+fn random_rng_error_propagates_out_of_resolve() {
+    // a login-capable provider that is logged out refuses generate_random: the error leaves
+    // resolve as-is (no re-prompt, nothing printed)
+    let registry = providers();
+    let reg = builtins();
+    let cbc = reg.get("aes.encrypt.cbc").unwrap();
+    let rng = FakeProvider::new(RNG)
+        .with_type_name("pkcs11")
+        .starting_logged_out();
+    let io = ScriptedIo::new([""]);
+    let err = resolve_rng(&registry, &io, &rng, cbc, &[]).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::AuthRequired);
+    assert_eq!(err.message, "login required: run `login rng`");
+    assert_eq!(io.prompts(), ["IV (16 bytes, empty = random)"]);
+    assert!(io.output().is_empty());
+    assert_eq!(rng.calls(), random_calls(&[16]));
+}
+
+#[test]
+fn random_prompt_without_trailing_parenthesis_gains_suffix() {
+    let registry = providers();
+    let spec = one_param_spec(ParamSpec::new("salt", ParamKind::Bytes, "Salt").random(8));
+    let rng = FakeProvider::new(RNG);
+    let io = ScriptedIo::new([""]);
+    let values = resolve_rng(&registry, &io, &rng, &spec, &[]).unwrap();
+    let expected = twin_draws(&[8]).remove(0);
+    assert_eq!(
+        values,
+        params(vec![("salt", ParamValue::Bytes(expected.clone()))])
+    );
+    assert_eq!(io.prompts(), ["Salt (empty = random)"]);
+    // the label is the whole prompt when it carries no parenthesized note
+    assert_eq!(
+        io.output(),
+        [format!("Salt (random): {}", lower_hex(&expected))]
+    );
+    // a parenthesis that is not trailing does not count as the note
+    let spec = one_param_spec(ParamSpec::new("n", ParamKind::Bytes, "Nonce (x) value").random(4));
+    let io = ScriptedIo::new([""]);
+    let rng = FakeProvider::new(RNG);
+    resolve_rng(&registry, &io, &rng, &spec, &[]).unwrap();
+    assert_eq!(io.prompts(), ["Nonce (x) value (empty = random)"]);
+    assert!(io.output()[0].starts_with("Nonce (x) value (random): "));
+}
+
+#[test]
+fn random_is_inert_on_non_bytes_params() {
+    // `random` only applies to BYTES; on another kind the prompt and parsing are unchanged
+    let registry = providers();
+    let spec = one_param_spec(ParamSpec::new("n", ParamKind::Int, "N (count)").random(4));
+    let rng = FakeProvider::new(RNG);
+    let io = ScriptedIo::new(["", "5"]);
+    let values = resolve_rng(&registry, &io, &rng, &spec, &[]).unwrap();
+    assert_eq!(values, params(vec![("n", ParamValue::Int(5))]));
+    assert_eq!(io.prompts(), ["N (count)", "N (count)"]);
+    assert!(rng.calls().is_empty());
+}
+
+#[test]
+fn random_inline_value_never_prompts_nor_draws() {
+    let registry = providers();
+    let reg = builtins();
+    let rng = FakeProvider::new(RNG);
+    let io = ScriptedIo::empty();
+    let iv = format!("0x{}", "0d".repeat(16));
+    let cbc = reg.get("aes.encrypt.cbc").unwrap();
+    let values = resolve_rng(&registry, &io, &rng, cbc, &[("iv", &iv)]).unwrap();
+    assert_eq!(values["iv"], ParamValue::Bytes(vec![0x0d; 16]));
+    // an inline empty value is a parse error, never random (the fallback is prompt-only)
+    let err = resolve_rng(&registry, &io, &rng, cbc, &[("iv", "")]).unwrap_err();
+    assert_param_error(&err);
+    assert_eq!(err.message, "iv: empty input");
+    assert!(io.prompts().is_empty());
+    assert!(io.output().is_empty());
+    assert!(rng.calls().is_empty());
 }

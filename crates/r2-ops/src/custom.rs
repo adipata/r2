@@ -77,5 +77,6 @@ fn param_from_config(param: &ParamSpecConfig) -> ParamSpec {
         choices: param.choices.clone(),
         length: None,
         validate: None,
+        random: None, // §11 D30 covers the built-in rows only
     }
 }

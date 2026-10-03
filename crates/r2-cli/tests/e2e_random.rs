@@ -79,6 +79,29 @@ fn hex_lines(out: &str, len: usize) -> Vec<&str> {
         .collect()
 }
 
+/// §11 D31: the provider time a real session shows: "<n>µs", "<n>ms" or "<s>.<cc>s".
+fn is_timing(text: &str) -> bool {
+    let digits = |t: &str| !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit());
+    if let Some(n) = text.strip_suffix("µs").or_else(|| text.strip_suffix("ms")) {
+        return digits(n);
+    }
+    match text.strip_suffix('s').and_then(|t| t.split_once('.')) {
+        Some((secs, hundredths)) => digits(secs) && hundredths.len() == 2 && digits(hundredths),
+        None => false,
+    }
+}
+
+/// The bottom border of a timed `len`-byte hex result: "╰─… {len} bytes in {timing} ─╯".
+fn is_timed_footer(line: &str, len: usize) -> bool {
+    let Some((head, timing)) = line
+        .strip_suffix(" ─╯")
+        .and_then(|rest| rest.rsplit_once(" in "))
+    else {
+        return false;
+    };
+    head.starts_with('╰') && head.ends_with(&format!(" {len} bytes")) && is_timing(timing)
+}
+
 /// The hex result line of the panel whose top border starts with `top`.
 fn panel_hex<'a>(out: &'a str, top: &str, len: usize) -> &'a str {
     let all: Vec<&str> = out.lines().collect();
@@ -89,10 +112,7 @@ fn panel_hex<'a>(out: &'a str, top: &str, len: usize) -> &'a str {
     let line = all[at + 1];
     assert_eq!(line.len(), 2 * len, "{out}");
     assert!(is_lower_hex(line), "{out}");
-    assert!(
-        all[at + 2].starts_with('╰') && all[at + 2].ends_with(&format!("{len} bytes ─╯")),
-        "{out}"
-    );
+    assert!(is_timed_footer(all[at + 2], len), "{out}");
     line
 }
 
@@ -127,10 +147,10 @@ fn memory_random_console_files_prompt_and_errors() {
     let (out, code) = session(dir.path(), &config, None, &input);
     assert_eq!(code, 0, "{out}");
 
-    // help
+    // help (the usage line wraps at the 80-column PlainIo width)
     assert!(
-        out.contains(
-            "usage: random <provider> [<length>] [--out <path>] [--outformat raw|hex|b64]"
+        out.replace('\n', "").contains(
+            "usage: random <provider> [<length> | length=<n>] [--out <path>] [--outformat raw|hex|b64]"
         ),
         "{out}"
     );
@@ -146,7 +166,11 @@ fn memory_random_console_files_prompt_and_errors() {
     // prompted length (re-prompt after the range error)
     assert_eq!(out.matches("Number of random bytes: ").count(), 2, "{out}");
     assert_eq!(hex_lines(&out, 4).len(), 1, "{out}");
-    assert!(out.contains("╰────── 4 bytes ─╯"), "{out}");
+    assert_eq!(
+        out.lines().filter(|l| is_timed_footer(l, 4)).count(),
+        1,
+        "{out}"
+    );
 
     // --out --outformat hex: 64 hex digits + newline
     let text = std::fs::read_to_string(&hex_path).unwrap();
@@ -162,7 +186,11 @@ fn memory_random_console_files_prompt_and_errors() {
 
     // --out (raw default): exactly the bytes
     assert_eq!(std::fs::read(dir.path().join("r.bin")).unwrap().len(), 8);
-    assert!(out.contains("wrote 8 bytes to r.bin"), "{out}");
+    let wrote = out
+        .lines()
+        .find_map(|l| l.strip_prefix("wrote 8 bytes to r.bin in "))
+        .unwrap_or_else(|| panic!("{out}"));
+    assert!(is_timing(wrote), "{out}"); // §11 D31: the provider time of the draw
 
     // errors
     assert!(out.contains("─ error ─"), "{out}");
@@ -232,7 +260,12 @@ mod softhsm {
         assert!(hex_lines(&out, 4).is_empty(), "{out}");
 
         // after login: one 32-byte draw from the token's RNG
-        panel_hex(&out, "╭─ random — hsm", 32);
+        let drawn = panel_hex(&out, "╭─ random — hsm", 32);
         assert_eq!(hex_lines(&out, 32).len(), 1, "{out}");
+
+        // the log names the length of the draw, never the bytes
+        let log = std::fs::read_to_string(dir.path().join("r2.log")).unwrap();
+        assert!(log.contains("hsm: generated 32 random bytes"), "{log}");
+        assert!(!log.contains(drawn), "{log}");
     }
 }

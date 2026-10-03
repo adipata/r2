@@ -269,12 +269,14 @@ fn test_param_shapes_match_the_builtin_rows() {
 
 #[test]
 fn param_specs_equal_the_registered_builtin_rows() {
-    // r2 addition: the synthetic rows are identical to the §4.6 built-ins they mirror.
+    // r2 addition: the synthetic rows are identical to the §4.6 built-ins they mirror —
+    // the encrypt rows, whose IVs carry the §11 D30 random fallback (only `export --kek`
+    // gives the resolver an RNG; `load --kek` never does).
     let registry = r2_ops::build_operation_registry(&[]).unwrap();
     for (cli, op) in [
-        ("cbc", "aes.decrypt.cbc"),
-        ("gcm", "aes.decrypt.gcm"),
-        ("oaep", "rsa.decrypt.oaep"),
+        ("cbc", "aes.encrypt.cbc"),
+        ("gcm", "aes.encrypt.gcm"),
+        ("oaep", "rsa.encrypt.oaep"),
     ] {
         assert_eq!(
             entry_for(cli).spec.params,

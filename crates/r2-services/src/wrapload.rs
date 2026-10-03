@@ -22,6 +22,7 @@ use r2_core::error::ConsoleError;
 use r2_core::io::ConsoleIo;
 use r2_core::keys::{KeyAlgorithm, KeyClass, KeyInfo, ParsedRef, parse_ref};
 use r2_core::params::{ParamKind, ParamSpec, ParamStruct, ParamValue, Params, Verb};
+use r2_core::runtime::timed;
 use r2_core::template::AttrValue;
 use r2_core::text::{close_matches, py_repr, py_strip};
 use r2_ops::OperationSpec;
@@ -76,7 +77,10 @@ const OAEP_HASHES: [&str; 4] = ["sha1", "sha256", "sha384", "sha512"];
 /// rsa.encrypt.oaep) — the spec table is the contract.
 fn cbc_params() -> Vec<ParamSpec> {
     vec![
-        ParamSpec::new("iv", ParamKind::Bytes, "IV (16 bytes)").length(16),
+        // §11 D30: random when left empty — only `export --kek` gives the resolver an RNG
+        ParamSpec::new("iv", ParamKind::Bytes, "IV (16 bytes)")
+            .length(16)
+            .random(16),
         ParamSpec::new("padding", ParamKind::Enum, "Padding")
             .optional(Some(ParamValue::Enum("pkcs7".to_owned())))
             .choices(&PADDINGS),
@@ -85,7 +89,7 @@ fn cbc_params() -> Vec<ParamSpec> {
 
 fn gcm_params() -> Vec<ParamSpec> {
     vec![
-        ParamSpec::new("iv", ParamKind::Bytes, "IV / nonce (12 bytes typical)"),
+        ParamSpec::new("iv", ParamKind::Bytes, "IV / nonce (12 bytes typical)").random(12),
         ParamSpec::new(
             "aad",
             ParamKind::Bytes,
@@ -511,7 +515,7 @@ pub fn load_wrapped(
     // §11 D13: a Ctrl-C raised while the editor was open (plain IO swallows SIGINT) must
     // never be followed by C_UnwrapKey.
     r2_core::runtime::check_interrupt()?;
-    let info = provider.unwrap_key(job.kek, &mech, job.wrapped, &request)?;
+    let info = timed(|| provider.unwrap_key(job.kek, &mech, job.wrapped, &request))?; // §11 D31
     tracing::info!(
         "loaded wrapped {}-byte blob into {} via {} (KEK {})",
         job.wrapped.len(),
@@ -581,7 +585,7 @@ pub fn wrap_for_export(
         )));
     }
     let mech = MechanismInvocation::new(entry.spec.mechanism.clone(), params);
-    let blob = provider.wrap_key(kek, &mech, key, &WrapOptions::default())?;
+    let blob = timed(|| provider.wrap_key(kek, &mech, key, &WrapOptions::default()))?; // §11 D31
     tracing::info!(
         "wrapped {} under {} via {} ({}-byte blob)",
         key.key_ref.display(),

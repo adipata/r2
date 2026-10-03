@@ -8,6 +8,7 @@ use std::path::Path;
 use r2_core::error::ConsoleError;
 use r2_core::formats::{self, Encoding};
 use r2_core::keys::{KeyAlgorithm, KeyClass, KeyInfo};
+use r2_core::runtime::timed;
 use r2_core::template::AttrValue;
 use r2_core::text::{os_error_text, py_repr};
 use r2_provider::Provider;
@@ -86,8 +87,10 @@ pub fn find_public_part(
 /// CKA_ID/label, else (exportable private) derived in software from its PKCS#8.
 pub fn public_spki(provider: &dyn Provider, key: &KeyInfo) -> r2_core::Result<Vec<u8>> {
     match key.key_class {
-        KeyClass::Public => return Ok(provider.export_key(key)?.data.to_vec()),
-        KeyClass::Certificate => return formats::cert_spki(&provider.export_key(key)?.data),
+        KeyClass::Public => return Ok(timed(|| provider.export_key(key))?.data.to_vec()),
+        KeyClass::Certificate => {
+            return formats::cert_spki(&timed(|| provider.export_key(key))?.data);
+        }
         KeyClass::Private => {}
         other => {
             return Err(ConsoleError::unsupported(format!(
@@ -101,7 +104,7 @@ pub fn public_spki(provider: &dyn Provider, key: &KeyInfo) -> r2_core::Result<Ve
         return public_spki(provider, &public);
     }
     if key.exportable {
-        return formats::pkcs8_public_spki(&provider.export_key(key)?.data);
+        return formats::pkcs8_public_spki(&timed(|| provider.export_key(key))?.data);
     }
     Err(ConsoleError::key_not_found(format!(
         "no public part found for '{}'",
@@ -173,7 +176,7 @@ pub fn export_bytes(
             )
             .with_hint("use --format raw (or omit --format)"));
         }
-        return Ok((provider.export_key(key)?.data, "raw"));
+        return Ok((timed(|| provider.export_key(key))?.data, "raw"));
     }
 
     let resolved = if fmt == "auto" {
@@ -198,18 +201,18 @@ pub fn export_bytes(
     match key.key_class {
         KeyClass::Private => {
             refuse_non_exportable(key)?;
-            let material = provider.export_key(key)?;
+            let material = timed(|| provider.export_key(key))?;
             let payload = formats::private_key_bytes(&material.data, encoding, password)?;
             Ok((payload, resolved))
         }
         KeyClass::Public => {
-            let material = provider.export_key(key)?;
+            let material = timed(|| provider.export_key(key))?;
             let payload = formats::public_key_bytes(&material.data, encoding)?;
             Ok((Zeroizing::new(payload), resolved))
         }
         _ => {
             // CERTIFICATE: DER verbatim (c2 returned it unvalidated), PEM via pyca.
-            let material = provider.export_key(key)?;
+            let material = timed(|| provider.export_key(key))?;
             if encoding == Encoding::Der {
                 return Ok((material.data, "der"));
             }

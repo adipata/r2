@@ -218,10 +218,7 @@ fn test_encrypt_one_line_renders_hex_panel() {
     // the panel itself (§4.9.2): a Hex renderable titled with what the bytes are
     assert_eq!(
         io.renderables(),
-        [Renderable::Hex {
-            data: expected,
-            title: Some("ciphertext — AES-GCM".to_owned()),
-        }]
+        [r2_core::io::hex(&expected, Some("ciphertext — AES-GCM"))]
     );
 }
 
@@ -477,7 +474,11 @@ fn test_missing_required_param_is_prompted() {
     let io = scripted(&[&iv]);
     let (ctx, mem) = make_ctx(dyn_io(&io));
     run_line(&ctx, "encrypt mem:aeskey cbc 0xdeadbeef").unwrap();
-    assert!(io.prompts().contains(&"IV (16 bytes)".to_owned()));
+    // §11 D30: encrypt prompts note the random fallback
+    assert!(
+        io.prompts()
+            .contains(&"IV (16 bytes, empty = random)".to_owned())
+    );
     assert!(has_call(&mem, &["encrypt", "mem:aeskey", "AES-CBC", "4B"]));
 }
 
@@ -618,7 +619,7 @@ fn test_outformat_requires_out() {
     assert_eq!(err.message, "--outformat requires --out");
     assert_eq!(
         err.hint.as_deref(),
-        Some("console output is always the grouped hex dump (§5.1)")
+        Some("console output is always the hex result (§5.1)")
     );
 }
 
@@ -1629,7 +1630,7 @@ fn crypto_commands_name_summary_usage() {
             "random",
             (
                 "Generate random bytes with a provider's RNG",
-                "random <provider> [<length>] [--out <path>] [--outformat raw|hex|b64]",
+                "random <provider> [<length> | length=<n>] [--out <path>] [--outformat raw|hex|b64]",
             ),
         ),
     ]

@@ -51,7 +51,7 @@ pub fn register_builtin(reg: &mut OperationRegistry) -> Result<()> {
         "cbc",
         "AES-CBC encryption",
         vec![
-            bytes("iv", "IV (16 bytes)").length(16),
+            bytes("iv", "IV (16 bytes)").length(16).random(16),
             choice("padding", "Padding", "pkcs7", PADDINGS),
         ],
     );
@@ -63,7 +63,7 @@ pub fn register_builtin(reg: &mut OperationRegistry) -> Result<()> {
         "gcm",
         "AES-GCM authenticated encryption",
         vec![
-            bytes("iv", "IV / nonce (12 bytes typical)"),
+            bytes("iv", "IV / nonce (12 bytes typical)").random(12),
             bytes_empty("aad", "Additional authenticated data (empty for none)"),
             choice("tag_bits", "Tag length in bits", "128", TAG_BITS),
         ],
@@ -82,7 +82,9 @@ pub fn register_builtin(reg: &mut OperationRegistry) -> Result<()> {
         "ctr",
         "AES-CTR encryption",
         vec![
-            bytes("counter_block", "Initial counter block (16 bytes)").length(16),
+            bytes("counter_block", "Initial counter block (16 bytes)")
+                .length(16)
+                .random(16),
             int("counter_bits", "Counter width in bits", Some(128)),
         ],
     );
@@ -103,7 +105,7 @@ pub fn register_builtin(reg: &mut OperationRegistry) -> Result<()> {
         "gmac",
         "AES-GMAC MAC",
         vec![
-            bytes("iv", "IV (12 bytes)").length(12),
+            bytes("iv", "IV (12 bytes)").length(12).random(12),
             int("mac_len", "MAC length in bytes", Some(16)),
         ],
     );

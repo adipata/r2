@@ -1,8 +1,9 @@
 // Ctrl-C flag, spinner flag, panic report (spec §4.9.8; owner R1) — the only process-global
-// mutable state (two atomics), plus thread-local slots: the panic report and the in-process
-// test emulation of Ctrl-C (R13).
+// mutable state (two atomics), plus thread-local slots: the panic report, the in-process
+// test emulation of Ctrl-C (R13) and the operation timing of §11 D31.
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use crate::error::ConsoleError;
 
@@ -15,6 +16,10 @@ thread_local! {
     static PANIC_REPORT: Cell<Option<String>> = const { Cell::new(None) };
     /// Ctrl-C requested for this thread only (`request_interrupt_on_this_thread`).
     static INTERRUPTED_HERE: Cell<bool> = const { Cell::new(false) };
+    /// §11 D31: whether results show the provider time (the r2 binary turns it on).
+    static TIMING_SHOWN: Cell<bool> = const { Cell::new(false) };
+    /// §11 D31: provider time accumulated by `timed` since the last reset/take.
+    static OPERATION_TIME: Cell<Option<Duration>> = const { Cell::new(None) };
 }
 
 /// Called by the ctrlc handler (r2-cli): one atomic store, nothing else.
@@ -68,4 +73,57 @@ pub fn record_panic_report(report: String) {
 /// installed (tests) or nothing was recorded.
 pub fn take_panic_report() -> Option<String> {
     PANIC_REPORT.try_with(Cell::take).ok().flatten()
+}
+
+// ---- operation timing (§11 D31) ---------------------------------------------------------
+
+/// Turns the timing display of results on or off for this thread. Off by default, so
+/// in-process sessions (tests, ScriptedIo) print c2's output unchanged; r2-cli turns it on
+/// for the REPL thread.
+pub fn set_timing_shown(shown: bool) {
+    let _ = TIMING_SHOWN.try_with(|flag| flag.set(shown));
+}
+pub fn timing_shown() -> bool {
+    TIMING_SHOWN.try_with(Cell::get).unwrap_or(false)
+}
+/// Runs ONE provider operation (encrypt, generate_key, import_key, export_key, wrap_key, …;
+/// never a lookup, a prompt or file I/O) and adds its wall-clock time to this thread's
+/// operation time. Always measures; `take_operation_time` decides whether it is shown.
+pub fn timed<T>(f: impl FnOnce() -> T) -> T {
+    let start = Instant::now();
+    let value = f();
+    let elapsed = start.elapsed();
+    let _ = OPERATION_TIME.try_with(|slot| {
+        slot.set(Some(slot.get().unwrap_or_default().saturating_add(elapsed)));
+    });
+    value
+}
+/// Called by run_repl immediately before every dispatch (no time leaks into the next
+/// command).
+pub fn reset_operation_time() {
+    let _ = OPERATION_TIME.try_with(|slot| slot.set(None));
+}
+/// The provider time accumulated since the last reset/take (emptied), or None when nothing
+/// was timed or the timing display is off.
+pub fn take_operation_time() -> Option<Duration> {
+    let taken = OPERATION_TIME.try_with(Cell::take).ok().flatten();
+    taken.filter(|_| timing_shown())
+}
+/// " in {elapsed}" for a text result line, from `take_operation_time` ("" when None).
+pub fn timing_suffix() -> String {
+    take_operation_time()
+        .map(|elapsed| format!(" in {}", format_elapsed(elapsed)))
+        .unwrap_or_default()
+}
+/// Adaptive units: under 1 ms in whole µs ("412µs"), under 1 s in whole ms ("4ms"), else
+/// seconds with two decimals ("1.23s"). Truncated, never rounded up into the next unit.
+pub fn format_elapsed(elapsed: Duration) -> String {
+    if elapsed < Duration::from_millis(1) {
+        format!("{}µs", elapsed.as_micros())
+    } else if elapsed < Duration::from_secs(1) {
+        format!("{}ms", elapsed.as_millis())
+    } else {
+        let hundredths = elapsed.as_millis() / 10;
+        format!("{}.{:02}s", hundredths / 100, hundredths % 100)
+    }
 }

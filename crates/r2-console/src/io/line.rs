@@ -371,9 +371,13 @@ impl<R: LineReader> r2_core::io::ConsoleIo for LineIo<R> {
         }
     }
     fn print(&self, renderable: Renderable) {
-        let mut text = self.sink.render(&renderable, &self.render_config());
-        text.push('\n');
-        self.quiet(|| self.sink.write(&text));
+        // The rendered text may carry plaintext or a derived secret (the hex result): it is
+        // written as is (no copy to append the newline) and wiped afterwards (D3).
+        let text = zeroize::Zeroizing::new(self.sink.render(&renderable, &self.render_config()));
+        self.quiet(|| {
+            self.sink.write(&text);
+            self.sink.write("\n");
+        });
     }
     fn print_error(&self, err: &ConsoleError) {
         let hint = err.hint.as_deref().filter(|hint| !hint.is_empty());

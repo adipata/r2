@@ -54,8 +54,9 @@ impl OperationSpec {
     pub fn param(&self, name: &str) -> Option<&ParamSpec> {
         self.params.iter().find(|param| param.name == name)
     }
-    /// The mirror rule: same cli_name/mechanism/params; id with `.{verb}.` swapped (first
-    /// occurrence), the new verb and label, and `key_classes` replaced when given.
+    /// The mirror rule: same cli_name/mechanism/params (without the §11 D30 random fallback);
+    /// id with `.{verb}.` swapped (first occurrence), the new verb and label, and
+    /// `key_classes` replaced when given.
     pub fn mirrored(
         &self,
         verb: Verb,
@@ -69,6 +70,15 @@ impl OperationSpec {
             verb,
             label: label.to_owned(),
             key_classes: key_classes.unwrap_or_else(|| self.key_classes.clone()),
+            // §11 D30: decrypt/verify need the IV the data was made with — never random
+            params: self
+                .params
+                .iter()
+                .map(|param| ParamSpec {
+                    random: None,
+                    ..param.clone()
+                })
+                .collect(),
             ..self.clone()
         }
     }

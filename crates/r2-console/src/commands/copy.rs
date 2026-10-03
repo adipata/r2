@@ -87,11 +87,12 @@ impl Command for CopyCommand {
         // same class/algorithm vocabulary as the `keys` table (§5.1)
         ctx.io.print(
             format!(
-                "copied {} -> {} ({} {})",
+                "copied {} -> {} ({} {}){}",
                 key.key_ref.display(),
                 result.key_ref.display(),
                 class_text(result.key_class),
-                algo_text(&result)
+                algo_text(&result),
+                r2_core::runtime::timing_suffix() // §11 D31
             )
             .into(),
         );

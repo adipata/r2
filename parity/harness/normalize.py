@@ -26,6 +26,16 @@ records as a deviation (§11) or as non-TTY noise is normalized away, nothing el
   row; that row is dropped from r2's output when it normalizes to exactly
   ``random Generate random bytes with a provider's RNG`` (``R2_ONLY_HELP_ROWS``), so a
   changed summary, or any other extra row, is still reported.
+- The random-IV fallback (§11 D30): r2's encrypt/sign/wrap IV prompts note it as
+  ``IV (16 bytes, empty = random)``; the note (``_RANDOM_NOTE``) is removed from r2's raw
+  output, so the prompt texts compare as c2's. (No session leaves an IV empty, so the
+  ``IV (random): <hex>`` line never appears.)
+- Operation timing (§11 D31): r2 appends the provider time to results (`` in 4ms`` after
+  a text result, ``16 bytes in 412µs`` in a hex result's footer, ``in 1.23s`` as an empty
+  result's footer). ``_TIMING_RE`` removes it from r2's raw output wherever rich wrapped
+  it (``… in`` / ``4ms`` on separate lines), before the lines are compared.
+- RSA 8192 (§11 D32): r2's RSA size list offers 8192 too, so the invalid-size hint
+  ``choices: 2048, 3072, 4096, 8192`` (``_RSA_CHOICES_R2``) compares as c2's list.
 - PKCS#11 ULONG values >= 2^63 (§11 D18): r2 shows CK_UNAVAILABLE_INFORMATION unsigned
   (``18446744073709551615``) where c2 showed PyKCS11's signed ``-1``.
 - Token enumeration order (shared-token suite ONLY, opt-in via ``token_provider``):
@@ -55,6 +65,14 @@ _C2_WRAP_RE = re.compile(r"\r {79}(.)\r\n")
 PROMPT = "PROMPT: "
 # r2's help rows for commands c2 does not have (§11 D29), in their normalized form.
 R2_ONLY_HELP_ROWS = frozenset({"random Generate random bytes with a provider's RNG"})
+# §11 D30: the note r2's encrypt/sign/wrap IV prompts carry.
+_RANDOM_NOTE = ", empty = random)"
+# §11 D32: r2's RSA size choices and c2's.
+_RSA_CHOICES_R2 = "choices: 2048, 3072, 4096, 8192"
+_RSA_CHOICES_C2 = "choices: 2048, 3072, 4096"
+# §11 D31: " in 412µs" / " in 4ms" / " in 1.23s" after a result, possibly wrapped by rich
+# between any two of its words (centered table titles indent the continuation line).
+_TIMING_RE = re.compile(r"[ \n]+in[ \n]+\d+(?:µs|ms|\.\d{2}s)(?= |\n|$)")
 
 
 def _is_echo(line: str, want: str) -> bool:
@@ -194,6 +212,10 @@ def normalize(
         # prompt_toolkit's 80-column wrap: the 80th cell is written after ``\r`` + 79
         # blanks, then the line breaks; rejoin it so the doubled echo is one line again
         text = _C2_WRAP_RE.sub(r"\1", text)
+    else:
+        text = _TIMING_RE.sub("", text)  # §11 D31
+        text = text.replace(_RANDOM_NOTE, ")")  # §11 D30
+        text = text.replace(_RSA_CHOICES_R2, _RSA_CHOICES_C2)  # §11 D32
     lines = text.split("\n")
     if tool == "c2":
         lines = _c2_hex(_c2_echo(lines))

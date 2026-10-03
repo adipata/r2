@@ -12,6 +12,7 @@ use r2_core::io::ConsoleIo;
 use r2_core::keyparse::{KeyHint, parse_key_material};
 use r2_core::keys::{KeyAlgorithm, KeyClass, KeyInfo, KeyMaterial};
 use r2_core::params::ParamSpec;
+use r2_core::runtime::timed;
 use r2_core::text::{os_error_text, py_strip};
 use r2_provider::Provider;
 use secrecy::{ExposeSecret, SecretString};
@@ -153,7 +154,10 @@ pub fn import_materials(
         } else {
             None
         };
-        infos.push(provider.import_key(material, label, template.as_ref(), key_id)?);
+        // §11 D31: only the provider call is timed (not the editor before it)
+        infos.push(timed(|| {
+            provider.import_key(material, label, template.as_ref(), key_id)
+        })?);
     }
     Ok(infos)
 }

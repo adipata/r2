@@ -405,7 +405,11 @@ fn test_omitted_param_is_prompted() {
         ),
     )
     .unwrap();
-    assert_eq!(p.io.prompts(), ["IV / nonce (12 bytes typical)"]);
+    // §11 D30: the wrap direction notes the random fallback
+    assert_eq!(
+        p.io.prompts(),
+        ["IV / nonce (12 bytes typical, empty = random)"]
+    );
 }
 
 // ---------------------------------------------------------------------------------------

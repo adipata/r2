@@ -70,9 +70,9 @@ impl Session {
             .renderables()
             .into_iter()
             .filter_map(|renderable| match renderable {
-                Renderable::Hex { data, title } => {
+                Renderable::Hex { data, title, .. } => {
                     assert_eq!(title.as_deref(), Some("random — hsm"));
-                    Some(data)
+                    Some(data.to_vec())
                 }
                 _ => None,
             })

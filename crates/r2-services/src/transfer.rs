@@ -37,7 +37,7 @@ use r2_core::error::{ConsoleError, Result};
 use r2_core::io::ConsoleIo;
 use r2_core::keys::{KeyAlgorithm, KeyClass, KeyInfo, KeyMaterial};
 use r2_core::params::{ParamValue, Params};
-use r2_core::runtime::check_interrupt;
+use r2_core::runtime::{check_interrupt, timed};
 use r2_core::template::{AttrKind, AttrValue, KeyTemplate, TemplateAttr};
 use r2_provider::mechanism::{AES_KEY_WRAP, AES_KEY_WRAP_PAD, RSA_AES_KEY_WRAP, RSA_OAEP};
 use r2_provider::{
@@ -309,7 +309,7 @@ impl<'a> CopyJob<'a> {
 
     /// The plain route (memory sources, public/cert/data objects, last-resort read).
     fn plain(&self, key: &KeyInfo, label: &str, inherited: Option<&[u8]>) -> Result<KeyInfo> {
-        let material = self.source.export_key(key)?;
+        let material = timed(|| self.source.export_key(key))?; // §11 D31: provider time
         check_interrupt()?; // §11 D13: between the export and the destination calls
         let extra_rows = if key.key_class == KeyClass::Data {
             data_attr_rows(key)
@@ -318,9 +318,10 @@ impl<'a> CopyJob<'a> {
         };
         let template = self.edited_template(key.key_class, key.algorithm, label, &extra_rows)?;
         let key_id = final_key_id(self.key_id, inherited, template.as_ref());
-        let info = self
-            .dest
-            .import_key(&material, label, template.as_ref(), key_id.as_deref())?;
+        let info = timed(|| {
+            self.dest
+                .import_key(&material, label, template.as_ref(), key_id.as_deref())
+        })?;
         tracing::info!(
             "copied {} -> {} (plain material)",
             key.key_ref.display(),
@@ -396,19 +397,23 @@ impl<'a> CopyJob<'a> {
         let mut material = KeyMaterial::new(KeyAlgorithm::Aes, KeyClass::Secret, Vec::new());
         material.data = transport;
         material.size_bits = Some(256);
-        let src_t = self.source.import_key(
-            &material,
-            &transport_label,
-            Some(&transport_template(&["CKA_WRAP"])),
-            None,
-        )?;
+        let src_t = timed(|| {
+            self.source.import_key(
+                &material,
+                &transport_label,
+                Some(&transport_template(&["CKA_WRAP"])),
+                None,
+            )
+        })?;
         guard.add(self.source, src_t.clone());
-        let dst_t = self.dest.import_key(
-            &material,
-            &transport_label,
-            Some(&transport_template(&["CKA_UNWRAP"])),
-            None,
-        )?;
+        let dst_t = timed(|| {
+            self.dest.import_key(
+                &material,
+                &transport_label,
+                Some(&transport_template(&["CKA_UNWRAP"])),
+                None,
+            )
+        })?;
         guard.add(self.dest, dst_t.clone());
         drop(material); // the software transport key is wiped here (Zeroizing)
         let mech = MechanismInvocation::new(mech_name, Params::new());
@@ -433,19 +438,21 @@ impl<'a> CopyJob<'a> {
         request.size_bits = Some(2048);
         request.template = Some(transport_template(&["CKA_UNWRAP", "CKA_DECRYPT"]));
         request.public_template = Some(public_transport_template());
-        let dst_priv = self.dest.generate_key(&request)?;
+        let dst_priv = timed(|| self.dest.generate_key(&request))?;
         guard.add(self.dest, dst_priv.clone());
         // generate_key returns only the private KeyInfo (§4.5) — the public half is
         // retrieved via list_keys() filtered by label + PUBLIC (§5.5).
         let dst_pub = find_generated_public(self.dest, &transport_label)?;
         guard.add(self.dest, dst_pub.clone());
-        let public_material = self.dest.export_key(&dst_pub)?;
-        let src_pub = self.source.import_key(
-            &public_material,
-            &transport_label,
-            Some(&public_transport_template()),
-            None,
-        )?;
+        let public_material = timed(|| self.dest.export_key(&dst_pub))?;
+        let src_pub = timed(|| {
+            self.source.import_key(
+                &public_material,
+                &transport_label,
+                Some(&public_transport_template()),
+                None,
+            )
+        })?;
         guard.fill(src_slot, src_pub.clone());
         let mech = MechanismInvocation::new(mech_name, oaep_defaults());
         self.wrap_then_unwrap(key, &src_pub, &dst_priv, &mech, label, inherited)
@@ -463,17 +470,16 @@ impl<'a> CopyJob<'a> {
         inherited: Option<&[u8]>,
     ) -> Result<KeyInfo> {
         check_interrupt()?; // §11 D13
-        let blob = self
-            .source
-            .wrap_key(wrapping_key, mech, key, &WrapOptions::default())?;
+        let blob = timed(|| {
+            self.source
+                .wrap_key(wrapping_key, mech, key, &WrapOptions::default())
+        })?;
         check_interrupt()?; // §11 D13
         let template = self.edited_template(key.key_class, key.algorithm, label, &[])?;
         let mut request = UnwrapRequest::new(key.algorithm, key.key_class, label);
         request.key_id = final_key_id(self.key_id, inherited, template.as_ref());
         request.template = template;
-        let info = self
-            .dest
-            .unwrap_key(unwrapping_key, mech, &blob, &request)?;
+        let info = timed(|| self.dest.unwrap_key(unwrapping_key, mech, &blob, &request))?;
         tracing::info!(
             "copied {} -> {} ({}, {}-byte blob)",
             key.key_ref.display(),

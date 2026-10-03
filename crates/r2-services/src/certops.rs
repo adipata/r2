@@ -11,6 +11,7 @@ use r2_core::der::ecdsa_rs_to_der;
 use r2_core::error::ConsoleError;
 use r2_core::keys::{Curve, KeyAlgorithm, KeyClass, KeyInfo};
 use r2_core::params::{ParamValue, Params};
+use r2_core::runtime::timed;
 use r2_core::text::py_repr;
 use r2_core::x509build::{
     DEFAULT_CERT_DAYS, SignatureAlg, build_csr, build_pkcs12, build_self_signed_cert,
@@ -81,10 +82,10 @@ pub fn export_pkcs12(
         )
         .with_hint("pass an existing certificate with --cert"));
     }
-    let pkcs8 = provider.export_key(key)?.data;
+    let pkcs8 = timed(|| provider.export_key(key))?.data;
     let cert = match (cert_der, co_located) {
         (Some(der), _) => der.to_vec(),
-        (None, Some(info)) => provider.export_key(&info)?.data.to_vec(),
+        (None, Some(info)) => timed(|| provider.export_key(&info))?.data.to_vec(),
         (None, None) => build_self_signed_cert(&pkcs8, label, DEFAULT_CERT_DAYS)?,
     };
     build_pkcs12(&pkcs8, &cert, label, password, &[])
@@ -129,7 +130,7 @@ pub fn generate_csr(
             };
             let mech = MechanismInvocation::new(RSA_PKCS1, hash_params());
             // PKCS#1 block — already the X.509 wire format.
-            let mut sign = |tbs: &[u8]| provider.sign(key, &mech, tbs);
+            let mut sign = |tbs: &[u8]| timed(|| provider.sign(key, &mech, tbs));
             build_csr(&spki, subject, sig_alg, &mut sign)
         }
         KeyAlgorithm::Ec => {
@@ -140,7 +141,7 @@ pub fn generate_csr(
             };
             let mech = MechanismInvocation::new(ECDSA, hash_params());
             // §5.7: providers emit fixed-width r‖s — convert BEFORE returning.
-            let mut sign = |tbs: &[u8]| ecdsa_rs_to_der(&provider.sign(key, &mech, tbs)?);
+            let mut sign = |tbs: &[u8]| ecdsa_rs_to_der(&timed(|| provider.sign(key, &mech, tbs))?);
             build_csr(&spki, subject, sig_alg, &mut sign)
         }
         KeyAlgorithm::EcEdwards => {
@@ -159,7 +160,7 @@ pub fn generate_csr(
             };
             let mech = MechanismInvocation::new(EDDSA, Params::new());
             // raw Ed signature (§5.9)
-            let mut sign = |tbs: &[u8]| provider.sign(key, &mech, tbs);
+            let mut sign = |tbs: &[u8]| timed(|| provider.sign(key, &mech, tbs));
             build_csr(&spki, subject, sig_alg, &mut sign)
         }
         other => Err(ConsoleError::unsupported(format!(

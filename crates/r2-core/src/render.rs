@@ -6,11 +6,12 @@
 // minus its blank edge columns and rows (§11 D1). The hex result keeps the panel's top and
 // bottom borders around one unbroken hex line, so it copies whole (§11 D28).
 use std::cmp::Ordering;
+use std::time::Duration;
 
 use anstyle::{AnsiColor, Style};
 
-use crate::codec::format_hex;
 use crate::io::{Line, PanelData, Renderable, Span, TableData, Tone};
+use crate::runtime::format_elapsed;
 use crate::text::{is_py_space, py_splitlines};
 
 /// `hex_group`/`hex_width` carry `ui.hex_group`/`ui.hex_width`; the hex result no longer
@@ -63,7 +64,11 @@ fn render_with(renderable: &Renderable, cfg: &RenderConfig, sgr: Sgr) -> String 
             render_text(&lines, cfg.width, sgr)
         }
         Renderable::Table(data) => render_table(data, cfg, sgr),
-        Renderable::Hex { data, title } => render_hex(data, title.as_deref(), cfg.width, sgr),
+        Renderable::Hex {
+            data,
+            title,
+            elapsed,
+        } => render_hex(data, title.as_deref(), *elapsed, cfg.width, sgr),
         Renderable::Panel(panel) => render_panel(panel, cfg.width, sgr),
     }
 }
@@ -514,16 +519,25 @@ fn render_text(lines: &[Cells], width: usize, sgr: Sgr) -> String {
 // ---- panels -------------------------------------------------------------------------------
 
 /// The hex result (§4.9.2 "Hex", §11 D28): c2's panel top border with the title and bottom
-/// border with "{n} bytes", but no side borders, and the data between them as ONE line of
-/// continuous lower-case hex that r2 never wraps (the terminal soft-wraps it), so a
-/// double-click or a line selection copies it whole. The borders span the hex line, widened
-/// to show the title and the subtitle in full, at most the console width. Empty data is
-/// c2's panel, body "(empty — 0 bytes)" without a subtitle.
-fn render_hex(data: &[u8], title: Option<&str>, width: usize, sgr: Sgr) -> String {
+/// border with "{n} bytes" (plus " in {elapsed}" when timed, §11 D31), but no side borders,
+/// and the data between them as ONE line of continuous lower-case hex that r2 never wraps
+/// (the terminal soft-wraps it), so a double-click or a line selection copies it whole. The
+/// borders span the hex line, widened to show the title and the subtitle in full, at most
+/// the console width. Empty data is c2's panel, body "(empty — 0 bytes)", subtitle only
+/// the time. The hex text is built in place and the returned string is the only copy (no
+/// reallocated leftovers): the caller wipes it after writing (D3).
+fn render_hex(
+    data: &[u8],
+    title: Option<&str>,
+    elapsed: Option<Duration>,
+    width: usize,
+    sgr: Sgr,
+) -> String {
+    let timing = elapsed.map(|elapsed| format!("in {}", format_elapsed(elapsed)));
     if data.is_empty() {
         let panel = PanelData {
             title: title.map(str::to_owned),
-            subtitle: None,
+            subtitle: timing,
             border: Tone::Plain,
             body: vec![vec![Span {
                 text: "(empty — 0 bytes)".to_owned(),
@@ -532,22 +546,34 @@ fn render_hex(data: &[u8], title: Option<&str>, width: usize, sgr: Sgr) -> Strin
         };
         return render_panel(&panel, width, sgr);
     }
-    let line = format_hex(data, 0, 0);
+    let line_len = data.len() * 2;
     let title = title.and_then(|title| annotation(title, Tone::Plain));
-    let subtitle = annotation(&format!("{} bytes", data.len()), Tone::Plain);
+    let subtitle_text = match &timing {
+        Some(timing) => format!("{} bytes {timing}", data.len()),
+        None => format!("{} bytes", data.len()),
+    };
+    let subtitle = annotation(&subtitle_text, Tone::Plain);
     let wanted = [&title, &subtitle]
         .into_iter()
         .flatten()
         .map(|text| cells_len(text) + 4)
-        .fold(line.len(), usize::max);
+        .fold(line_len, usize::max);
     let panel_width = wanted.min(width).max(2);
-    [
-        top_border(title, panel_width, Tone::Plain, sgr),
-        line,
-        bottom_border(subtitle, panel_width, Tone::Plain, sgr),
-    ]
-    .join("\n")
+    let top = top_border(title, panel_width, Tone::Plain, sgr);
+    let bottom = bottom_border(subtitle, panel_width, Tone::Plain, sgr);
+    let mut out = String::with_capacity(top.len() + line_len + bottom.len() + 2);
+    out.push_str(&top);
+    out.push('\n');
+    for byte in data {
+        out.push(char::from(HEX_DIGITS[usize::from(byte >> 4)]));
+        out.push(char::from(HEX_DIGITS[usize::from(byte & 0x0f)]));
+    }
+    out.push('\n');
+    out.push_str(&bottom);
+    out
 }
+
+const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
 
 /// rich `Panel._title` / `_subtitle` (`Text(title)`): control codes stripped; an empty
 /// annotation is none (rich `if self.title:`); newlines → spaces, tabs expanded, one space

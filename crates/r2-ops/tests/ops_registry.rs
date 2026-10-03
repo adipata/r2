@@ -229,7 +229,17 @@ fn test_mirror_rows_share_cli_mechanism_and_params() {
         assert_eq!(mirror.verb, mirror_verb);
         assert_eq!(mirror.cli_name, spec.cli_name);
         assert_eq!(mirror.mechanism, spec.mechanism);
-        assert_eq!(mirror.params, spec.params);
+        // the same params, minus the §11 D30 random-IV fallback (never on decrypt/verify)
+        let without_random: Vec<_> = spec
+            .params
+            .iter()
+            .map(|param| r2_core::params::ParamSpec {
+                random: None,
+                ..param.clone()
+            })
+            .collect();
+        assert_eq!(mirror.params, without_random);
+        assert!(mirror.params.iter().all(|param| param.random.is_none()));
         assert_eq!(mirror.algorithm, spec.algorithm);
     }
 }

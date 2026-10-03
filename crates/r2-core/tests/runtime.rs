@@ -98,3 +98,82 @@ fn panic_report_from_a_hook() {
     assert!(report.starts_with("hook saw a panic at "), "{report}");
     assert!(report.contains("runtime.rs"), "{report}");
 }
+
+// ---- operation timing (§11 D31) -----------------------------------------------------------
+
+use std::time::Duration;
+
+use r2_core::runtime::{
+    format_elapsed, reset_operation_time, set_timing_shown, take_operation_time, timed,
+    timing_shown, timing_suffix,
+};
+
+#[test]
+fn format_elapsed_uses_adaptive_truncated_units() {
+    let cases = [
+        (Duration::ZERO, "0µs"),
+        (Duration::from_nanos(999), "0µs"),
+        (Duration::from_micros(412), "412µs"),
+        (Duration::from_micros(999), "999µs"),
+        (Duration::from_millis(1), "1ms"),
+        (Duration::from_micros(4_999), "4ms"),
+        (Duration::from_micros(999_999), "999ms"),
+        (Duration::from_secs(1), "1.00s"),
+        (Duration::from_millis(1_239), "1.23s"),
+        (Duration::from_millis(61_505), "61.50s"),
+    ];
+    for (elapsed, expected) in cases {
+        assert_eq!(format_elapsed(elapsed), expected, "{elapsed:?}");
+    }
+}
+
+#[test]
+fn timed_accumulates_until_taken_and_only_shows_when_on() {
+    assert!(
+        !timing_shown(),
+        "off by default (in-process sessions keep c2's output)"
+    );
+    reset_operation_time();
+    assert_eq!(timed(|| 7), 7);
+    assert_eq!(take_operation_time(), None, "measured but not shown");
+    assert_eq!(timing_suffix(), "");
+
+    set_timing_shown(true);
+    timed(|| std::thread::sleep(Duration::from_millis(2)));
+    timed(|| std::thread::sleep(Duration::from_millis(2)));
+    let total = take_operation_time().unwrap();
+    assert!(total >= Duration::from_millis(4), "{total:?}");
+    assert_eq!(take_operation_time(), None, "taken (emptied)");
+
+    timed(|| ());
+    let suffix = timing_suffix();
+    assert!(
+        suffix.starts_with(" in ") && suffix.ends_with("µs"),
+        "{suffix:?}"
+    );
+    assert_eq!(timing_suffix(), "", "the suffix takes the time");
+
+    timed(|| ());
+    reset_operation_time();
+    assert_eq!(take_operation_time(), None, "reset before every dispatch");
+    set_timing_shown(false);
+}
+
+#[test]
+fn operation_time_is_per_thread() {
+    set_timing_shown(true);
+    reset_operation_time();
+    timed(|| ());
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                assert!(!timing_shown());
+                set_timing_shown(true);
+                assert_eq!(take_operation_time(), None);
+            })
+            .join()
+            .unwrap();
+    });
+    assert!(take_operation_time().is_some());
+    set_timing_shown(false);
+}

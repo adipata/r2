@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 use r2_core::error::{ConsoleError, ErrorKind};
 use r2_core::io::{CommandInput, Renderable, caret};
-use r2_core::runtime::{reset_interrupt, take_panic_report};
+use r2_core::runtime::{reset_interrupt, reset_operation_time, take_panic_report};
 
 use crate::commands::Command;
 use crate::completer::ConsoleAssist;
@@ -164,5 +164,6 @@ pub fn dispatch(ctx: &AppContext, commands: &CommandTable, line: &str) -> r2_cor
     let args = bind_args(&tokens[1..], command.flags(), line)?;
     // the name only — the line may carry secrets (§6)
     tracing::debug!(target: "r2::console", "command: {name}");
+    reset_operation_time(); // §11 D31: no provider time leaks into this command
     command.run(ctx, &args)
 }

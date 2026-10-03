@@ -312,6 +312,10 @@ pub struct ParamSpec {
     /// Exact byte length (BYTES).
     pub length: Option<usize>,
     pub validate: Option<ParamValidator>,
+    /// BYTES chosen by the caller (IVs, nonces, counter blocks of encrypt/sign/wrap rows):
+    /// an EMPTY answer at the prompt draws this many bytes from the resolver's RNG provider
+    /// instead (§11 D30). Inert unless the resolver was given one (`with_rng`).
+    pub random: Option<usize>,
 }
 impl ParamSpec {
     /// required = true, everything else None.
@@ -326,6 +330,7 @@ impl ParamSpec {
             choices: None,
             length: None,
             validate: None,
+            random: None,
         }
     }
     /// The blessed synthetic STR spec (template-editor line, REPL fallback, labels).
@@ -361,6 +366,13 @@ impl ParamSpec {
     pub fn validate(self, validator: fn(&ParamValue) -> Result<()>) -> Self {
         Self {
             validate: Some(ParamValidator(validator)),
+            ..self
+        }
+    }
+    /// §11 D30: an empty prompt answer = `len` random bytes (see `random`).
+    pub fn random(self, len: usize) -> Self {
+        Self {
+            random: Some(len),
             ..self
         }
     }

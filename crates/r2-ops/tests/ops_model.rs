@@ -530,10 +530,19 @@ fn shared_param_lists_match_the_spec() {
         p("aes.decrypt.cbc", "iv"),
         ParamSpec::new("iv", ParamKind::Bytes, "IV (16 bytes)").length(16)
     );
+    // §11 D30: the encrypt/sign rows draw a random IV when the prompt is left empty; their
+    // decrypt/verify mirrors never do
+    assert_eq!(
+        p("aes.encrypt.cbc", "iv"),
+        ParamSpec::new("iv", ParamKind::Bytes, "IV (16 bytes)")
+            .length(16)
+            .random(16)
+    );
     assert_eq!(
         p("aes.encrypt.gcm", "iv"),
-        ParamSpec::new("iv", ParamKind::Bytes, "IV / nonce (12 bytes typical)")
+        ParamSpec::new("iv", ParamKind::Bytes, "IV / nonce (12 bytes typical)").random(12)
     );
+    assert_eq!(p("aes.decrypt.gcm", "iv").random, None);
     assert_eq!(
         p("aes.encrypt.gcm", "aad"),
         ParamSpec::new(
@@ -551,7 +560,9 @@ fn shared_param_lists_match_the_spec() {
             "Initial counter block (16 bytes)"
         )
         .length(16)
+        .random(16)
     );
+    assert_eq!(p("aes.decrypt.ctr", "counter_block").random, None);
     assert_eq!(
         p("aes.encrypt.ctr", "counter_bits"),
         ParamSpec::new("counter_bits", ParamKind::Int, "Counter width in bits")
@@ -560,6 +571,12 @@ fn shared_param_lists_match_the_spec() {
     assert_eq!(
         p("aes.verify.gmac", "iv"),
         ParamSpec::new("iv", ParamKind::Bytes, "IV (12 bytes)").length(12)
+    );
+    assert_eq!(
+        p("aes.sign.gmac", "iv"),
+        ParamSpec::new("iv", ParamKind::Bytes, "IV (12 bytes)")
+            .length(12)
+            .random(12)
     );
     assert_eq!(
         p("generic.sign.hmac", "hash"),
