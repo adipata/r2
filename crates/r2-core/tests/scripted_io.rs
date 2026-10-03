@@ -231,11 +231,7 @@ fn print_renders_plain_text_at_capture_width() {
             &RenderConfig::CAPTURE
         )
     );
-    assert!(
-        output[1].starts_with("╭─ data ─╮\n│ dead   │\n"),
-        "{}",
-        output[1]
-    );
+    assert_eq!(output[1], "╭─ data ────╮\ndead\n╰─ 2 bytes ─╯"); // §11 D28
     assert_eq!(output[2], "\u{1b}[2J\u{1b}[H");
     assert_eq!(io.renderables()[0], rendered);
 }

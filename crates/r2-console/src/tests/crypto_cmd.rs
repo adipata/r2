@@ -213,7 +213,8 @@ fn test_encrypt_one_line_renders_hex_panel() {
     let text = io.text();
     assert!(text.contains("ciphertext — AES-GCM"));
     assert!(text.contains("4 bytes"));
-    assert!(text.contains(&format_hex(&expected, 2, 32)));
+    // §11 D28: the hex on one unbroken line of its own
+    assert!(text.contains(&format!("\n{}\n", format_hex(&expected, 0, 0))));
     // the panel itself (§4.9.2): a Hex renderable titled with what the bytes are
     assert_eq!(
         io.renderables(),
@@ -233,7 +234,7 @@ fn test_decrypt_round_trips_encrypt_inline() {
         .encrypt(&key, &mech("AES-ECB"), b"\xde\xad\xbe\xef")
         .unwrap();
     run_line(&ctx, &format!("decrypt mem:aeskey ecb 0x{}", hex_of(&ct))).unwrap();
-    assert!(io.text().contains(&format_hex(b"\xde\xad\xbe\xef", 2, 32)));
+    assert!(io.text().contains("\ndeadbeef\n"));
     assert!(io.text().contains("plaintext — AES-ECB"));
 }
 
@@ -646,11 +647,11 @@ impl LineReader for NoInput {
     }
 }
 
+/// c2 `test_hex_panel_honors_ui_config`, under §11 D28: the session IO built from a config
+/// with its own `ui.hex_group`/`ui.hex_width` still prints the result as one unbroken line.
 #[test]
-fn test_hex_panel_honors_ui_config() {
-    // r2: the hex layout is applied by the session IO from `ui.hex_group`/`ui.hex_width`
-    // (`open_console_io` builds LineIo with them, §4.9.2); the command emits a Hex panel.
-    let config = make_config(Some("ui: {hex_group: 0, hex_width: 8}\n"));
+fn test_hex_panel_ignores_ui_hex_layout() {
+    let config = make_config(Some("ui: {hex_group: 4, hex_width: 8}\n"));
     let out = Rc::new(RefCell::new(Vec::new()));
     let sink = Sink {
         style: SinkStyle::Plain,
@@ -677,27 +678,11 @@ fn test_hex_panel_honors_ui_config() {
     let key = find(mem.as_ref(), "aeskey");
     let expected = mem.encrypt(&key, &mech("AES-ECB"), &[0u8; 16]).unwrap();
     let text = String::from_utf8(out.borrow().clone()).unwrap();
-    let first = format_hex(&expected, 0, 8);
-    let first = first.lines().next().unwrap();
-    assert!(text.contains(first), "{text}");
-    assert!(!text.contains(&format_hex(&expected, 2, 32)));
-    // The session IO built by `open_console_io` (which needs real stdio, so it is not
-    // driven here) must hand the same `config.ui` values to every LineIo it builds.
-    let source: String = include_str!("../io/mod.rs")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    let start = source.find("pub fn open_console_io(").unwrap();
-    let body = &source[start..];
-    let body = &body[..body.find("pub mod ").unwrap()];
-    let builds = body.matches("LineIo::new(").count();
-    assert!(builds >= 1, "{body}");
-    assert_eq!(
-        body.matches("config.ui.hex_group, config.ui.hex_width,")
-            .count(),
-        builds,
-        "every LineIo in open_console_io takes config.ui's hex layout"
-    );
+    let rows: Vec<&str> = text.lines().collect();
+    assert_eq!(rows.len(), 3, "{text}");
+    assert!(rows[0].starts_with("╭─ ciphertext — AES-ECB "), "{text}");
+    assert_eq!(rows[1], format_hex(&expected, 0, 0));
+    assert!(rows[2].ends_with(" 16 bytes ─╯"), "{text}");
 }
 
 // ---------------------------------------------------------------------------

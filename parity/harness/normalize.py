@@ -17,6 +17,9 @@ records as a deviation (§11) or as non-TTY noise is normalized away, nothing el
   a hidden prompt (§11 D20). The REPL prompt (``c2> ``/``r2> ``) echo is dropped.
 - The tool name (§11 D7): ``c2`` → ``r2`` as a word (banner, ``c2.yaml``, ``c2.log``,
   messages naming the tool); hex dump lines are left alone.
+- The hex result (§11 D28): the body rows of c2's hex panel (``│ dead beef │`` … between a
+  top border and a ``─ <n> bytes ─╯`` bottom border) become one line of continuous hex,
+  r2's layout; the title and byte count are compared as they are.
 - Table and panel glyphs (§11 D1): box-drawing characters become spaces, runs of
   whitespace collapse, blank lines are dropped — cell CONTENT, order and wording remain.
 - PKCS#11 ULONG values >= 2^63 (§11 D18): r2 shows CK_UNAVAILABLE_INFORMATION unsigned
@@ -36,7 +39,9 @@ import re
 BOX = "─│╭╮╰╯━┃┏┓┗┛┌┐└┘├┤┬┴┼═║╔╗╚╝╞╡╪╤╧"
 _BOX_RE = re.compile(f"[{BOX}]")
 _WS_RE = re.compile(r"\s+")
-_HEX_LINE_RE = re.compile(r"^[│ ]*[0-9a-f]{2,4}( [0-9a-f]{2,4})*[│ ]*$")
+_HEX_LINE_RE = re.compile(r"^[│ ]*[0-9a-f]{2,4}( [0-9a-f]{2,4})*[│ ]*$|^[0-9a-f]+$")
+_HEX_BODY_RE = re.compile(r"^│ ([0-9a-f]+(?: [0-9a-f]+)*) *│$")
+_HEX_BOTTOM_RE = re.compile(r"^╰─* \d+ bytes ─╯$")
 _TOOL_RE = re.compile(r"\bc2\b")
 _HANDLE_RE = re.compile(r"^handle \d+$")
 _ROW_RE = re.compile(r"^[a-z][a-z0-9_-]*:\S+ ")
@@ -143,6 +148,29 @@ def _c2_echo(lines: list[str]) -> list[str]:
     return out
 
 
+def _c2_hex(lines: list[str]) -> list[str]:
+    """c2's grouped hex panel body as r2's one unbroken hex line (§11 D28).
+
+    Only the rows between a top border and the ``─ <n> bytes ─╯`` bottom border of the same
+    panel are joined, and only when every one of them is ``│ <hex groups> │``."""
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        i += 1
+        if not line.startswith("╭"):
+            continue
+        end = i
+        while end < len(lines) and _HEX_BODY_RE.match(lines[end]):
+            end += 1
+        if end > i and end < len(lines) and _HEX_BOTTOM_RE.match(lines[end]):
+            rows = (_HEX_BODY_RE.match(row) for row in lines[i:end])
+            out.append("".join(row.group(1).replace(" ", "") for row in rows if row))
+            i = end
+    return out
+
+
 def normalize(
     text: str,
     tool: str,
@@ -162,7 +190,7 @@ def normalize(
         text = _C2_WRAP_RE.sub(r"\1", text)
     lines = text.split("\n")
     if tool == "c2":
-        lines = _c2_echo(lines)
+        lines = _c2_hex(_c2_echo(lines))
     else:
         lines = _r2_echo(lines, inputs or [], secrets or set())
     out: list[str] = []

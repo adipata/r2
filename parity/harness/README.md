@@ -53,6 +53,11 @@ The user config file case (`transcript_user_config`) appends `fixtures/user_conf
   proves a changed prompt, an extra output line ending in `: ` and an echoed secret are
   all reported.
 - **Tool name** (§11 D7): `c2` → `r2` as a word, except inside hex dump lines.
+- **Hex result** (§11 D28): the body rows of a c2 hex panel (`│ dead beef │` rows between
+  its top border and its `─ <n> bytes ─╯` bottom border) are joined into one line of
+  continuous hex, r2's layout; the title and the byte count are compared as they are
+  (`test_normalize.py` `HexResult`: a changed digit or count is still reported, other
+  panels are untouched).
 - **Glyphs** (§11 D1): box-drawing characters become spaces, whitespace runs collapse,
   blank lines are dropped. Both tools run with `COLUMNS=200` (the token suite with 1000) by
   default. That width steps around the ONE remaining table difference, the D1 overflow

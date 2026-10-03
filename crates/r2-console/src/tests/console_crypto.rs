@@ -156,8 +156,7 @@ fn test_aes_gcm_interactive_fallbacks() {
     let expected = unhex(GCM_48);
     let text = io.text();
     assert!(text.contains("64 bytes")); // ct‖tag length in the hex panel subtitle
-    let first = format_hex(&expected, 2, 32);
-    assert!(text.contains(first.lines().next().unwrap()));
+    assert!(text.contains(&format!("\n{}\n", format_hex(&expected, 0, 0)))); // §11 D28
 }
 
 #[test]
@@ -175,7 +174,7 @@ fn test_aes_gcm_tampered_tag_renders_error_at_repl_boundary() {
         "decrypt mem:aeskey gcm iv=0x{IV} 0x{GCM_DEADBEEF}"
     )]);
     assert_clean(&io);
-    assert!(io.text().contains("dead beef"));
+    assert!(io.text().contains("\ndeadbeef\n")); // c2: "dead beef" (§11 D28)
 }
 
 // ---------------------------------------------------------------------------

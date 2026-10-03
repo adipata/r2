@@ -4131,7 +4131,8 @@ pub enum Renderable {
     /// Pre-styled lines (caret echo, banners); laid out like `Text`.
     Styled(Vec<Line>),
     Table(TableData),
-    /// Grouped hex dump panel; grouping/width from RenderConfig at render time.
+    /// Hex result: the panel's titled top and "{n} bytes" bottom borders around one
+    /// unbroken line of hex (§11 D28).
     Hex { data: Vec<u8>, title: Option<String> },
     Panel(PanelData),
 }
@@ -4149,7 +4150,7 @@ pub fn caret(line: &str, pos: usize) -> Renderable { .. }
 /// Uniform table used by every command (cells are data, never markup; control codes
 /// stripped as in rich).
 pub fn table(title: Option<&str>, columns: &[&str], rows: Vec<Vec<String>>) -> Renderable { .. }
-/// Hex dump panel (c2 `render.hex_panel`).
+/// Hex result (c2 `render.hex_panel`, laid out per §11 D28).
 pub fn hex(data: &[u8], title: Option<&str>) -> Renderable { .. }
 ```
 
@@ -4157,6 +4158,8 @@ pub fn hex(data: &[u8], title: Option<&str>) -> Renderable { .. }
 // crates/r2-core/src/render.rs
 use crate::io::Renderable;
 
+/// `hex_group`/`hex_width` carry `ui.hex_group`/`ui.hex_width`; the hex result no longer
+/// reads them (§11 D28).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RenderConfig { pub width: usize, pub hex_group: usize, pub hex_width: usize }
 impl RenderConfig {
@@ -4216,9 +4219,14 @@ Rendering rules (normative; layout differences from rich are D1):
   out by the rich Text model; an empty title or subtitle is none (rich `if self.title:`),
   a content width below 1 renders no body line. Error panel: Danger border, bold red
   message, dim hint — its text equals rich's.
-- **Hex**: Panel with `format_hex(data, cfg.hex_group, cfg.hex_width)` body, the given
-  title, subtitle "{n} bytes"; empty data → body "(empty — 0 bytes)", no subtitle.
-  Byte-identical to c2/rich at 80 columns.
+- **Hex** (§11 D28): three rows — the Panel's top border with the given title, the data as
+  ONE line of continuous lower-case hex (`format_hex(data, 0, 0)`: no side borders, groups
+  or line breaks, never wrapped or cropped by r2, no SGR), the Panel's bottom border with
+  subtitle "{n} bytes". Border width = the hex line's length, widened to the title's and
+  the subtitle's annotation width + 4 (so both show in full), capped at `cfg.width` (at
+  least 2); titles are cropped as in a Panel. `cfg.hex_group`/`cfg.hex_width` are not
+  read. Empty data → the Panel with body "(empty — 0 bytes)" and no subtitle,
+  byte-identical to c2/rich.
 - **Text** and **Styled** (spans per line, their tones kept): laid out by the rich Text
   model at `cfg.width`, i.e. exactly what c2's `console.print(str, markup=False)` /
   `console.print(Text)` printed apart from §11 D1's highlighting and D23's emoji codes (a
@@ -6004,10 +6012,11 @@ completion inside an open quote). `Command::complete` keeps returning full repla
 tokens. Completion and highlighting never call `ctx.io` and never surface an error: any
 `ConsoleError` inside them yields no suggestions / unstyled text.
 
-Results default to a hex dump on the console (`ui.hex_group`/`hex_width`; a panel titled
-with what the bytes are and subtitled `<n> bytes`, or `(empty — 0 bytes)` with no subtitle;
-`format_hex` is a verbatim port of c2's and the panel is byte-identical to c2/rich at 80
-columns); `--out` writes raw bytes unless `--outformat hex|b64` is given. Errors: a panel
+Results default to the hex result on the console (§11 D28: a top border titled with what
+the bytes are, the bytes as one unbroken line of continuous hex that copies whole, a bottom
+border reading `<n> bytes`; empty data is c2's panel `(empty — 0 bytes)` with no subtitle;
+`ui.hex_group`/`hex_width` no longer apply); `--out` writes raw bytes unless
+`--outformat hex|b64` is given. Errors: a panel
 titled `error` with a red border, the message in bold red and a dim `hint: …` line;
 unknown command/mechanism gets difflib suggestions (hint `did you mean: <a>, <b>, <c>` — at
 most 3, exactly CPython's `difflib.get_close_matches` with its default cutoff, including its
@@ -7527,7 +7536,8 @@ names the test or harness check that pins the deviation.
   columns (default `overflow="ellipsis"`) cropped it to the column width minus one and
   appended `…` (e.g. a long config path in `config show --origin`, or `ops` / `keys` rows
   at 60 columns; text with spaces word-wraps in both), so such a row takes more lines in
-  r2. The column widths are unaffected (rich measures before it crops). Printed text, the caret echo and panels (error panel, hex dump, any `PanelData`) are an
+  r2. The column widths are unaffected (rich measures before it crops). Printed text, the caret echo and panels (error panel, any `PanelData`, the empty hex
+  result; the hex result's borders, D28) are an
   own port of rich 15's Text/Panel layout (§4.9.2) and equal rich's output at every console
   width of 2 or more; residuals: cell widths are rich's Unicode 17.0.0 table (rich's
   `UNICODE_VERSION` environment override is not honoured), and below width 2 (never
@@ -7551,8 +7561,8 @@ names the test or harness check that pins the deviation.
   `tables_match_rich_column_widths` (c2's help/ops/keys/key tables and 120 generated ones
   at widths 20..120, `crates/r2-core/tests/support/gen_rich_tables.py`: equal to rich's
   output, or — where rich cropped — equal header rules) and `table_layout_is_simple_head`
-  (title wrap vectors from rich 15); the R1 renderer tests assert rich-identical text for error, hex and generic
-  panels, printed text (content ESC/NUL/DEL/OSC bytes included), caret layouts and
+  (title wrap vectors from rich 15); the R1 renderer tests assert rich-identical text for error, empty-hex and generic
+  panels (and rich's content for the D28 hex result), printed text (content ESC/NUL/DEL/OSC bytes included), caret layouts and
   `cell_len` (vectors generated with rich 15,
   `crates/r2-core/tests/support/gen_rich_panels.py`); `resolve_color` unit tests over the
   rich 15 truth table.
@@ -8233,6 +8243,36 @@ one OpenSSL's `X509` decoder accepts). Verified by R6 x509build tests
   console (hints never produce NONE/OTHER material); visible only to API callers.
 - *Reason*: c2 internal inconsistency (spec vs memory code) resolved in favour of the spec.
 - *Verified by*: R4 `memory_parity::none_and_other_material_is_a_param_error_with_c2_text`.
+
+**D28 — The hex result is one unbroken, copyable line (user decision 2026-10-03).**
+- *Description*: c2 printed the console result of `encrypt`, `decrypt`, `sign` and
+  `derive` as a rich panel whose body was `format_hex` grouped by `ui.hex_group` and broken
+  every `ui.hex_width` bytes between `│ … │` side borders, so copying the value picked up
+  spaces, newlines and border glyphs. r2 keeps the panel's top border with the title and
+  its bottom border with the byte count, and prints the data between them as ONE line of
+  continuous lower-case hex with no side borders, which r2 never wraps (§4.9.2 "Hex"):
+  the terminal soft-wraps it, so a double-click or a line selection copies the whole
+  value.
+
+  ```
+  ╭─ ciphertext — AES-CBC ───────╮
+  c3180a43959e647be62f6f8eae5ba11a
+  ╰─────────────────── 16 bytes ─╯
+  ```
+
+  The borders span the hex line, widened to show the title and the byte count in full
+  (c2's panel could crop the count of a short result), and stop at the console width.
+  `ui.hex_group`/`ui.hex_width` are still accepted, validated and shown by `config show`
+  (c2 config files load unchanged) but no longer shape the result. An empty result is
+  still c2's panel (`(empty — 0 bytes)`, no subtitle); `--out` files and all other output
+  are unchanged.
+- *Reason*: operators copy results into other tools; the grouped, bordered rows had to be
+  cleaned by hand.
+- *Verified by*: r2-core render `hex_result_is_one_copyable_line_between_the_borders`,
+  `hex_result_borders_fit_the_annotations_and_the_console`, `hex_panel_matches_rich_content`
+  (rich 15's title, digits and byte count for every hex panel vector); r2-console
+  `tests::crypto_cmd::test_hex_panel_ignores_ui_hex_layout`; the parity harness joins
+  c2's hex panel rows into one line (`normalize.py`, `test_normalize.py` `HexResult`).
 
 **Resolved without deviation** (recorded so they are not mistaken for gaps):
 

@@ -12,6 +12,7 @@ mod rich_panels;
 #[path = "support/rich_tables.rs"]
 mod rich_tables;
 
+use r2_core::codec::format_hex;
 use r2_core::error::ConsoleError;
 use r2_core::io::{PanelData, Renderable, Span, TableData, Tone, caret, error_panel, hex, table};
 use r2_core::render::{RenderConfig, render, render_no_color, render_plain};
@@ -43,8 +44,13 @@ fn error_panel_matches_rich_vectors() {
     );
 }
 
+/// §11 D28: the hex result carries rich's panel content — the same title row (both widen to
+/// the title up to the console width, so both crop it alike), every hex digit of the body
+/// and, wherever it fits the console, the whole "{n} bytes" subtitle — as three rows with the
+/// data on ONE unbroken line; an empty result is still rich's panel itself.
 #[test]
-fn hex_panel_matches_rich_vectors() {
+fn hex_panel_matches_rich_content() {
+    let strip = |row: &str| row.trim_matches(|c| "╭╮╰╯─│ ".contains(c)).to_owned();
     let mut failures = Vec::new();
     for &(data, group, hex_width, title, width, expected) in rich_panels::HEX_PANELS {
         let cfg = RenderConfig {
@@ -53,7 +59,23 @@ fn hex_panel_matches_rich_vectors() {
             hex_width,
         };
         let got = render_plain(&hex(data, title), &cfg);
-        if got != expected {
+        let ok = if data.is_empty() {
+            got == expected
+        } else {
+            let rich: Vec<&str> = expected.split('\n').collect();
+            let rows: Vec<&str> = got.split('\n').collect();
+            let digits: String = rich[1..rich.len() - 1]
+                .iter()
+                .flat_map(|row| row.chars())
+                .filter(char::is_ascii_hexdigit)
+                .collect();
+            let bytes = format!("{} bytes", data.len());
+            rows.len() == 3
+                && strip(rows[0]) == strip(rich[0])
+                && rows[1] == digits
+                && (width < bytes.len() + 6 || strip(rows[2]) == bytes)
+        };
+        if !ok {
             failures.push(format!(
                 "data {} group {group} hex_width {hex_width} title {title:?} width {width}\n--- rich\n{expected}\n--- r2\n{got}",
                 data.len()
@@ -65,6 +87,71 @@ fn hex_panel_matches_rich_vectors() {
         "{} mismatches:\n{}",
         failures.len(),
         failures.join("\n\n")
+    );
+}
+
+/// §11 D28: the titled top border and the "{n} bytes" bottom border of c2's panel around
+/// one line of continuous hex — no side borders, groups or line breaks, whatever
+/// `ui.hex_group`/`ui.hex_width` say — so a double-click or a line selection copies it.
+#[test]
+fn hex_result_is_one_copyable_line_between_the_borders() {
+    let data = r2_core::text::py_fromhex("c3180a43959e647be62f6f8eae5ba11a").unwrap();
+    let result = hex(&data, Some("ciphertext — AES-CBC"));
+    let expected = "╭─ ciphertext — AES-CBC ───────╮\n\
+                    c3180a43959e647be62f6f8eae5ba11a\n\
+                    ╰─────────────────── 16 bytes ─╯";
+    for (group, hex_width) in [(2, 32), (4, 16), (0, 0), (1, 1)] {
+        let cfg = RenderConfig {
+            width: 80,
+            hex_group: group,
+            hex_width,
+        };
+        assert_eq!(render_plain(&result, &cfg), expected);
+        // nothing styled: the copied text is the hex itself
+        assert_eq!(render(&result, &cfg), expected);
+        assert_eq!(render_no_color(&result, &cfg), expected);
+    }
+}
+
+/// §11 D28: the borders widen to show the title and the byte count in full, and stop at the
+/// console width; the hex line is never wrapped or cropped by r2 (the terminal soft-wraps
+/// it, at the borders' width when it is wider than the console).
+#[test]
+fn hex_result_borders_fit_the_annotations_and_the_console() {
+    let rows = |data: &[u8], title: &str, width: usize| -> Vec<String> {
+        render_plain(&hex(data, Some(title)), &at(width))
+            .split('\n')
+            .map(str::to_owned)
+            .collect()
+    };
+    // a title wider than the data
+    assert_eq!(
+        rows(&[0xab], "a much longer title than content", 80),
+        [
+            "╭─ a much longer title than content ─╮",
+            "ab",
+            "╰────────────────────────── 1 bytes ─╯",
+        ]
+    );
+    // data wider than the console: 80-cell borders, the 512 digits on one row
+    let data: Vec<u8> = (0..=255).collect();
+    let long = rows(&data, "signature — RSA-PKCS", 80);
+    assert_eq!(long.len(), 3);
+    assert_eq!(
+        long[0],
+        format!("╭─ signature — RSA-PKCS {}─╮", "─".repeat(54))
+    );
+    assert_eq!(long[1], format_hex(&data, 0, 0));
+    assert_eq!(long[2], format!("╰{} 256 bytes ─╯", "─".repeat(66)));
+    // a narrow console crops the title, never the hex
+    let data = r2_core::text::py_fromhex("c3180a43959e647be62f6f8eae5ba11a").unwrap();
+    assert_eq!(
+        rows(&data, "ciphertext — AES-CBC", 20),
+        [
+            "╭─ ciphertext — AE─╮",
+            "c3180a43959e647be62f6f8eae5ba11a",
+            "╰─────── 16 bytes ─╯",
+        ]
     );
 }
 
@@ -269,16 +356,17 @@ fn caret_column_is_display_width() {
     assert_eq!(lines[1].last().unwrap().tone, Tone::Error);
 }
 
+/// c2 `test_hex_panel_groups_and_length`, under §11 D28: one unbroken line, not groups.
 #[test]
-fn test_hex_panel_groups_and_length() {
+fn test_hex_panel_one_line_and_length() {
     let cfg = RenderConfig {
         width: 100,
         hex_group: 2,
         hex_width: 4,
     };
     let text = render_plain(&hex(&(0..8).collect::<Vec<u8>>(), None), &cfg);
-    assert!(text.contains("0001 0203"));
-    assert!(text.contains("0405 0607"));
+    assert!(text.contains("\n0001020304050607\n"));
+    assert!(!text.contains("0001 0203"));
     assert!(text.contains("8 bytes"));
 }
 

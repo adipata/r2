@@ -9,8 +9,8 @@
 // (`BoundArgs::positional_quoted`) and matches `resolve_cli()` for that key, else it is
 // data — quoting data forces it as data.
 //
-// Results default to a hex dump panel on the console (`ui.hex_group` / `ui.hex_width`,
-// applied by the IO at render time); `--out` writes raw bytes unless `--outformat hex|b64`
+// Results default to the hex result on the console (one unbroken hex line between the
+// titled panel borders, §11 D28); `--out` writes raw bytes unless `--outformat hex|b64`
 // is given. Payload bytes travel through `r2_core::datainput` (§4.4). Commands return
 // errors, never print them (§4.2).
 //

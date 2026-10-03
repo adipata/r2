@@ -163,7 +163,8 @@ pub enum Renderable {
     /// Pre-styled lines (caret echo, banners); laid out like `Text`.
     Styled(Vec<Line>),
     Table(TableData),
-    /// Grouped hex dump panel; grouping/width from RenderConfig at render time.
+    /// Hex result: the panel's titled top and "{n} bytes" bottom borders around one unbroken
+    /// line of hex (§4.9.2, §11 D28).
     Hex {
         data: Vec<u8>,
         title: Option<String>,
@@ -240,7 +241,7 @@ pub fn table(title: Option<&str>, columns: &[&str], rows: Vec<Vec<String>>) -> R
         rows,
     })
 }
-/// Hex dump panel (c2 `render.hex_panel`).
+/// Hex result (c2 `render.hex_panel`, laid out per §11 D28).
 pub fn hex(data: &[u8], title: Option<&str>) -> Renderable {
     Renderable::Hex {
         data: data.to_vec(),

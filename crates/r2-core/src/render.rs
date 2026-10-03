@@ -1,9 +1,10 @@
 // The ConsoleIo renderer (spec §4.9.2; owner R1): Renderable → text. Text, styled lines and
-// panels (error panel, hex dump) are an own port of rich 15's Text/Panel layout — its cell
-// widths (rich's own Unicode table, ZWJ/VS16 graphemes), control-code stripping, tab
+// panels (error panel, generic panels) are an own port of rich 15's Text/Panel layout — its
+// cell widths (rich's own Unicode table, ZWJ/VS16 graphemes), control-code stripping, tab
 // expansion and fold wrapping — and equal rich's output; tables are a port of rich's
 // `Table` (column widths, cell measurement and layout) drawn with c2's `box.SIMPLE_HEAD`
-// minus its blank edge columns and rows (§11 D1).
+// minus its blank edge columns and rows (§11 D1). The hex result keeps the panel's top and
+// bottom borders around one unbroken hex line, so it copies whole (§11 D28).
 use std::cmp::Ordering;
 
 use anstyle::{AnsiColor, Style};
@@ -12,6 +13,8 @@ use crate::codec::format_hex;
 use crate::io::{Line, PanelData, Renderable, Span, TableData, Tone};
 use crate::text::{is_py_space, py_splitlines};
 
+/// `hex_group`/`hex_width` carry `ui.hex_group`/`ui.hex_width`; the hex result no longer
+/// reads them, it is always one unbroken line (§11 D28).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RenderConfig {
     pub width: usize,
@@ -60,9 +63,7 @@ fn render_with(renderable: &Renderable, cfg: &RenderConfig, sgr: Sgr) -> String 
             render_text(&lines, cfg.width, sgr)
         }
         Renderable::Table(data) => render_table(data, cfg, sgr),
-        Renderable::Hex { data, title } => {
-            render_panel(&hex_panel(data, title.as_deref(), cfg), cfg.width, sgr)
-        }
+        Renderable::Hex { data, title } => render_hex(data, title.as_deref(), cfg.width, sgr),
         Renderable::Panel(panel) => render_panel(panel, cfg.width, sgr),
     }
 }
@@ -512,25 +513,40 @@ fn render_text(lines: &[Cells], width: usize, sgr: Sgr) -> String {
 
 // ---- panels -------------------------------------------------------------------------------
 
-/// The hex dump panel of c2 `render.hex_panel` (§4.9.2 "Hex").
-fn hex_panel(data: &[u8], title: Option<&str>, cfg: &RenderConfig) -> PanelData {
-    let (body, subtitle) = if data.is_empty() {
-        ("(empty — 0 bytes)".to_owned(), None)
-    } else {
-        (
-            format_hex(data, cfg.hex_group, cfg.hex_width),
-            Some(format!("{} bytes", data.len())),
-        )
-    };
-    PanelData {
-        title: title.map(str::to_owned),
-        subtitle,
-        border: Tone::Plain,
-        body: vec![vec![Span {
-            text: body,
-            tone: Tone::Plain,
-        }]],
+/// The hex result (§4.9.2 "Hex", §11 D28): c2's panel top border with the title and bottom
+/// border with "{n} bytes", but no side borders, and the data between them as ONE line of
+/// continuous lower-case hex that r2 never wraps (the terminal soft-wraps it), so a
+/// double-click or a line selection copies it whole. The borders span the hex line, widened
+/// to show the title and the subtitle in full, at most the console width. Empty data is
+/// c2's panel, body "(empty — 0 bytes)" without a subtitle.
+fn render_hex(data: &[u8], title: Option<&str>, width: usize, sgr: Sgr) -> String {
+    if data.is_empty() {
+        let panel = PanelData {
+            title: title.map(str::to_owned),
+            subtitle: None,
+            border: Tone::Plain,
+            body: vec![vec![Span {
+                text: "(empty — 0 bytes)".to_owned(),
+                tone: Tone::Plain,
+            }]],
+        };
+        return render_panel(&panel, width, sgr);
     }
+    let line = format_hex(data, 0, 0);
+    let title = title.and_then(|title| annotation(title, Tone::Plain));
+    let subtitle = annotation(&format!("{} bytes", data.len()), Tone::Plain);
+    let wanted = [&title, &subtitle]
+        .into_iter()
+        .flatten()
+        .map(|text| cells_len(text) + 4)
+        .fold(line.len(), usize::max);
+    let panel_width = wanted.min(width).max(2);
+    [
+        top_border(title, panel_width, Tone::Plain, sgr),
+        line,
+        bottom_border(subtitle, panel_width, Tone::Plain, sgr),
+    ]
+    .join("\n")
 }
 
 /// rich `Panel._title` / `_subtitle` (`Text(title)`): control codes stripped; an empty
@@ -608,7 +624,28 @@ fn render_panel(panel: &PanelData, width: usize, sgr: Sgr) -> String {
     let text_width = child_width.saturating_sub(2);
     let mut rows: Vec<String> = Vec::new();
     let side = |c: char| styled(&[(c, border)], sgr);
-    let top = match title {
+    rows.push(top_border(title, panel_width, border, sgr));
+    if text_width > 0 {
+        for line in wrap_lines(&body, text_width) {
+            let mut cells = vec![(' ', Tone::Plain)];
+            let fill = text_width.saturating_sub(cells_len(&line));
+            cells.extend(line);
+            cells.extend(std::iter::repeat_n((' ', Tone::Plain), fill + 1));
+            rows.push(format!("{}{}{}", side('│'), styled(&cells, sgr), side('│')));
+        }
+    }
+    let subtitle = panel
+        .subtitle
+        .as_deref()
+        .and_then(|text| annotation(text, border));
+    rows.push(bottom_border(subtitle, panel_width, border, sgr));
+    rows.join("\n")
+}
+
+/// The panel's top row `╭─ title ───╮` (title left-aligned, cropped to fit; a bare rule
+/// without a title or at a width of 4 or less).
+fn top_border(title: Option<Cells>, panel_width: usize, border: Tone, sgr: Sgr) -> String {
+    match title {
         Some(title) if panel_width > 4 => {
             let aligned = align_annotation(title, panel_width - 4, true, ('─', border));
             format!(
@@ -623,22 +660,13 @@ fn render_panel(panel: &PanelData, width: usize, sgr: Sgr) -> String {
             border,
             sgr,
         ),
-    };
-    rows.push(top);
-    if text_width > 0 {
-        for line in wrap_lines(&body, text_width) {
-            let mut cells = vec![(' ', Tone::Plain)];
-            let fill = text_width.saturating_sub(cells_len(&line));
-            cells.extend(line);
-            cells.extend(std::iter::repeat_n((' ', Tone::Plain), fill + 1));
-            rows.push(format!("{}{}{}", side('│'), styled(&cells, sgr), side('│')));
-        }
     }
-    let subtitle = panel
-        .subtitle
-        .as_deref()
-        .and_then(|text| annotation(text, border));
-    let bottom = match subtitle {
+}
+
+/// The panel's bottom row `╰─── subtitle ─╯` (subtitle right-aligned, cropped to fit; a
+/// bare rule without a subtitle or at a width of 4 or less).
+fn bottom_border(subtitle: Option<Cells>, panel_width: usize, border: Tone, sgr: Sgr) -> String {
+    match subtitle {
         Some(subtitle) if panel_width > 4 => {
             let aligned = align_annotation(subtitle, panel_width - 4, false, ('─', border));
             format!(
@@ -653,9 +681,7 @@ fn render_panel(panel: &PanelData, width: usize, sgr: Sgr) -> String {
             border,
             sgr,
         ),
-    };
-    rows.push(bottom);
-    rows.join("\n")
+    }
 }
 
 fn side_str(text: &str, tone: Tone, sgr: Sgr) -> String {

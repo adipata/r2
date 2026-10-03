@@ -157,3 +157,36 @@ class RowOrderIsCompared(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HexResult(unittest.TestCase):
+    """§11 D28: c2's grouped hex panel compares equal to r2's one-line hex result."""
+
+    C2 = [
+        "╭─ ciphertext — AES-CBC ──────────────╮",
+        "│ c3180a43 959e647b e62f6f8e ae5ba11a │",
+        "│ 00112233 c2c2c2c2                   │",
+        "╰────────────────────────── 24 bytes ─╯",
+    ]
+    R2 = [
+        "╭─ ciphertext — AES-CBC ───────╮",
+        "c3180a43959e647be62f6f8eae5ba11a00112233c2c2c2c2",
+        "╰─────────────────── 24 bytes ─╯",
+    ]
+
+    def test_grouped_rows_become_one_line(self) -> None:
+        c2 = normalize("\n".join(self.C2), "c2", "/w", "/f")
+        r2 = normalize("\n".join(self.R2), "r2", "/w", "/f")
+        self.assertEqual(c2, r2)
+        self.assertIn("c3180a43959e647be62f6f8eae5ba11a00112233c2c2c2c2", r2)
+
+    def test_changed_hex_or_count_is_a_difference(self) -> None:
+        c2 = normalize("\n".join(self.C2), "c2", "/w", "/f")
+        r2 = [self.R2[0], self.R2[1].replace("c3", "c4"), self.R2[2]]
+        self.assertNotEqual(c2, normalize("\n".join(r2), "r2", "/w", "/f"))
+        r2 = [self.R2[0], self.R2[1], self.R2[2].replace("24", "25")]
+        self.assertNotEqual(c2, normalize("\n".join(r2), "r2", "/w", "/f"))
+
+    def test_other_panels_are_left_alone(self) -> None:
+        error = ["╭─ error ─╮", "│ dead    │", "╰─────────╯"]
+        self.assertEqual(normalize("\n".join(error), "c2", "/w", "/f"), ["error", "dead"])
