@@ -3,8 +3,8 @@
 // With the timing display on (`r2_core::runtime::set_timing_shown(true)`, which the r2
 // binary does for real sessions) the result of a timed operation carries the provider time:
 // the hex result's footer "<n> bytes in <t>", " in <t>" at the very end of the text result
-// lines and table titles (after ", <fmt>-encoded" on `export --kek`), and an extra plain
-// span after verify's verdict. With it off (the in-process default) every output is c2's, unchanged.
+// lines (after ", <fmt>-encoded" on `export --kek`), a "loaded/unwrapped in <t>" line after
+// the load / load --kek table, and an extra plain span after verify's verdict. With it off (the in-process default) every output is c2's, unchanged.
 // FakeProvider + ScriptedIo throughout (§4.10). The flag is thread-local: each test turns it
 // on through a guard that turns it off again, even when the test fails.
 use std::cell::Cell;
@@ -238,13 +238,13 @@ fn generate_lines_end_with_the_time() {
 }
 
 #[test]
-fn load_table_title_shows_the_time() {
+fn load_shows_the_time_after_the_table() {
     let _on = TimingOn::new();
     let p = make_pair(&[]);
     run_line(&p.ctx, &format!("load mem aes {DATA_16} --label lk")).unwrap();
-    let titles = table_titles(&p.io);
-    assert_eq!(titles.len(), 1);
-    timed_line(&titles[0], "loaded into mem", "");
+    // the title stays c2's (a table title wraps at the table's width); the time follows
+    assert_eq!(table_titles(&p.io), ["loaded into mem"]);
+    timed_line(&last_line(&p.io), "loaded", "");
 }
 
 #[test]
@@ -367,7 +367,7 @@ fn export_kek_line_ends_with_the_time() {
 }
 
 #[test]
-fn load_kek_table_title_shows_the_time() {
+fn load_kek_shows_the_time_after_the_table() {
     let _on = TimingOn::new();
     let p = make_pair(&[]);
     let kek = p
@@ -393,9 +393,11 @@ fn load_kek_table_title_shows_the_time() {
         &format!("load mem aes {hex} --kek kek --mech kwp --label back"),
     )
     .unwrap();
-    let titles = table_titles(&p.io);
-    assert_eq!(titles.len(), 1);
-    timed_line(&titles[0], "unwrapped into mem (AES-KEY-WRAP-PAD)", "");
+    assert_eq!(
+        table_titles(&p.io),
+        ["unwrapped into mem (AES-KEY-WRAP-PAD)"]
+    );
+    timed_line(&last_line(&p.io), "unwrapped", "");
 }
 
 #[test]

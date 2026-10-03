@@ -11,10 +11,12 @@ use std::collections::{BTreeSet, HashMap};
 
 use r2_core::codec::decode_data;
 use r2_core::error::ConsoleError;
-use r2_core::io::{Renderable, table};
+use r2_core::io::{Renderable, busy_with, table};
 use r2_core::keys::{Curve, KeyAlgorithm, KeyClass, KeyInfo, display_refs};
 use r2_core::params::{ParamKind, ParamSpec, ParamStruct, ParamValue, Verb};
-use r2_core::runtime::{check_interrupt, timed, timing_suffix};
+use r2_core::runtime::{
+    check_interrupt, format_elapsed, take_operation_time, timed, timing_suffix,
+};
 use r2_core::template::{AttrKind, AttrValue, KeyTemplate, TemplateAttr};
 use r2_core::text::{py_fromhex, py_path, py_repr, py_strip};
 use r2_core::x509info::certificate_details;
@@ -66,6 +68,14 @@ fn owned(items: &[&str]) -> Vec<String> {
 
 fn text(ctx: &AppContext, line: String) {
     ctx.io.print(Renderable::Text(line));
+}
+
+/// §11 D31: "<what> in <t>" as its own line when the command's provider calls were timed
+/// (and the display is on); nothing otherwise.
+pub(crate) fn print_timing(ctx: &AppContext, what: &str) {
+    if let Some(elapsed) = take_operation_time() {
+        text(ctx, format!("{what} in {}", format_elapsed(elapsed)));
+    }
 }
 
 /// A value-carrying option, treating an empty value like an absent one (c2 `_opt(..) or
@@ -743,12 +753,17 @@ impl Command for GenerateCommand {
         request.key_id = key_id;
         request.template = template;
         request.public_template = public_template;
-        let info = timed(|| provider.generate_key(&request))?; // §11 D31
         let what = match (size_bits, &curve) {
             (Some(bits), _) if bits != 0 => format!("{bits}-bit {}", algorithm.as_str()),
             (_, Some(curve)) => format!("{} {}", curve.as_str(), algorithm.as_str()),
             _ => format!("None {}", algorithm.as_str()),
         };
+        // §6: initialize first (no lazy load inside busy); the spinner covers long keygens
+        // (an RSA-8192 pair takes seconds, §11 D32); §11 D31 times the provider call only
+        provider.initialize()?;
+        let info = busy_with(ctx.io.as_ref(), &format!("generate — {what}"), || {
+            timed(|| provider.generate_key(&request))
+        })?;
         if info.key_class == KeyClass::Secret {
             text(
                 ctx,
@@ -916,14 +931,12 @@ impl Command for LoadCommand {
             })
             .collect();
         ctx.io.print(table(
-            Some(&format!(
-                "loaded into {}{}",
-                provider.name(),
-                timing_suffix()
-            )),
+            Some(&format!("loaded into {}", provider.name())),
             &["ref", "class", "algorithm"],
             rows,
         ));
+        // §11 D31: on its own line — a table title wraps at the table's width
+        print_timing(ctx, "loaded");
         Ok(Flow::Continue)
     }
     fn complete(&self, ctx: &AppContext, tokens: &[String], cursor_token: &str) -> Vec<String> {

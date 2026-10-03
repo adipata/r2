@@ -283,6 +283,18 @@ class OperationTiming(unittest.TestCase):
             "     unwrapped into mem\n (AES-KEY-WRAP-PAD) in\n        45µs",
         )
 
+    def test_the_load_timing_line_is_dropped(self) -> None:
+        table = "  loaded into mem\n ref     class    algorithm\n mem:k   secret   aes\n"
+        self.same(table, table + "loaded in 17µs\n")
+        unwrapped = "unwrapped into mem (AES-GCM)\n ref class algorithm\n"
+        self.same(unwrapped, unwrapped + "unwrapped in 1.05s\n")
+
+    def test_mid_line_text_is_kept(self) -> None:
+        # only a time ending its line (or a hex footer) is a timing suffix
+        for text in ("generated mem:k in 5ms x (256-bit aes)", "r2> delete mem:x in 5ms y"):
+            self.assertEqual(normalize(text, "r2", "/w", "/f"), [text])
+        self.assertEqual(normalize("key k in 5ms", "r2", "/w", "/f"), ["key k"])
+
     def test_a_changed_count_or_text_is_still_a_difference(self) -> None:
         c2 = normalize("╰─── 16 bytes ─╯", "c2", "/w", "/f")
         self.assertNotEqual(c2, normalize("╰─── 17 bytes in 4ms ─╯", "r2", "/w", "/f"))

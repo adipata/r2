@@ -91,6 +91,12 @@ fn dog_banner() -> Renderable {
     Renderable::Text(DOG.to_owned())
 }
 
+/// The dog is decoration for a person at a terminal: never on an injected (test) IO, never
+/// into a pipe, so scripted sessions and the parity harness keep c2's banner (§11 D33).
+fn shows_banner(io_injected: bool, stdout_is_terminal: bool) -> bool {
+    !io_injected && stdout_is_terminal
+}
+
 /// How the provider registry is built (`build_provider_registry`; tests inject stubs).
 type BuildProviders<'a> = &'a dyn Fn(&AppConfig) -> r2_core::Result<ProviderRegistry>;
 
@@ -171,9 +177,7 @@ fn session(
 ) -> u8 {
     r2_core::crypto::ensure_legacy_provider();
     let config = &loaded.config;
-    // The dog is decoration for a person at a terminal: never on an injected (test) IO,
-    // never into a pipe, so scripted sessions and the parity harness keep c2's banner.
-    let show_dog = io.is_none() && stdout_is_terminal();
+    let show_dog = shows_banner(io.is_some(), stdout_is_terminal());
     // §11 D31: results of a real session show the provider time; an injected (test) IO
     // keeps c2's output
     r2_core::runtime::set_timing_shown(io.is_none());
@@ -256,6 +260,14 @@ mod tests {
         assert_eq!(r2_core::render::render_plain(&dog_banner(), &cfg), DOG);
         assert_eq!(r2_core::render::render(&dog_banner(), &cfg), DOG);
         assert_eq!(r2_core::render::render_no_color(&dog_banner(), &cfg), DOG);
+    }
+
+    #[test]
+    fn dog_banner_shows_only_on_a_terminal_without_an_injected_io() {
+        assert!(shows_banner(false, true));
+        assert!(!shows_banner(true, true));
+        assert!(!shows_banner(false, false));
+        assert!(!shows_banner(true, false));
     }
 
     #[test]

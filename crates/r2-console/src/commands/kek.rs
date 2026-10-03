@@ -154,10 +154,9 @@ pub fn run_load(
     check_interrupt()?; // §11 D13: step boundary after the provider verb
     ctx.io.print(table(
         Some(&format!(
-            "unwrapped into {} ({}){}",
+            "unwrapped into {} ({})",
             provider.name(),
-            entry.spec.mechanism,
-            timing_suffix()
+            entry.spec.mechanism
         )),
         &["ref", "class", "algorithm"],
         vec![vec![
@@ -166,6 +165,8 @@ pub fn run_load(
             algo_text(&info).to_owned(),
         ]],
     ));
+    // §11 D31: on its own line — a table title wraps at the table's width
+    crate::commands::keys::print_timing(ctx, "unwrapped");
     Ok(())
 }
 

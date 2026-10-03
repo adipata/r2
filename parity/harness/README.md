@@ -78,15 +78,18 @@ The user config file case (`transcript_user_config`) appends `fixtures/user_conf
   never appears (r2's own tests cover the draw). `test_normalize.py` `RandomIvPrompt`:
   the note is removed, a changed prompt is still reported, c2's output is untouched.
 - **Operation timing** (§11 D31): the `r2` binary shows the provider time of a result in
-  every real session, piped ones included (` in 4ms` at the end of a text result line or
-  table title, `16 bytes in 412µs` in a hex result's bottom border, `in 1.23s` as an
-  empty result's bottom border). `_TIMING_RE` removes it from r2's RAW output, before the
-  lines are split and compared, wherever rich wrapped it: a newline may stand between
-  `in` and the time, or before `in` (a centered table title indents the continuation
-  line). Only a well-formed time (`<n>µs`, `<n>ms`, `<n>.<nn>s`) is removed.
-  `test_normalize.py` `OperationTiming`: text results in all three units, the hex footer
-  and the empty result, wrapped suffixes and a centered title; a changed count or verdict
-  is still reported; c2's output is untouched.
+  every real session, piped ones included (` in 4ms` at the end of a text result line,
+  `16 bytes in 412µs` in a hex result's bottom border, `in 1.23s` as an empty result's
+  bottom border, and a line `loaded in 17µs` / `unwrapped in 46µs` after a `load` /
+  `load --kek` table). `_TIMING_LINE_RE` drops those lines and `_TIMING_RE` removes the
+  suffix from r2's RAW output, before the lines are split and compared, wherever rich
+  wrapped it (a newline may stand between `in` and the time, or before `in`) — but only
+  where the time ends its line or precedes a hex footer's `─╯`, so the same words in a
+  label or an echoed command are kept. Only a well-formed time (`<n>µs`, `<n>ms`,
+  `<n>.<nn>s`) is removed. `test_normalize.py` `OperationTiming`: text results in all
+  three units, the hex footer and the empty result, wrapped suffixes, the `load` timing
+  line, mid-line text kept; a changed count or verdict is still reported; c2's output is
+  untouched.
 - **RSA sizes** (§11 D32): r2's `generate` also offers RSA 8192, so in r2's raw output the
   invalid-size hint `choices: 2048, 3072, 4096, 8192` (`_RSA_CHOICES_R2`) becomes c2's
   `choices: 2048, 3072, 4096`. `test_normalize.py` `RsaSizeChoices`: any other list is

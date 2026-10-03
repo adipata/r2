@@ -4875,7 +4875,8 @@ pub fn format_elapsed(elapsed: Duration) -> String { .. }
 Timing call sites (§11 D31): only the provider call itself is wrapped in `timed`; several
 calls of one command add up (the plain or transport route of `copy`, both exports of a
 `--cert` PKCS#12 export). Crypto verbs, `derive` and `random` time the call inside
-`busy_with` (`busy_labeled`, after `Provider::initialize`); `generate` its `generate_key`;
+`busy_with` (`busy_labeled`, after `Provider::initialize`); `generate` its `generate_key`
+(also inside `busy_with`, after `Provider::initialize`, so a long keygen shows the spinner);
 the services their provider calls (§4.9.10). Never timed: prompts, the template editor,
 parsing, file reads/writes, lookups (`find_key`, `list_keys`, `status`), `initialize`, the
 §11 D30 IV draw, and the cleanup deletes of `copy`'s transport objects.
@@ -6186,8 +6187,9 @@ in-process sessions with an injected IO show c2's output): the wall-clock time o
 provider call(s) is shown after the result, formatted `412µs` / `4ms` / `1.23s` — the
 hex result's bottom border reads `16 bytes in 4ms` (empty data: `in 4ms`), and the text
 result lines of the timed commands end with ` in <t>`: `generate` (`generated mem:a
-(256-bit aes) in 1ms`, the keypair line), `load` (the table title `loaded into mem in
-17µs`; `--kek`: `unwrapped into mem (AES-KEY-WRAP-PAD) in 45µs`), `export` (`wrote <n>
+(256-bit aes) in 1ms`, the keypair line), `load` (c2's table, then a line `loaded in
+17µs`; `--kek`: `unwrapped in 45µs` — a table title wraps at the table's width, so the
+time is not put there), `export` (`wrote <n>
 bytes to <path> (pem) in 50µs`; `--kek`: `wrote <path>: 24-byte blob wrapped under mem:a
 with AES-KEY-WRAP-PAD, hex-encoded in 52µs`), `csr` (`wrote CSR for … (subject: CN=e) in
 761µs`), `copy` (`copied mem:k -> mem:k3 (secret aes) in 18µs`), the crypto verbs'
@@ -7673,9 +7675,10 @@ custom_mechanisms: []      # entry schema: spec §4.8 / example §5.14
     = random)` becomes `)`, so `IV (16 bytes, empty = random)` compares as c2's `IV (16
     bytes)` (no session leaves an IV empty, so `IV (random): <hex>` never appears;
     `test_normalize.py` `RandomIvPrompt`); the operation time — ` in <t>` (`412µs`, `4ms`,
-    `1.23s`) is removed wherever rich wrapped it, a regex over the words with newlines
-    allowed between them, including the hex result's footer and an empty result's `in
-    <t>` (`OperationTiming`); the RSA size hint `choices: 2048, 3072, 4096, 8192` becomes
+    `1.23s`) is removed where it ends a line or precedes a hex footer's `─╯`, wherever
+    rich wrapped it (a regex over the words with newlines allowed between them),
+    including an empty result's `in <t>`, and the `loaded in <t>` / `unwrapped in <t>`
+    line after a `load` table is dropped (`OperationTiming`); the RSA size hint `choices: 2048, 3072, 4096, 8192` becomes
     c2's `choices: 2048, 3072, 4096` (`RsaSizeChoices`). The dog banner needs no rule:
     the harness pipes stdout, so r2 never prints it (§11 D33). c2's output is never
     rewritten by these rules, and any other difference is still reported.
@@ -8713,17 +8716,20 @@ one OpenSSL's `X509` decoder accepts). Verified by R6 x509build tests
   and the `sign` calls), `export --kek` (`wrap_key`), `load --kek` (`unwrap_key`) and
   `copy` (the export/import/generate/wrap/unwrap of its route; not the cleanup deletes).
   Shown: the hex result's bottom border reads `16 bytes in 4ms` (`Renderable::Hex.elapsed`,
-  `io::hex_timed`, §4.9.2; empty data: `in 4ms`; the borders widen to show it whole), and
-  the result lines end with ` in <t>` — `generated mem:a (256-bit aes) in 1ms`, the
-  keypair line, the table titles `loaded into mem in 17µs` / `unwrapped into mem
-  (AES-KEY-WRAP-PAD) in 45µs`, `wrote <n> bytes to <path> (pem) in 50µs`, `wrote CSR for …
+  `io::hex_timed`, §4.9.2; empty data: `in 4ms`; the borders widen to show it whole), the
+  `load` / `load --kek` tables keep c2's title and are followed by a line `loaded in 17µs`
+  / `unwrapped in 45µs` (a table title wraps at the table's width, which would strand the
+  time), and the result lines end with ` in <t>` — `generated mem:a (256-bit aes) in
+  1ms`, the keypair line, `wrote <n> bytes to <path> (pem) in 50µs`, `wrote CSR for …
   (subject: CN=e) in 761µs`, `wrote <path>: 24-byte blob wrapped under mem:a with
   AES-KEY-WRAP-PAD, hex-encoded in 52µs`, `copied mem:k -> mem:k3 (secret aes) in 18µs`,
   the verbs' `--out` line `wrote 16 bytes to x in 4ms`, `signature VALID in 39µs` (a plain
   span after the styled verdict) and `derived key (provider-resident): <ref> in 3ms`. The
   suffix is always at the very end of its line, so rich's wrapping of the text before it
   is unchanged. `delete`, `key` (info/edit), `keys`, `login`, `ops` and the other commands
-  are not timed. Service signatures are unchanged (§4.9.10).
+  are not timed. Service signatures are unchanged (§4.9.10). `generate` now runs its
+  provider call inside `busy_with` (after `Provider::initialize`, §6), so a long keygen
+  (RSA 8192, D32) shows the TTY spinner like the crypto verbs (D10; nothing in pipes).
 - *Reason*: operators compare HSM and software performance and spot slow tokens (an RSA
   8192 keygen takes seconds, D32) without external tooling.
 - *Verified by*: r2-core `runtime::{format_elapsed_uses_adaptive_truncated_units,
@@ -8732,16 +8738,17 @@ one OpenSSL's `X509` decoder accepts). Verified by R6 x509build tests
   `tests::timing::{encrypt_hex_result_shows_the_provider_time,
   encrypt_out_line_ends_with_the_time, sign_and_verify_show_the_time,
   random_hex_result_shows_the_time, generate_lines_end_with_the_time,
-  load_table_title_shows_the_time, export_lines_end_with_the_time,
+  load_shows_the_time_after_the_table, export_lines_end_with_the_time,
   csr_line_ends_with_the_time, export_kek_line_ends_with_the_time,
-  load_kek_table_title_shows_the_time, copy_line_ends_with_the_time,
+  load_kek_shows_the_time_after_the_table, copy_line_ends_with_the_time,
   timing_off_by_default_leaves_the_output_unchanged, timing_can_be_switched_off_again,
   run_line_resets_the_time_before_each_command, a_failed_commands_time_does_not_leak}`;
   r2-cli `e2e_timing_iv::memory_session_shows_operation_timing`,
   `e2e_random::{memory_random_console_files_prompt_and_errors,
   softhsm::softhsm_random_requires_login_then_draws_from_token}` (timed footers and
   `--out` line); the parity harness strips the suffix from r2's raw output wherever rich
-  wrapped it (`normalize.py`, `test_normalize.py` `OperationTiming`).
+  wrapped it, only at a line end or a hex footer, and drops the `load` timing line
+  (`normalize.py`, `test_normalize.py` `OperationTiming`).
 
 **D32 — RSA 8192 (r2 addition; user decision 2026-10-03).**
 - *Description*: c2's `generate … rsa` offered `size` ∈ {2048, 3072, 4096}; r2 adds 8192
@@ -8774,7 +8781,9 @@ one OpenSSL's `X509` decoder accepts). Verified by R6 x509build tests
 - *Reason*: a friendlier start for a person at a terminal, without touching any output a
   script or the harness reads.
 - *Verified by*: r2-cli (bin) `tests::{dog_banner_render_is_the_art_verbatim_without_colors,
-  dog_banner_is_not_shown_on_an_injected_io}`; the piped `e2e_timing_iv` sessions assert
+  dog_banner_is_not_shown_on_an_injected_io,
+  dog_banner_shows_only_on_a_terminal_without_an_injected_io}` (the `shows_banner`
+  truth table); the piped `e2e_timing_iv` sessions assert
   that no banner is printed (`no_banner`).
 
 **Resolved without deviation** (recorded so they are not mistaken for gaps):

@@ -196,8 +196,9 @@ fn memory_session_shows_operation_timing() {
         &out,
         "generated p256 ec keypair mem:e (public key shares the label/id) in ",
     );
-    // load: the table title (centered, so trimmed)
-    timed_line(&out, "loaded into mem in ");
+    // load: c2's table title, then the time on a line of its own
+    assert!(out.lines().any(|l| l.trim() == "loaded into mem"), "{out}");
+    timed_line(&out, "loaded in ");
     // encrypt: the timed hex footer
     assert_eq!(
         panel_hex(&out, "╭─ ciphertext — AES-ECB", 16),
