@@ -70,6 +70,9 @@ struct State {
     id_counter: u32,
     gen_counter: u64,
     handle_counter: u64,
+    /// Draw number of `generate_random` (separate from `gen_counter`, so drawing random
+    /// bytes never shifts generated key values).
+    random_counter: u64,
     /// `.with_tokens(..)`: the slot list and the TokenInit seam.
     tokens: Option<Vec<TokenInfo>>,
     serial_counter: u64,
@@ -96,6 +99,7 @@ impl FakeProvider {
                 id_counter: 0,
                 gen_counter: 0,
                 handle_counter: 0,
+                random_counter: 0,
                 tokens: None,
                 serial_counter: 0,
             }),
@@ -1125,6 +1129,20 @@ impl FakeProvider {
         ))
     }
 
+    /// §5.17: recorded first, AuthRequired while a login-capable fake is logged out; the
+    /// bytes are a deterministic keystream of (name, draw number) — two fakes with the same
+    /// name yield the same sequence, successive draws differ.
+    fn base_generate_random(&self, len: usize) -> Result<Zeroizing<Vec<u8>>> {
+        self.record("generate_random", vec![len.to_string()]);
+        self.require_login()?;
+        let draw = {
+            let mut state = self.state.borrow_mut();
+            state.random_counter += 1;
+            state.random_counter
+        };
+        Ok(self.blob(&format!("random|{draw}"), len))
+    }
+
     fn base_unwrap_key(
         &self,
         wrapping_key: &KeyInfo,
@@ -1467,6 +1485,9 @@ impl Provider for FakeProvider {
     fn derive(&self, key: &KeyInfo, mech: &MechanismInvocation) -> Result<DeriveResult> {
         dispatch!(self, derive(key, mech), self.base_derive(key, mech))
     }
+    fn generate_random(&self, len: usize) -> Result<Zeroizing<Vec<u8>>> {
+        dispatch!(self, generate_random(len), self.base_generate_random(len))
+    }
     fn wrap_key(
         &self,
         wrapping_key: &KeyInfo,
@@ -1633,6 +1654,9 @@ impl Provider for Unhooked<'_> {
     }
     fn derive(&self, key: &KeyInfo, mech: &MechanismInvocation) -> Result<DeriveResult> {
         self.0.base_derive(key, mech)
+    }
+    fn generate_random(&self, len: usize) -> Result<Zeroizing<Vec<u8>>> {
+        self.0.base_generate_random(len)
     }
     fn wrap_key(
         &self,
@@ -1802,6 +1826,13 @@ pub trait FakeHooks {
         key: &KeyInfo,
         mech: &MechanismInvocation,
     ) -> Option<Result<DeriveResult>> {
+        None
+    }
+    fn generate_random(
+        &self,
+        next: &dyn Provider,
+        len: usize,
+    ) -> Option<Result<Zeroizing<Vec<u8>>>> {
         None
     }
     fn wrap_key(

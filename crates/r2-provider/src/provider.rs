@@ -120,6 +120,19 @@ pub trait Provider {
     /// Peer public key travels as `mech.params["peer"]` (SPKI DER or raw point).
     fn derive(&self, key: &KeyInfo, mech: &MechanismInvocation) -> Result<DeriveResult>;
 
+    // -- random generation (§5.17, §11 D29) --
+    /// `len` bytes from the provider's own RNG, in a zeroizing buffer (D3): memory = OpenSSL
+    /// (`r2_core::crypto::random_bytes`), PKCS#11 = C_GenerateRandom on the logged-in session
+    /// (AuthRequired while logged out). No seeding: C_SeedRandom is never called. The
+    /// console bounds `len` (§5.17); providers return exactly `len` bytes.
+    fn generate_random(&self, len: usize) -> Result<Zeroizing<Vec<u8>>> {
+        let _ = len;
+        Err(ConsoleError::unsupported(format!(
+            "{} does not support random generation",
+            self.name()
+        )))
+    }
+
     // -- wrap/unwrap (frozen-provisional, §4.11) --
     fn wrap_key(
         &self,

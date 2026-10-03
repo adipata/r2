@@ -109,7 +109,8 @@ impl MemoryProvider {
     /// incl. RSA-AES-KEY-WRAP (OAEP(eph-AES-256)‖KWP blob, c2 format) and the wrap-capable
     /// AES-CBC/AES-GCM/RSA-PKCS1 rows of §5.4. Certificates are classified with
     /// `x509info::cert_facts(.., Classifier::KeyParse)` and carry
-    /// `x509info::memory_cert_attributes` (§4.4.5).
+    /// `x509info::memory_cert_attributes` (§4.4.5). `generate_random` =
+    /// `r2_core::crypto::random_bytes` (OpenSSL `RAND_bytes`; §5.17).
     pub fn new(name: &str) -> Self {
         Self {
             name: name.to_owned(),
@@ -1202,6 +1203,13 @@ impl Provider for MemoryProvider {
             key: None,
             raw: Some(raw),
         })
+    }
+
+    // -- random generation (§5.17) -------------------------------------------------------
+
+    /// OpenSSL's RNG (`random_bytes`); no login, no seeding.
+    fn generate_random(&self, len: usize) -> Result<Zeroizing<Vec<u8>>> {
+        random_bytes(len)
     }
 
     // -- wrap/unwrap (§5.5) ------------------------------------------------------------

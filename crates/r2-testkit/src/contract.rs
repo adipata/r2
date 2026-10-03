@@ -12,8 +12,9 @@ use r2_provider::Provider;
 pub type MakeProvider<'a> = &'a dyn Fn() -> Rc<dyn Provider>;
 
 /// One `pub fn <case>(make: MakeProvider<'_>)` per c2 ProviderContractTests method, same
-/// names (34 cases). A mechanism-dependent case whose mechanism is not advertised returns
-/// early after `skip(reason)` (never a failure).
+/// names (34 cases), then the r2-only cases (§11 D29: `test_generate_random_*`). A
+/// mechanism-dependent case whose mechanism is not advertised returns early after
+/// `skip(reason)` (never a failure).
 pub mod cases {
     use r2_core::error::{ConsoleError, ErrorKind, Result};
     use r2_core::keys::{KeyAlgorithm, KeyClass, KeyInfo, KeyMaterial};
@@ -1128,6 +1129,20 @@ pub mod cases {
             AttrValue::Str(data.key_ref.label.clone())
         );
     }
+
+    // ---- r2-only cases (no c2 counterpart) ----
+
+    /// §5.17 / §11 D29: exactly `len` bytes from the provider's RNG (PKCS#11:
+    /// C_GenerateRandom on the logged-in session); two 32-byte draws differ.
+    pub fn test_generate_random_returns_requested_length(make: MakeProvider<'_>) {
+        let provider = make();
+        for len in [1usize, 16, 32, 1024] {
+            assert_eq!(provider.generate_random(len).unwrap().len(), len);
+        }
+        let first = provider.generate_random(32).unwrap();
+        let second = provider.generate_random(32).unwrap();
+        assert_ne!(*first, *second);
+    }
 }
 
 /// Prints "SKIP: {reason}" to stderr (an allowed print site, §4.1.3).
@@ -1191,6 +1206,7 @@ macro_rules! provider_contract_tests {
                 test_data_object_identity_and_verbs,
                 test_certificate_import_list_export_delete,
                 test_read_full_template_has_no_key_type_for_cert_and_data,
+                test_generate_random_returns_requested_length,
             );
         }
     };

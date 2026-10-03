@@ -11,28 +11,30 @@
 //
 // Results default to the hex result on the console (one unbroken hex line between the
 // titled panel borders, §11 D28); `--out` writes raw bytes unless `--outformat hex|b64`
-// is given. Payload bytes travel through `r2_core::datainput` (§4.4). Commands return
+// is given. `random` (§5.17, §11 D29; r2 only) draws bytes from a provider's RNG and
+// emits them the same way. Payload bytes travel through `r2_core::datainput` (§4.4). Commands return
 // errors, never print them (§4.2).
 //
 // The `ops` table: the OperationRegistry deliberately has no global enumeration surface
 // (§4.6), so the per-provider table is assembled by probing `available_for()` with one
 // representative synthetic key per (algorithm, key class, curve) family — which also makes
 // the table honor `provider.mechanisms()` (empty while a PKCS#11 provider is logged out).
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+use indexmap::IndexMap;
 use r2_core::datainput::{DataInput, DataOutput, InFormat, OutFormat};
 use r2_core::error::{ConsoleError, ErrorKind};
 use r2_core::io::{Renderable, Span, Tone, busy_with, hex, table};
 use r2_core::keys::{Curve, KeyAlgorithm, KeyClass, KeyInfo, KeyRef, parse_ref};
-use r2_core::params::{Params, Verb};
+use r2_core::params::{ParamKind, ParamSpec, ParamStruct, ParamValue, Params, Verb};
 use r2_core::runtime::check_interrupt;
-use r2_core::text::py_path;
+use r2_core::text::{py_path, py_repr};
 use r2_ops::{OperationSpec, ParamResolver};
 use r2_provider::{AuthState, KeySelector, MechanismInvocation, Provider};
 use zeroize::Zeroizing;
 
-use crate::cmdutil::{completed_args, previous_token};
+use crate::cmdutil::{completed_args, positional, previous_token, reject_named, require_usable};
 use crate::commands::Command;
 use crate::completer::{browsable, complete_paths, complete_provider_names, complete_refs};
 use crate::context::AppContext;
@@ -281,11 +283,21 @@ fn busy<T>(
     mech: &MechanismInvocation,
     f: impl FnOnce() -> r2_core::Result<T>,
 ) -> r2_core::Result<T> {
+    let message = format!("{} — {}", verb.as_str(), mech.mechanism);
+    busy_labeled(ctx, provider, &message, f)
+}
+
+/// `busy` with the spinner text given as is (also `random`, which has no verb or mechanism).
+fn busy_labeled<T>(
+    ctx: &AppContext,
+    provider: &dyn Provider,
+    message: &str,
+    f: impl FnOnce() -> r2_core::Result<T>,
+) -> r2_core::Result<T> {
     check_interrupt()?;
     provider.initialize()?;
     check_interrupt()?;
-    let message = format!("{} — {}", verb.as_str(), mech.mechanism);
-    let value = busy_with(ctx.io.as_ref(), &message, f)?;
+    let value = busy_with(ctx.io.as_ref(), message, f)?;
     check_interrupt()?;
     Ok(value)
 }
@@ -813,6 +825,114 @@ impl Command for OpsCommand {
     }
 }
 
+// ---------------------------------------------------------------------------
+// random (§5.17, §11 D29 — r2 only)
+// ---------------------------------------------------------------------------
+
+const RANDOM_USAGE: &str = "random <provider> [<length>] [--out <path>] [--outformat raw|hex|b64]";
+/// The largest `random` request in bytes (§5.17).
+const RANDOM_MAX_BYTES: i64 = 1_048_576;
+
+/// §5.17: a whole number of bytes, 1..=RANDOM_MAX_BYTES.
+fn validate_random_length(value: &ParamValue) -> r2_core::Result<()> {
+    if matches!(value, ParamValue::Int(v) if (1..=RANDOM_MAX_BYTES).contains(v)) {
+        return Ok(());
+    }
+    let shown = match value {
+        ParamValue::Int(v) => v.to_string(),
+        ParamValue::Str(s) | ParamValue::Enum(s) => py_repr(s),
+        other => format!("{other:?}"),
+    };
+    Err(ConsoleError::param(
+        format!("invalid random length {shown}; expected 1 to {RANDOM_MAX_BYTES} bytes"),
+        "length",
+    ))
+}
+
+/// The `<length>` parameter, resolved via ParamResolver (inline value or prompt, one code
+/// path — §5.1). The resolver reads only id + params; the other fields are inert.
+fn random_spec() -> OperationSpec {
+    OperationSpec {
+        id: "random".to_owned(),
+        verb: Verb::Encrypt, // unused — the resolver reads only id + params
+        algorithm: KeyAlgorithm::None,
+        key_classes: BTreeSet::new(),
+        mechanism: String::new(),
+        cli_name: "random".to_owned(),
+        label: "Random generation parameters".to_owned(),
+        params: vec![
+            ParamSpec::new("length", ParamKind::Int, "Number of random bytes")
+                .validate(validate_random_length),
+        ],
+        provider_types: None,
+        providers: None,
+        curves: None,
+        raw_ckm: None,
+        param_struct: ParamStruct::None,
+    }
+}
+
+/// `random <provider> [<length>]`: `<length>` bytes from the provider's RNG (memory:
+/// OpenSSL; PKCS#11: C_GenerateRandom on the logged-in session — never C_SeedRandom),
+/// shown as the hex result titled "random — <provider>" or written with --out/--outformat.
+struct RandomCommand;
+
+impl Command for RandomCommand {
+    fn name(&self) -> &'static str {
+        "random"
+    }
+    fn summary(&self) -> &'static str {
+        "Generate random bytes with a provider's RNG"
+    }
+    fn usage(&self) -> &'static str {
+        RANDOM_USAGE
+    }
+    fn run(&self, ctx: &AppContext, args: &BoundArgs) -> r2_core::Result<Flow> {
+        check_options(args, &["out", "outformat"], RANDOM_USAGE)?;
+        reject_named(args, RANDOM_USAGE, "values")?;
+        if args.positionals.len() > 2 {
+            return Err(ConsoleError::generic("too many arguments")
+                .with_hint(format!("usage: {RANDOM_USAGE}")));
+        }
+        let output = make_output(args)?;
+        let provider = ctx
+            .providers
+            .get(positional(args, 0, "provider", RANDOM_USAGE)?)?;
+        require_usable(provider.as_ref())?; // auth first, before the length prompt
+        let mut given = IndexMap::new();
+        if let Some(length) = args.positionals.get(1) {
+            given.insert("length".to_owned(), length.clone());
+        }
+        let resolved =
+            ParamResolver::new(ctx.io.as_ref(), &ctx.providers).resolve(&random_spec(), &given)?;
+        let length = match resolved.get("length") {
+            Some(ParamValue::Int(n)) => usize::try_from(*n).ok(),
+            _ => None,
+        }
+        .ok_or_else(|| ConsoleError::param("missing random length", "length"))?;
+        let title = format!("random — {}", provider.name());
+        let bytes = busy_labeled(ctx, provider.as_ref(), &title, || {
+            provider.generate_random(length)
+        })?;
+        emit(ctx, &bytes, output.as_ref(), &title)?;
+        Ok(Flow::Continue)
+    }
+    fn complete(&self, ctx: &AppContext, tokens: &[String], cursor_token: &str) -> Vec<String> {
+        if let Some(option) =
+            previous_token(tokens, cursor_token).and_then(|t| t.strip_prefix("--"))
+        {
+            if option == "out" {
+                return complete_paths(cursor_token); // §5.1 PathCompleter rule
+            }
+            return Vec::new(); // the --outformat value — no candidates, as for the verbs
+        }
+        if completed_args(tokens, cursor_token) == 0 {
+            return complete_provider_names(ctx, cursor_token);
+        }
+        vec!["--out".to_owned(), "--outformat".to_owned()]
+    }
+}
+
 /// §4.9.6: every command module exports exactly this.
 pub fn commands() -> Vec<Box<dyn Command>> {
     vec![
@@ -828,5 +948,6 @@ pub fn commands() -> Vec<Box<dyn Command>> {
         Box::new(VerifyCommand),
         Box::new(DeriveCommand),
         Box::new(OpsCommand),
+        Box::new(RandomCommand),
     ]
 }

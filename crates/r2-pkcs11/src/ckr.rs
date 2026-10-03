@@ -56,6 +56,7 @@ pub(crate) mod rv {
         CKR_KEY_TYPE_INCONSISTENT,
         CKR_VENDOR_DEFINED,
         CKR_WRAPPED_KEY_LEN_RANGE,
+        CKR_RANDOM_NO_RNG,
     );
 }
 

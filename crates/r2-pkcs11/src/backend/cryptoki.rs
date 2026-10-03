@@ -819,4 +819,13 @@ impl super::Backend for CryptokiBackend {
             Ok(widen(result?.handle()))
         })
     }
+    fn generate_random(&self, len: usize) -> BResult<Zeroizing<Vec<u8>>> {
+        let mut out = Zeroizing::new(vec![0u8; len]);
+        self.with_session("C_GenerateRandom", |session| {
+            session
+                .generate_random_slice(&mut out)
+                .map_err(|e| convert(e, "C_GenerateRandom"))
+        })?;
+        Ok(out)
+    }
 }

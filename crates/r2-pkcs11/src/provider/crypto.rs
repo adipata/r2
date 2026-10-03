@@ -801,6 +801,26 @@ impl Pkcs11Provider {
         })
     }
 
+    // ------------------------------------------------------------------
+    // random generation (§5.17)
+    // ------------------------------------------------------------------
+
+    /// C_GenerateRandom on the logged-in session (`op`: AuthRequired while logged out,
+    /// §5.2 recovery, the CKR choke point with context "random generation"). Only the
+    /// length is logged. Never C_SeedRandom.
+    pub(crate) fn generate_random_impl(&self, len: usize) -> Result<Zeroizing<Vec<u8>>> {
+        self.op("random generation", || {
+            let bytes = self.backend().generate_random(len)?;
+            tracing::info!(
+                target: "r2::pkcs11",
+                "{}: generated {} random bytes",
+                self.provider_name(),
+                bytes.len()
+            );
+            Ok(bytes)
+        })
+    }
+
     /// c2 `_peer_to_raw_point`: SPKI DER or a raw point → the RAW (non-DER) point PKCS#11
     /// wants (§5.10).
     fn peer_to_raw_point(&self, key: &KeyInfo, peer: &[u8]) -> OResult<Vec<u8>> {

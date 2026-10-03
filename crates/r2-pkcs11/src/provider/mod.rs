@@ -652,6 +652,9 @@ impl r2_provider::Provider for Pkcs11Provider {
     ) -> r2_core::Result<r2_provider::DeriveResult> {
         self.derive_impl(key, mech)
     }
+    fn generate_random(&self, len: usize) -> r2_core::Result<zeroize::Zeroizing<Vec<u8>>> {
+        self.generate_random_impl(len)
+    }
     fn wrap_key(
         &self,
         wrapping_key: &r2_core::keys::KeyInfo,

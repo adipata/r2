@@ -108,6 +108,9 @@ struct State {
     objects: BTreeMap<u64, Object>,
     next_handle: u64,
     gen_counter: u64,
+    /// Draw number of `generate_random` (separate from `gen_counter`, so drawing random
+    /// bytes never shifts generated key values).
+    random_counter: u64,
     initialized: bool,
     load_error: Option<String>,
     init_count: usize,
@@ -1119,5 +1122,20 @@ impl Backend for FakeBackend {
         let value = keystream(&base, b"derive", length);
         attrs.insert(w(sys::CKA_VALUE), value.clone());
         Ok(self.store(slot, attrs, value))
+    }
+    /// A live session is enough (PKCS#11 needs no login for C_GenerateRandom); the bytes
+    /// are a deterministic keystream of the draw number.
+    fn generate_random(&self, len: usize) -> BResult<Zeroizing<Vec<u8>>> {
+        self.check("generate_random", false)?;
+        let draw = {
+            let mut state = self.state.borrow_mut();
+            state.random_counter += 1;
+            state.random_counter
+        };
+        Ok(Zeroizing::new(keystream(
+            format!("random|{draw}").as_bytes(),
+            b"random",
+            len,
+        )))
     }
 }

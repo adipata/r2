@@ -169,6 +169,9 @@ pub(crate) trait Backend {
         template: &[RawAttr],
     ) -> BResult<u64>;
     fn derive_key(&self, mech: &MechSpec, base_key: u64, template: &[RawAttr]) -> BResult<u64>;
+    /// C_GenerateRandom of `len` bytes on this backend's session, into a zeroizing buffer
+    /// (§5.17). Never C_SeedRandom.
+    fn generate_random(&self, len: usize) -> BResult<Zeroizing<Vec<u8>>>;
 }
 
 pub(crate) mod cryptoki;
