@@ -71,6 +71,26 @@ The user config file case (`transcript_user_config`) appends `fixtures/user_conf
   not differential-tested (its bytes are random by design; r2's own tests cover it).
   `test_normalize.py` `RandomHelpRow`: r2's help with the row equals c2's without it, a
   changed summary is still reported, and c2's output is untouched.
+- **Random-IV prompt note** (§11 D30): r2's encrypt/sign and `export --kek` IV, nonce and
+  counter-block prompts note the random fallback (`IV (16 bytes, empty = random)`); in
+  r2's raw output only, `, empty = random)` (`_RANDOM_NOTE`) becomes `)`, so the prompt
+  texts compare as c2's. No session leaves an IV empty, so r2's `IV (random): <hex>` line
+  never appears (r2's own tests cover the draw). `test_normalize.py` `RandomIvPrompt`:
+  the note is removed, a changed prompt is still reported, c2's output is untouched.
+- **Operation timing** (§11 D31): the `r2` binary shows the provider time of a result in
+  every real session, piped ones included (` in 4ms` at the end of a text result line or
+  table title, `16 bytes in 412µs` in a hex result's bottom border, `in 1.23s` as an
+  empty result's bottom border). `_TIMING_RE` removes it from r2's RAW output, before the
+  lines are split and compared, wherever rich wrapped it: a newline may stand between
+  `in` and the time, or before `in` (a centered table title indents the continuation
+  line). Only a well-formed time (`<n>µs`, `<n>ms`, `<n>.<nn>s`) is removed.
+  `test_normalize.py` `OperationTiming`: text results in all three units, the hex footer
+  and the empty result, wrapped suffixes and a centered title; a changed count or verdict
+  is still reported; c2's output is untouched.
+- **RSA sizes** (§11 D32): r2's `generate` also offers RSA 8192, so in r2's raw output the
+  invalid-size hint `choices: 2048, 3072, 4096, 8192` (`_RSA_CHOICES_R2`) becomes c2's
+  `choices: 2048, 3072, 4096`. `test_normalize.py` `RsaSizeChoices`: any other list is
+  still reported and c2's output is untouched.
 - **ULONG ≥ 2^63** (§11 D18): `18446744073709551615` is compared as c2's `-1`.
 - **Token enumeration** (token suite only; `normalize(..., token_provider="hsm")`):
   `handle <n>` loses its number and consecutive table rows starting with `hsm:` are
@@ -80,7 +100,8 @@ The user config file case (`transcript_user_config`) appends `fixtures/user_conf
   row pair is reported).
 - The work and fixture directories become `{WORK}`, `{SRC}`, `{FIX}`.
 
-Nothing else is normalized.
+Nothing else is normalized. (The §11 D33 startup dog needs no rule: r2 prints it only when
+stdout is a terminal, so every piped session opens with c2's banner line.)
 
 `pty_paste_check.py` (same requirements, POSIX only) is the automated part of the R13
 terminal checklist (`parity/terminal-checklist.md`): r2 on a pseudo-terminal as a real

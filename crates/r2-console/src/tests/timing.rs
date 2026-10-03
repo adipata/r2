@@ -2,9 +2,9 @@
 //
 // With the timing display on (`r2_core::runtime::set_timing_shown(true)`, which the r2
 // binary does for real sessions) the result of a timed operation carries the provider time:
-// the hex result's footer "<n> bytes in <t>", " in <t>" after the text result lines and
-// table titles (before ", <fmt>-encoded" on `export --kek`), and an extra plain span after
-// verify's verdict. With it off (the in-process default) every output is c2's, unchanged.
+// the hex result's footer "<n> bytes in <t>", " in <t>" at the very end of the text result
+// lines and table titles (after ", <fmt>-encoded" on `export --kek`), and an extra plain
+// span after verify's verdict. With it off (the in-process default) every output is c2's, unchanged.
 // FakeProvider + ScriptedIo throughout (§4.10). The flag is thread-local: each test turns it
 // on through a guard that turns it off again, even when the test fails.
 use std::cell::Cell;

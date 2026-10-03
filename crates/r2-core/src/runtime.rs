@@ -98,7 +98,7 @@ pub fn timed<T>(f: impl FnOnce() -> T) -> T {
     });
     value
 }
-/// Called by run_repl immediately before every dispatch (no time leaks into the next
+/// Called by `repl::dispatch` right before every command runs (no time leaks into the next
 /// command).
 pub fn reset_operation_time() {
     let _ = OPERATION_TIME.try_with(|slot| slot.set(None));

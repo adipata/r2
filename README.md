@@ -26,6 +26,9 @@ r2 0.2.0 — type 'help' for commands
 r2>
 ```
 
+(On a terminal a small plain-text ASCII-art dog is printed above the startup line; never
+into a pipe.)
+
 Flags: `--version`, `--config PATH` (explicit config file), `--debug` (debug logging,
 warnings mirrored to stderr, full backtraces for unexpected errors).
 
@@ -42,7 +45,7 @@ The memory provider (`mem`) works immediately, no configuration:
 
 ```text
 r2> generate mem aes size=256 --label demo
-r2> encrypt mem:demo gcm iv=0x000102030405060708090a0b deadbeef
+r2> encrypt mem:demo gcm iv=0x000102030405060708090a0b deadbeef   # footer: "<n> bytes in <t>"
 r2> generate mem generic size=256 --label mac     # CKK_GENERIC_SECRET (HMAC key)
 r2> sign mem:mac hmac hash=sha256 deadbeef
 r2> random mem 32                                 # 32 bytes from the provider's RNG
@@ -55,7 +58,10 @@ r2> exit
 ```
 
 Missing mechanism parameters are prompted for (`encrypt mem:demo gcm deadbeef` asks for
-the IV); omitted data opens a paste prompt that ends with an empty line.
+the IV; an empty answer there draws a random IV from the provider and prints it);
+omitted data opens a paste prompt that ends with an empty line. Results show how long the
+provider operation took (`in 4ms` after a result line, `<n> bytes in <t>` under a hex
+result).
 
 Objects are keys (AES, generic secret, RSA, EC incl. Ed25519/Ed448/X25519/X448),
 certificates and data objects; `keys` lists every object a provider holds — on PKCS#11

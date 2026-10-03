@@ -60,7 +60,8 @@ history):
 
 1. List providers and their login state; login/logout to PKCS#11 tokens.
 2. Generate AES/RSA/EC keys and generic secrets (HMAC keys) in any provider (PKCS#11:
-   attribute template editor shown first).
+   attribute template editor shown first); RSA up to 8192 bits (8192 is an r2 addition,
+   §11 D32).
 3. Load keys from pasted hex/base64/PEM data or from files (PKCS#8, traditional OpenSSL,
    SPKI, PKCS#12, CSR, X.509). Certificates are first-class objects usable as public keys.
 4. Copy keys between providers — via wrap/unwrap with ephemeral transport keys when the
@@ -68,13 +69,17 @@ history):
 5. Export keys to files (AES raw, RSA/EC PKCS#8/SPKI, PKCS#12 with on-the-fly self-signed
    certificate); generate CSRs, including for non-extractable HSM keys.
 6. Encrypt/decrypt, sign/verify, derive — AES (ECB/CBC/GCM/CTR, CMAC/GMAC), HMAC over
-   generic secrets, RSA (OAEP/PKCS#1 v1.5/RAW/PSS), EC (ECDSA/EdDSA/ECDH/X25519/X448).
+   generic secrets, RSA (OAEP/PKCS#1 v1.5/RAW/PSS), EC (ECDSA/EdDSA/ECDH/X25519/X448). An
+   IV left empty at an encrypt/sign prompt is drawn from the key's provider RNG (an r2
+   addition, §11 D30).
 7. Extensible operation list: config-defined vendor PKCS#11 mechanisms appear as regular
    operations with prompted parameters, no code changes.
 8. Data objects (CKO_DATA): load/export/copy/delete opaque values; `keys` lists every
    object class, including key types r2 cannot operate on (shown as `other`) (c2 L16).
 9. Random bytes from a provider's own RNG (`random`; OpenSSL for memory, C_GenerateRandom
    on a logged-in token) — an r2 addition, §5.17, §11 D29.
+10. Results show how long the provider operation took (`16 bytes in 4ms`) — an r2
+    addition, §11 D31.
 
 Rewrite goals (PLAN §1), in priority order:
 
@@ -241,7 +246,7 @@ Compile-time and lint enforcement of c2's CLAUDE.md conventions (workspace lints
 | mypy strict | the compiler; `#![forbid(unsafe_code)]` in every crate except `r2-pkcs11` and the dev-only `r2-testkit` (`#![deny(unsafe_code)]` + audited `#[allow]`s) |
 | PyKCS11 only in `providers/pkcs11/` | crate graph above; `disallowed-methods` for the lossy cryptoki APIs: `Pkcs11::get_mechanism_list` (drops unknown CKMs), `Pkcs11::get_token_info` (parses `utcTime`; fails on a token with CKF_CLOCK_ON_TOKEN and a non-digit clock), `Session::get_attributes` (fails whole calls / omits refusals), `Session::wrap_key` (no truncation) — use the `RawFns` equivalents |
 | pyca hazards (S0 OpenSSL spike) | `disallowed-methods`: `PKey`/`Rsa`/`EcKey::private_key_from_pem` (prompt on the TTY), every `*_from_pem_passphrase` and `PKey::private_key_from_pkcs8_passphrase` (panic on NUL), `openssl::aes::wrap_key`/`unwrap_key` (deprecated, RFC 3394 only), `openssl::memcmp::eq` (panics on a length mismatch; allowed only inside `r2_core::crypto::ct_eq`) |
-| terminal hazards (S0 terminal spike) | `disallowed-methods`: `std::io::IsTerminal::is_terminal` — it must not decide the TerminalIo/PlainIo switch (it accepts msys/mintty pipes on Windows); `crossterm::tty::IsTty` does. One allowed site: the mintty/msys warning in `r2_console::io::open_console_io` |
+| terminal hazards (S0 terminal spike) | `disallowed-methods`: `std::io::IsTerminal::is_terminal` — it must not decide the TerminalIo/PlainIo switch (it accepts msys/mintty pipes on Windows); `crossterm::tty::IsTty` does. Allowed sites: the mintty/msys warning in `r2_console::io::open_console_io`, and the r2-cli startup banner's `stdout_is_terminal` (decoration only, §11 D33) |
 | skeleton stubs are temporary | `clippy::todo` / `unimplemented` = allow until R13, deny from R13 (allow, not warn: `-D warnings` would fail on the skeleton's stubs) |
 | command auto-discovery (no central table) | `r2-console/build.rs` globs `commands/*.rs` and generates the module list and the aggregator; adding a command = adding a module |
 
@@ -412,7 +417,7 @@ crates/r2-core/               (lib)
   src/io.rs                   ConsoleIo, TemplateEditor, IdentityTemplateEditor,
                               CommandInput, Renderable model (§4.9.1/§4.9.2)       R1
   src/render.rs               render / render_plain / RenderConfig (§4.9.2)        R1
-  src/runtime.rs              Ctrl-C flag + spinner flag (§4.9.8)                  R1
+  src/runtime.rs              Ctrl-C/spinner flags, operation timing (§4.9.8)      R1
   src/codec.rs                InputFormat, decode_data, format_hex (§4.4.1)        R1
   src/datainput.rs            DataInput, DataOutput (§4.4.2)                       R1
   src/catalog.rs              CKA_CATALOG static table (§4.5.5); R0 materializes the
@@ -572,8 +577,8 @@ another loop's test file, loops.md rule 6):
   `crypto_cmd.rs` R9, `load_kek.rs` R15). r2-pkcs11's `src/tests/mod.rs` is created by
   R5a; R5b appends its own `mod` lines (sequential handoff).
 - End-to-end tests that spawn the `r2` binary (assert_cmd): `crates/r2-cli/tests/`
-  (`e2e_repl.rs` R7, `e2e_console_keys.rs` R8, `e2e_random.rs` R9, `e2e_wizard.rs` R11,
-  …).
+  (`e2e_repl.rs` R7, `e2e_console_keys.rs` R8, `e2e_random.rs` R9, `e2e_timing_iv.rs`
+  (§11 D30/D31), `e2e_wizard.rs` R11, …).
 
 **R0 skeleton handoff (the only sanctioned shared-file handoffs).**
 
@@ -796,8 +801,11 @@ port of rich's `Table` layout (§4.9.2; `comfy-table` was dropped by R13 fix rou
   `cryptoki::session::Session::get_attributes` (fails whole calls /
   omits refusals) and `cryptoki::session::Session::wrap_key` (no truncation) — use the
   `RawFns` equivalents (§4.5.5) — and `std::io::IsTerminal::is_terminal` (the
-  TerminalIo/PlainIo switch uses `crossterm::tty::IsTty`, §4.9.7; one allowed site: the
-  mintty/msys hidden-input warning in `r2_console::io::open_console_io`).
+  TerminalIo/PlainIo switch uses `crossterm::tty::IsTty`, §4.9.7; two allowed sites: the
+  mintty/msys hidden-input warning in `r2_console::io::open_console_io`, and
+  `stdout_is_terminal` in `r2-cli`'s `main.rs`, which only decides whether the decorative
+  startup banner is shown, §11 D33 — an msys pipe mistaken for a terminal there is
+  harmless). The `clippy.toml` reason names both sites.
 - Crate-root re-exports (R0 writes them; paths used throughout §4): `r2_core` →
   `ConsoleError`, `ErrorKind`, `Result`, `crypto::{ct_eq, ensure_legacy_provider}`; `r2_provider` → `Provider`, `TokenInit`
   (`provider`), `ProviderRegistry` (`registry`), `types::*`, plus `pub mod lookup`,
@@ -2565,11 +2573,11 @@ impl r2_provider::TokenInit for Pkcs11Provider { .. }
 `impl Provider for Pkcs11Provider` is a single block in `provider/mod.rs` (R5a). Its
 crypto/wrap/edit methods delegate to `pub(crate)` inherent methods that the skeleton
 places in R5b's files: `encrypt_impl`, `decrypt_impl`, `sign_impl`, `verify_impl`,
-`derive_impl`, `generate_random_impl` (§5.17, §11 D29) (`provider/crypto.rs`),
-`wrap_key_impl`, `unwrap_key_impl`
+`derive_impl` (`provider/crypto.rs`), `wrap_key_impl`, `unwrap_key_impl`
 (`provider/wrap.rs`), `read_key_template_impl`, `update_key_impl`,
-`read_full_template_impl` (`provider/edit.rs`). Each `*_impl` has the corresponding trait
-method's signature minus the trait. `mechanisms()` (and the default `supports()`) are
+`read_full_template_impl` (`provider/edit.rs`), plus `generate_random_impl` (added by §11
+D29, `provider/crypto.rs`). Each `*_impl` has the corresponding trait method's signature
+minus the trait. `mechanisms()` (and the default `supports()`) are
 R5a's: they call `crate::capability::fold_mechanisms(codes, &custom)` (§4.6.5), an R5a
 function, so post-login capability discovery works before R5b merges. The certificate read
 path uses `x509info::cert_facts(.., Classifier::Pkcs11)` + `x509info::cert_attributes`.
@@ -3094,6 +3102,11 @@ pub struct ParamSpec {
     /// Exact byte length (BYTES).
     pub length: Option<usize>,
     pub validate: Option<ParamValidator>,
+    /// §11 D30 (added after R1): a BYTES param the caller may leave to the provider's RNG
+    /// (the IV/nonce/counter block of an encrypt/sign/wrap row, §4.6.6): an EMPTY answer at
+    /// the prompt draws this many bytes instead. Inert unless the resolver was given an RNG
+    /// provider (`ParamResolver::with_rng`, §4.6.4); never set on custom-mechanism params.
+    pub random: Option<usize>,
 }
 impl ParamSpec {
     /// required = true, everything else None.
@@ -3106,6 +3119,8 @@ impl ParamSpec {
     pub fn choices(self, choices: &[&str]) -> Self { .. }
     pub fn length(self, length: usize) -> Self { .. }
     pub fn validate(self, validator: fn(&ParamValue) -> Result<()>) -> Self { .. }
+    /// §11 D30: `random = Some(len)`.
+    pub fn random(self, len: usize) -> Self { .. }
 }
 ```
 
@@ -3150,8 +3165,10 @@ impl OperationSpec {
     /// raw_param_bytes = params["mechparam"] bytes when param_struct == Raw.
     pub fn invocation(&self, params: Params) -> MechanismInvocation { .. }
     pub fn param(&self, name: &str) -> Option<&ParamSpec> { .. }
-    /// The mirror rule: same cli_name/mechanism/params; id with `.{verb}.` swapped (first
-    /// occurrence), the new verb and label, and `key_classes` replaced when given.
+    /// The mirror rule: same cli_name/mechanism/params, except that every param's `random`
+    /// is cleared (§11 D30: decrypt/verify need the IV the data was made with); id with
+    /// `.{verb}.` swapped (first occurrence), the new verb and label, and `key_classes`
+    /// replaced when given.
     pub fn mirrored(&self, verb: Verb, label: &str, key_classes: Option<BTreeSet<KeyClass>>) -> OperationSpec { .. }
 }
 ```
@@ -3278,13 +3295,23 @@ copied into MechanismInvocation (§4.6)"). Bespoke C structs beyond these five r
 use indexmap::IndexMap;
 use r2_core::error::Result;
 use r2_core::io::ConsoleIo;
-use r2_provider::ProviderRegistry;
+use r2_provider::{Provider, ProviderRegistry};
 
 use crate::model::{OperationSpec, ParamSpec, ParamValue, Params};
 
-pub struct ParamResolver<'a> { io: &'a dyn ConsoleIo, providers: &'a ProviderRegistry }
+pub struct ParamResolver<'a> {
+    io: &'a dyn ConsoleIo,
+    providers: &'a ProviderRegistry,
+    rng: Option<&'a dyn Provider>,
+}
 impl<'a> ParamResolver<'a> {
+    /// rng = None.
     pub fn new(io: &'a dyn ConsoleIo, providers: &'a ProviderRegistry) -> Self { .. }
+    /// §11 D30 (added after R7): the provider whose RNG fills a `random` param left empty
+    /// at its prompt — the key's own provider for `encrypt`/`sign`, the KEK's provider
+    /// for `export --kek`. decrypt/verify, `load --kek` and every other caller never
+    /// attach one.
+    pub fn with_rng(self, provider: &'a dyn Provider) -> Self { .. }
     /// Algorithm below. `given` = BoundArgs.named (name=value tokens, line order).
     pub fn resolve(&self, spec: &OperationSpec, given: &IndexMap<String, String>) -> Result<Params> { .. }
     /// Parse + validate one textual value per its ParamSpec (rules below).
@@ -3302,6 +3329,19 @@ parameter (§4.6)"; a resolved-but-absent param counts as resolved); else not re
 `default` (None → absent); else prompt: `io.prompt(param)` in a loop — a ParamError from
 `parse_value` is shown with `io.print_error` and the prompt repeats; any other error
 (UserAbort "aborted while entering '{name}'" from the IO) propagates.
+
+Random fallback (§11 D30; r2 only, inert without `with_rng`): when an RNG provider is
+attached and the prompted param has `random = Some(len)` and kind BYTES, the prompt shows a
+copy of the param whose text ends `, empty = random)` —
+`"IV (16 bytes)"` → `"IV (16 bytes, empty = random)"`; a prompt without a trailing
+parenthesis gains ` (empty = random)`. An
+answer that is empty or whitespace only (`py_strip` empty) draws `len` bytes with
+`Provider::generate_random(len)` (an error propagates unchanged and ends the resolution, no
+re-prompt), prints `<label> (random): <hex>` as `Renderable::Text` (label = the prompt
+before its last ` (` when it ends in `)`, e.g. `IV`, `IV / nonce`, `Initial counter block`;
+continuous lower-case hex) and uses the bytes as the value (no `length`/`validate` check:
+the drawn length is the declared one). Any other answer is parsed as above. Inline
+(`name=value`) values, defaults and mirrors never draw; the draw is not timed (§11 D31).
 
 Parsing ("trimmed" = `text::py_strip`, c2's `str.strip()`): STR → text verbatim. INT →
 trimmed, `-?[0-9]+` (ASCII), parsed as i64 (an out-of-range value is rejected with the
@@ -3362,15 +3402,17 @@ pub(crate) fn fold_mechanisms(codes: &[u64], custom: &BTreeMap<u64, String>) -> 
 #### 4.6.6 Built-in operation table (frozen; registered by `register_builtins`)
 
 Param notation: `name:KIND "prompt"` then `req` (required) or `opt=<default>` (`opt=None`
-→ absent when not given), `{choices}`, `len=N`, `from=<param>` (default_from, opt).
-Shared param lists:
+→ absent when not given), `{choices}`, `len=N`, `from=<param>` (default_from, opt),
+`rnd=N` (`ParamSpec::random(N)`, §11 D30: an empty answer at the prompt draws N bytes from
+the key's provider RNG — set on the encrypt/sign row only; its decrypt/verify mirror
+clears it, §4.6.2). Shared param lists:
 
 - **PAD_ECB**: `padding:ENUM "Padding" opt="none" {none,pkcs7}`
-- **CBC**: `iv:BYTES "IV (16 bytes)" req len=16`; `padding:ENUM "Padding" opt="pkcs7" {none,pkcs7}`
-- **GCM**: `iv:BYTES "IV / nonce (12 bytes typical)" req`; `aad:BYTES "Additional authenticated data (empty for none)" opt=b""`; `tag_bits:ENUM "Tag length in bits" opt="128" {128,120,112,104,96}`
-- **CTR**: `counter_block:BYTES "Initial counter block (16 bytes)" req len=16`; `counter_bits:INT "Counter width in bits" opt=128`
+- **CBC**: `iv:BYTES "IV (16 bytes)" req len=16 rnd=16`; `padding:ENUM "Padding" opt="pkcs7" {none,pkcs7}`
+- **GCM**: `iv:BYTES "IV / nonce (12 bytes typical)" req rnd=12`; `aad:BYTES "Additional authenticated data (empty for none)" opt=b""`; `tag_bits:ENUM "Tag length in bits" opt="128" {128,120,112,104,96}`
+- **CTR**: `counter_block:BYTES "Initial counter block (16 bytes)" req len=16 rnd=16`; `counter_bits:INT "Counter width in bits" opt=128`
 - **CMAC**: `mac_len:INT "MAC length in bytes" opt=16`
-- **GMAC**: `iv:BYTES "IV (12 bytes)" req len=12`; `mac_len:INT "MAC length in bytes" opt=16`
+- **GMAC**: `iv:BYTES "IV (12 bytes)" req len=12 rnd=12`; `mac_len:INT "MAC length in bytes" opt=16`
 - **HMAC**: `hash:ENUM "Hash" opt="sha256" {sha1,sha224,sha256,sha384,sha512}`; `mac_len:INT "MAC length in bytes (empty = full digest)" opt=None` (1..digest length; provider truncates — byte-identical to CKM_SHAx_HMAC_GENERAL)
 - **OAEP**: `hash:ENUM "Hash algorithm" opt="sha256" {sha1,sha256,sha384,sha512}`; `mgf_hash:ENUM "MGF1 hash algorithm (defaults to hash)" from=hash {sha1,sha256,sha384,sha512}`; `label:BYTES "OAEP label (empty for none)" opt=b""`
 - **SIGNHASH**: `hash:ENUM "Hash algorithm" opt="sha256" {sha1,sha224,sha256,sha384,sha512}`
@@ -4019,7 +4061,9 @@ the console. Implementations: `r2_console::io::LineIo` (TerminalIo / PlainIo, §
 
 ```rust
 // crates/r2-core/src/io.rs
+use std::time::Duration;
 use secrecy::SecretString;
+use zeroize::Zeroizing;
 use crate::error::{ConsoleError, ErrorKind, Result};
 use crate::params::ParamSpec;
 use crate::template::KeyTemplate;
@@ -4153,8 +4197,10 @@ pub enum Renderable {
     Styled(Vec<Line>),
     Table(TableData),
     /// Hex result: the panel's titled top and "{n} bytes" bottom borders around one
-    /// unbroken line of hex (§11 D28).
-    Hex { data: Vec<u8>, title: Option<String> },
+    /// unbroken line of hex (§11 D28). `data` is wiped on drop (it may be plaintext or a
+    /// derived secret, §11 D3); `elapsed` = the provider time shown after the byte count
+    /// ("16 bytes in 4ms", §11 D31; None = not shown).
+    Hex { data: Zeroizing<Vec<u8>>, title: Option<String>, elapsed: Option<Duration> },
     Panel(PanelData),
 }
 impl From<&str> for Renderable { fn from(text: &str) -> Self { Renderable::Text(text.to_owned()) } }
@@ -4171,8 +4217,12 @@ pub fn caret(line: &str, pos: usize) -> Renderable { .. }
 /// Uniform table used by every command (cells are data, never markup; control codes
 /// stripped as in rich).
 pub fn table(title: Option<&str>, columns: &[&str], rows: Vec<Vec<String>>) -> Renderable { .. }
-/// Hex result (c2 `render.hex_panel`, laid out per §11 D28).
+/// Hex result (c2 `render.hex_panel`, laid out per §11 D28), without timing:
+/// `hex_timed(data, title, None)`.
 pub fn hex(data: &[u8], title: Option<&str>) -> Renderable { .. }
+/// Hex result whose footer also shows the provider time `elapsed` (§11 D31; added after
+/// R1). Copies `data` into the zeroizing `Renderable::Hex.data`.
+pub fn hex_timed(data: &[u8], title: Option<&str>, elapsed: Option<Duration>) -> Renderable { .. }
 ```
 
 ```rust
@@ -4241,13 +4291,18 @@ Rendering rules (normative; layout differences from rich are D1):
   a content width below 1 renders no body line. Error panel: Danger border, bold red
   message, dim hint — its text equals rich's.
 - **Hex** (§11 D28): three rows — the Panel's top border with the given title, the data as
-  ONE line of continuous lower-case hex (`format_hex(data, 0, 0)`: no side borders, groups
-  or line breaks, never wrapped or cropped by r2, no SGR), the Panel's bottom border with
-  subtitle "{n} bytes". Border width = the hex line's length, widened to the title's and
-  the subtitle's annotation width + 4 (so both show in full), capped at `cfg.width` (at
-  least 2); titles are cropped as in a Panel. `cfg.hex_group`/`cfg.hex_width` are not
-  read. Empty data → the Panel with body "(empty — 0 bytes)" and no subtitle,
-  byte-identical to c2/rich.
+  ONE line of continuous lower-case hex (what `format_hex(data, 0, 0)` returns: no side
+  borders, groups or line breaks, never wrapped or cropped by r2, no SGR), the Panel's
+  bottom border with subtitle "{n} bytes", or "{n} bytes in {t}" when `elapsed` is Some
+  (`t` = `runtime::format_elapsed`, §4.9.8, §11 D31). Border width = the hex line's
+  length, widened to the title's and the subtitle's annotation width + 4 (so both show in
+  full), capped at `cfg.width` (at least 2); titles are cropped as in a Panel.
+  `cfg.hex_group`/`cfg.hex_width` are not read. Empty data → the Panel with body "(empty —
+  0 bytes)" and no subtitle, byte-identical to c2/rich; when timed, its subtitle is just
+  "in {t}". The hex digits are written straight into the one pre-sized output `String`
+  (top border, hex line, bottom border), so no intermediate or reallocated copy of the
+  hex text is left behind (§11 D3); the sink wipes that string after writing it
+  (§4.9.7).
 - **Text** and **Styled** (spans per line, their tones kept): laid out by the rich Text
   model at `cfg.width`, i.e. exactly what c2's `console.print(str, markup=False)` /
   `console.print(Text)` printed apart from §11 D1's highlighting and D23's emoji codes (a
@@ -4360,7 +4415,8 @@ pub fn dispatch(ctx: &AppContext, commands: &CommandTable, line: &str) -> r2_cor
    UnknownOperation "unknown command '{name}'" (hint `render::suggest(name, names)` or
    "type 'help' for the command list"); `bind_args(&tokens[1..], cmd.flags(), line)?`;
    `tracing::debug!("command: {name}")` (the name only — lines may carry secrets, §6);
-   `cmd.run(ctx, &args)`.
+   `r2_core::runtime::reset_operation_time()` (§4.9.8, §11 D31: no provider time of an
+   earlier command leaks into this one's result); `cmd.run(ctx, &args)`.
 
 Exit: `exit`/`quit` commands return `Flow::Exit`; Ctrl-D at the prompt exits with status
 0. Provider shutdown runs in r2-cli (drop guard) for every provider after the loop.
@@ -4551,7 +4607,8 @@ pub fn resolve_color(ui: ColorMode, stdout_is_tty: bool, env: &dyn Fn(&str) -> O
 /// `crossterm::tty::IsTty` holds for stdin AND stdout and `TERM != "dumb"`; otherwise
 /// PlainIo. Prints the one-line mintty/msys warning (hidden input unavailable; suggests
 /// Windows Terminal or `winpty r2`) when `std::io::IsTerminal(stdin) && !IsTty(stdin)` —
-/// the one allowed IsTerminal site. Sink style = `resolve_color(config.ui.color,
+/// r2-console's one allowed IsTerminal site (the other is r2-cli's banner check, §11 D33).
+/// Sink style = `resolve_color(config.ui.color,
 /// IsTty(stdout), env)`; hex layout from `config.ui`; command history at
 /// `config.app.history_file` (parent directory created; unusable → in-memory).
 pub fn open_console_io(config: &AppConfig) -> Rc<dyn ConsoleIo> { .. }
@@ -4650,7 +4707,8 @@ pub fn install_line_assist(assist: Rc<dyn LineAssist>) -> AssistGuard { .. }
   repaint (`clear_screen`). `LineIo::busy`: only TerminalIo with stderr a tty shows the
   spinner (§4.9.8); it clones the `ProgressBar` out of the spinner slot and drops the
   borrow before running `f`; a nested `busy` runs `f` without a second spinner. While busy,
-  `ProgressBar::suspend` wraps ONLY the innermost terminal primitive — one Sink write, one
+  `ProgressBar::suspend` wraps ONLY the innermost terminal primitive — one Sink write (for
+  `print`: the rendered text and its newline, two writes in one suspend), one
   `LineReader` call — and is never nested (indicatif 0.18 `suspend` holds the bar's std
   `Mutex` while its closure runs: nesting deadlocks, and a panic inside poisons it), so
   `select`/`confirm`/`print` never wrap their whole body. The busy guard's `Drop` always
@@ -4658,6 +4716,11 @@ pub fn install_line_assist(assist: Rc<dyn LineAssist>) -> AssistGuard { .. }
   `ProgressBar` method (every one locks that possibly poisoned mutex and would panic during
   the unwind → abort) and just drops the handle (`BarState`'s own `Drop` needs no lock; the
   ticker holds only a `Weak`); otherwise it calls `finish_and_clear`.
+- `LineIo::print` holds the rendered text in a `Zeroizing<String>`, writes it and then the
+  newline as a separate Sink write (no copy is made to append it), and the text is wiped
+  on drop — the console hex result's rendered hex (plaintext, derived secrets, random
+  output) leaves no copy in r2's memory (§11 D3; terminal and stdout buffers are outside
+  r2).
 - `DegradingReader`: the first `io::Error` from reedline (e.g. the 2 s timeout of an
   unanswered `ESC[6n`) disables raw mode, prints one stderr line `warning: line editor
   unavailable (<error>); continuing with plain input` and switches the session to plain
@@ -4750,11 +4813,13 @@ pub fn install_line_assist(assist: Rc<dyn LineAssist>) -> AssistGuard { .. }
   place output styling is decided; every print uses `std::io::Write` on it (never the
   print macros).
 
-#### 4.9.8 Ctrl-C flag, spinner flag, panic report (`r2_core::runtime`, R1)
+#### 4.9.8 Ctrl-C flag, spinner flag, panic report, operation timing (`r2_core::runtime`, R1)
 
 ```rust
 // crates/r2-core/src/runtime.rs — the only process-global mutable state (two atomics),
-// plus thread-local slots (panic report; the in-process test Ctrl-C flag)
+// plus thread-local slots (panic report; the in-process test Ctrl-C flag; the operation
+// timing of §11 D31)
+use std::time::Duration;
 /// Called by the ctrlc handler (r2-cli): one atomic store, nothing else.
 pub fn request_interrupt() { .. }
 /// In-process tests' Ctrl-C (R13, §4.11): a flag only the calling thread observes, so a
@@ -4780,7 +4845,40 @@ pub fn record_panic_report(report: String) { .. }
 /// Taken (slot emptied) by run_repl's catch_unwind branch (§4.9.5); None when no hook is
 /// installed (tests) or nothing was recorded.
 pub fn take_panic_report() -> Option<String> { .. }
+
+// ---- operation timing (§11 D31; added after R1, frozen-provisional §4.11.2) ----
+/// Turns the timing display of results on or off for the calling thread. Off by default,
+/// so in-process sessions (tests, ScriptedIo) print c2's output unchanged; r2-cli's
+/// `session()` calls `set_timing_shown(io.is_none())` (§4.9.11): on for a real session,
+/// off when a test injects its IO.
+pub fn set_timing_shown(shown: bool) { .. }
+pub fn timing_shown() -> bool { .. }
+/// Runs ONE provider operation (encrypt, generate_key, import_key, export_key, wrap_key,
+/// …; never a lookup, a prompt, parsing or file I/O) and adds its wall-clock time
+/// (`Instant`) to the calling thread's accumulator. Always measures, whatever
+/// `timing_shown()` says; returns `f`'s value unchanged (errors included).
+pub fn timed<T>(f: impl FnOnce() -> T) -> T { .. }
+/// Empties the accumulator. Called by `repl::dispatch` immediately before every
+/// `Command::run` (§4.9.5), so no time leaks into the next command.
+pub fn reset_operation_time() { .. }
+/// The time accumulated since the last reset/take (the accumulator is emptied either
+/// way); None when nothing was timed or `timing_shown()` is false.
+pub fn take_operation_time() -> Option<Duration> { .. }
+/// " in {format_elapsed(t)}" from `take_operation_time()`, "" when that is None. Appended
+/// at the very END of a text result line.
+pub fn timing_suffix() -> String { .. }
+/// Adaptive units, truncated (never rounded up into the next unit): under 1 ms whole µs
+/// ("412µs"), under 1 s whole ms ("4ms"), else seconds with two decimals ("1.23s").
+pub fn format_elapsed(elapsed: Duration) -> String { .. }
 ```
+
+Timing call sites (§11 D31): only the provider call itself is wrapped in `timed`; several
+calls of one command add up (the plain or transport route of `copy`, both exports of a
+`--cert` PKCS#12 export). Crypto verbs, `derive` and `random` time the call inside
+`busy_with` (`busy_labeled`, after `Provider::initialize`); `generate` its `generate_key`;
+the services their provider calls (§4.9.10). Never timed: prompts, the template editor,
+parsing, file reads/writes, lookups (`find_key`, `list_keys`, `status`), `initialize`, the
+§11 D30 IV draw, and the cleanup deletes of `copy`'s transport objects.
 
 Threads: the `ctrlc` handler thread (r2-cli, touches only the atomic; installed before the
 first prompt — mandatory, because rpassword raises SIGINT itself) and, if the spinner is
@@ -4979,6 +5077,16 @@ R0 stubs: `run_load`/`run_export` → `Err(not_implemented("R15"))`; completion 
 
 Services never print, never import the console, and take the interaction traits by
 reference. ★ marks surfaces another loop consumes.
+
+Operation timing (§11 D31): the services wrap each provider call they make for the
+operator in `r2_core::runtime::timed` (§4.9.8) — `keyload::import_materials`'s
+`import_key`; `keyexport`'s `export_key` calls (`export_bytes`, `public_spki`);
+`certops`'s `export_key` calls of `export_pkcs12` and the `sign` callbacks of
+`generate_csr`; `wrapload`'s `unwrap_key` (`load_wrapped`) and `wrap_key`
+(`wrap_for_export`); `transfer`'s `export_key`/`import_key`/`generate_key`/`wrap_key`/
+`unwrap_key` of the plain and transport routes (not the cleanup deletes, not
+`find_key`/`list_keys`). No signature below changes: the console reads the accumulated
+time afterwards (`timing_suffix`), so services never print it.
 
 ```rust
 // crates/r2-services/src/templatefile.rs (R14)
@@ -5215,10 +5323,13 @@ layer rewrites `(?i)\b(pin|password)\s*=\s*\S+` to `${1}=***` (regex crate synta
 setup below) → panic hook (`src/panic.rs`: `std::panic::set_hook` with a `Send + Sync` closure that
 formats message + location + `std::backtrace::Backtrace::force_capture()` and calls
 `r2_core::runtime::record_panic_report`; it never touches the terminal) → ctrlc handler
-→ `ensure_legacy_provider()` → IO (`r2_console::io::open_console_io(&cfg)`, §4.9.7) →
-`build_provider_registry` → `build_operation_registry(&cfg.custom_mechanisms)` →
-`create_template_editor` → `commands::all_commands()` → `AppContext` → banner "r2 {version}
-— type 'help' for commands" → `run_repl(&ctx, debug, commands)` → shutdown of every
+→ `ensure_legacy_provider()` → `r2_core::runtime::set_timing_shown(io.is_none())` (on
+unless a test injected the IO, §11 D31) → IO (`r2_console::io::open_console_io(&cfg)`,
+§4.9.7) → `build_provider_registry` → `build_operation_registry(&cfg.custom_mechanisms)` →
+`create_template_editor` → `commands::all_commands()` → `AppContext` → the dog banner
+(plain `Renderable::Text`, only when the IO was not injected and `stdout_is_terminal()`,
+§11 D33) → banner "r2 {version} — type 'help' for commands" → `run_repl(&ctx, debug,
+commands)` → shutdown of every
 provider (errors logged as warnings "shutdown of provider {name!r} failed: {message}"). A
 ConsoleError before the REPL is written to stderr as "error: {message}" + " (hint:
 {hint})" when present, exit code 2. Usage errors are clap's (exit 2; texts §11 D19).
@@ -5818,8 +5929,11 @@ new allowed threads are §4 changes.
 `update_key`/`read_full_template` and `AttrEditOutcome`/`KeyEditResult` (§5.15/§5.16),
 `Provider::generate_random` (§5.17, §11 D29), `CustomMechanismConfig` param encoding (v1 =
 the five `ParamStruct` packers), the `ConsoleIo`/`TemplateEditor` trait surfaces (incl.
-the provisional `busy` and the spinner flag in `runtime`), the `FakeHooks` trait (methods
-may be added with a `None` default), and the R7-internal terminal I/O items of §4.9.7.
+the provisional `busy` and the spinner flag in `runtime`), the operation-timing API in
+`runtime` (`set_timing_shown`, `timing_shown`, `timed`, `reset_operation_time`,
+`take_operation_time`, `timing_suffix`, `format_elapsed`; §4.9.8, §11 D31), the `FakeHooks`
+trait (methods may be added with a `None` default), and the R7-internal terminal I/O items
+of §4.9.7.
 
 #### 4.11.3 c2 §4 coverage map (every c2 §4 item has an r2 counterpart or an n/a)
 
@@ -5888,7 +6002,8 @@ OpenSSL mapping verified by the S0 OpenSSL spike.
 
 ### 5.1 Console UX
 
-REPL: `r2> ` prompt; on start r2 prints `r2 <version> — type 'help' for commands`. The
+REPL: `r2> ` prompt; on start r2 prints `r2 <version> — type 'help' for commands` (on a
+terminal only, a plain-text dog banner precedes it — never in pipes or tests, §11 D33). The
 command line is read through the console-internal `LineReader` of the active `ConsoleIo`
 (TerminalIo or PlainIo; the mode switch is in §6):
 
@@ -6018,7 +6133,7 @@ verify  <provider>:<label> [<mech>] [<name>=<value> ...] [<data>] [--in <path>]
                            (--sig <data> | --sig-file <path>)
 derive  <provider>:<label> [<mech>] [<name>=<value> ...] [--out <path>]
         [--outformat raw|hex|b64]
-random <provider> [<length>] [--out <path>] [--outformat raw|hex|b64]
+random <provider> [<length> | length=<n>] [--out <path>] [--outformat raw|hex|b64]
                                   # r2 addition (§5.17, §11 D29): <length> bytes (1 to
                                   # 1048576; prompted when omitted) from the provider's RNG
 ```
@@ -6027,6 +6142,13 @@ Interactive fallbacks (all through `ParamResolver`/`ConsoleIo` — never a secon
 path): omitted `<mech>` → `select()` over `available_for(verb, key, provider)`; omitted
 `<data>` with no `--in` → multiline paste prompt; missing `name=value` params → prompted
 in ParamSpec order; `load`/`copy`/`generate` into PKCS#11 → template editor (§5.12).
+r2 addition (§11 D30): the IV/nonce/counter-block prompts of `encrypt` (AES-CBC, AES-GCM,
+AES-CTR) and `sign` (AES-GMAC), and the CBC/GCM IV prompt of `export --kek` (§5.6), read
+e.g. `IV (16 bytes, empty = random)`; an empty answer draws the bytes from the key's
+provider RNG (`Provider::generate_random`, §5.17) and prints `IV (random): <hex>` (`IV /
+nonce (random): …`, `Initial counter block (random): …`) before the operation runs. The
+mirrored `decrypt`/`verify` prompts and `load --kek` keep c2's prompt and its `iv: empty
+input` error with a re-prompt; inline `iv=…` values are never replaced.
 `verify` on a ref that resolves to a PRIVATE key uses the co-located PUBLIC (preferred) or
 CERTIFICATE object sharing its label (and CKA_ID when the ref carries one) — there is no
 ref grammar for a keypair's public half, and verify operations bind to
@@ -6057,7 +6179,23 @@ result on the console (§11 D28: a top border titled with what the bytes are, th
 one unbroken line of continuous hex that copies whole, a bottom border reading `<n>
 bytes`; empty data is c2's panel `(empty — 0 bytes)` with no subtitle;
 `ui.hex_group`/`hex_width` no longer apply); `--out` writes raw bytes unless
-`--outformat hex|b64` is given. Errors: a panel
+`--outformat hex|b64` is given (`--outformat` without `--out` → Generic `--outformat
+requires --out`, hint `console output is always the hex result (§5.1)` — c2's hint read
+`… the grouped hex dump (§5.1)`, §11 D28). Operation timing (§11 D31; real sessions only —
+in-process sessions with an injected IO show c2's output): the wall-clock time of the
+provider call(s) is shown after the result, formatted `412µs` / `4ms` / `1.23s` — the
+hex result's bottom border reads `16 bytes in 4ms` (empty data: `in 4ms`), and the text
+result lines of the timed commands end with ` in <t>`: `generate` (`generated mem:a
+(256-bit aes) in 1ms`, the keypair line), `load` (the table title `loaded into mem in
+17µs`; `--kek`: `unwrapped into mem (AES-KEY-WRAP-PAD) in 45µs`), `export` (`wrote <n>
+bytes to <path> (pem) in 50µs`; `--kek`: `wrote <path>: 24-byte blob wrapped under mem:a
+with AES-KEY-WRAP-PAD, hex-encoded in 52µs`), `csr` (`wrote CSR for … (subject: CN=e) in
+761µs`), `copy` (`copied mem:k -> mem:k3 (secret aes) in 18µs`), the crypto verbs'
+`--out` line (`wrote 16 bytes to x in 4ms`), `verify` (`signature VALID in 39µs`: a plain
+span after the styled verdict) and `derive`'s provider-resident line (`derived key
+(provider-resident): <ref> in 3ms`). The suffix is always the very end of its line, so the
+wrapping of the text before it is unchanged. `delete`, `key`, `keys`, `login`, `ops`,
+`providers` and the other commands are not timed. Errors: a panel
 titled `error` with a red border, the message in bold red and a dim `hint: …` line;
 unknown command/mechanism gets difflib suggestions (hint `did you mean: <a>, <b>, <c>` — at
 most 3, exactly CPython's `difflib.get_close_matches` with its default cutoff, including its
@@ -6232,9 +6370,12 @@ close failure at ERROR through the `log` crate; that record never reaches the co
 
 `generate <provider> <aes|rsa|ec|generic> …` — size/curve resolved via `ParamResolver`
 (`aes: size∈{128,192,256}=256`; `generic: size:int=256`, any multiple of 8 in 8..8192 —
-HMAC keys should be ≥ the digest length, §5.9; `rsa: size∈{2048,3072,4096}=2048`;
-`ec: curve∈{p256,p384,p521,ed25519,ed448,x25519,x448}=p256` — curve implies KeyAlgorithm
-EC / EC_EDWARDS / EC_MONTGOMERY). Default label prompted if `--label` absent.
+HMAC keys should be ≥ the digest length, §5.9; `rsa: size∈{2048,3072,4096,8192}=2048`
+— 8192 is an r2 addition, §11 D32; `ec:
+curve∈{p256,p384,p521,ed25519,ed448,x25519,x448}=p256` — curve implies KeyAlgorithm EC /
+EC_EDWARDS / EC_MONTGOMERY). Default label prompted if `--label` absent. The provider's
+`generate_key` call is timed and the result line ends with ` in <t>` in an interactive
+session (§11 D31); an 8192-bit RSA keygen takes seconds (§11 D32).
 
 - memory: AES/generic = `openssl::rand::rand_bytes` of `size/8` bytes (held in
   `Zeroizing`); RSA = `Rsa::generate(bits)` (e = 65537); EC = `EcKey::generate` over
@@ -6418,7 +6559,12 @@ loads back unchanged.
 
 `--mech` accepts a cli name or the canonical name; when omitted, `select()` offers exactly
 the rows matching the KEK's class/algorithm **and** `provider.mechanisms()`. Params come from
-`ParamResolver` — one code path for inline `name=value` and prompts (§5.1). PKCS#11 targets
+`ParamResolver` — one code path for inline `name=value` and prompts (§5.1). The cbc/gcm
+`iv` params carry `random(16)`/`random(12)` (`wrapload`'s `cbc_params`/`gcm_params`, §11
+D30), which only the wrapping direction uses: `export --kek` resolves with the KEK
+provider's RNG attached, so an empty answer at its IV prompt draws the IV (§5.6);
+`load --kek` never attaches one (the unwrap needs the blob's own IV), so an empty answer
+there stays c2's `iv: empty input` error and the prompt repeats. PKCS#11 targets
 still get the §5.12 editor, seeded from the **result's** class/algorithm (§5.16
 `--template` honored), and the edited template rides into `unwrap_key`.
 
@@ -6637,7 +6783,12 @@ self-signed path signs with the already-exported key. Password: `--password` or
 under a KEK **already resident in the same provider** (`C_WrapKey` semantics) and writes
 the blob — byte-for-byte what `load --kek` consumes (§5.4), so keys round-trip. The
 mechanism table, KEK grammar and param handling are §5.4's; `r2-services::wrapload` carries
-both directions.
+both directions. r2 addition (§11 D30): the CBC/GCM IV prompt reads `IV (16 bytes, empty =
+random)` / `IV / nonce (12 bytes typical, empty = random)`, and an empty answer draws the
+IV from the KEK provider's RNG (`Provider::generate_random`) and prints `IV (random): <hex>`
+or `IV / nonce (random): <hex>` — the operator needs that IV to `load --kek` the blob, as
+the IV is not part of it. The `C_WrapKey` call is timed (§11 D31): the result line ends
+with ` in <t>` in an interactive session.
 
 Binding rule — this is the point of the feature: wrapped export applies the §5.5
 **wrappable** test (`CKA_EXTRACTABLE` alone), *not* the plain-export test (`CKA_EXTRACTABLE
@@ -7069,12 +7220,13 @@ operator re-enables rows deliberately in the always-shown editor (§5.12).
 ### 5.17 Random generation (r2 addition, §11 D29)
 
 ```
-random <provider> [<length>] [--out <path>] [--outformat raw|hex|b64]
+random <provider> [<length> | length=<n>] [--out <path>] [--outformat raw|hex|b64]
 ```
 
 c2 had no counterpart; the command lives in `commands/crypto.rs` (R9, summary "Generate
 random bytes with a provider's RNG") and draws `<length>` bytes from the provider's own RNG
-through `Provider::generate_random` (§4.5.2). Provider mapping:
+through `Provider::generate_random` (§4.5.2). The same provider call also fills an IV left
+empty at an `encrypt`/`sign`/`export --kek` prompt (§5.1, §11 D30). Provider mapping:
 
 - **memory**: OpenSSL `RAND_bytes` via `r2_core::crypto::random_bytes` (§4.4.8); no login.
   A length above `i32::MAX` (unreachable from the console) → Crypto "random number
@@ -7091,35 +7243,42 @@ through `Provider::generate_random` (§4.5.2). Provider mapping:
 - Any other provider: the trait default, UnsupportedOperation "{name} does not support
   random generation".
 
-Run order (each step's error ends the command before the next): unknown `--options` →
-Generic `unknown option --<name>` (hint `usage: <usage>`); a `name=value` token → Generic
-`unexpected name=value token '<name>=…'` (hint `usage: <usage> (quote values containing
-'=')`); more than two positionals → Generic `too many arguments` (hint `usage: <usage>`);
-`--out`/`--outformat` checks with the verbs' texts (§5.1: `invalid --outformat '<x>'` /
-`choose one of: raw, hex, b64`; `--outformat requires --out`); the provider (missing →
-`missing <provider> argument`, hint `usage: <usage>`; unknown → ProviderNotFound `unknown
-provider '<n>'`, hint `known providers: …`); then the provider must be usable — a
-logged-out PKCS#11 provider raises AuthRequired BEFORE any prompt; then the length.
+Run order (each step's error ends the command before the next; `<usage>` is the usage line
+above): unknown `--options` → Generic `unknown option --<name>` (hint `usage: <usage>`);
+more than two positionals → Generic `too many arguments` (hint `usage: <usage>`); a
+positional `<length>` together with `length=<n>` → Generic `the length is given twice`
+(hint `usage: <usage>`); the `--out`/`--outformat` checks, with the crypto verbs' texts
+(`make_output`, §5.1): an `--outformat` other than raw/hex/b64 → Generic `invalid
+--outformat '<x>'` (hint `choose one of: raw, hex, b64`), then `--outformat` without
+`--out` → Generic `--outformat requires --out` (hint `console output is always the hex
+result (§5.1)`); the provider (missing → `missing <provider> argument`, hint `usage:
+<usage>`; unknown → ProviderNotFound `unknown provider '<n>'`, hint `known providers: …`);
+then the provider must be usable — a logged-out PKCS#11 provider raises AuthRequired
+BEFORE any prompt; then the length, where a `name=value` token other than `length=<n>` →
+Param `unknown parameter '<name>' for random` (hint `valid parameters: length`).
 
 Length: an `Int` parameter `length` resolved by `ParamResolver` (§4.6.4, one code path
-for inline and prompted values). Valid range 1 to 1048576 bytes; anything else → Param
-`invalid random length <n>; expected 1 to 1048576 bytes` (param name `length`); a
-non-integer → Param `length: invalid integer '<text>'` (hint `decimal digits with an
-optional leading '-' only (§4.6)`). When `<length>` is omitted it is prompted with the text
-`Number of random bytes`; a Param error at the prompt is shown and the prompt repeats;
-Ctrl-C at the prompt aborts (`Aborted.`).
+for inline and prompted values; the positional `<length>` is passed to it as `length`).
+Valid range 1 to 1048576 bytes; anything else → Param `invalid random length <n>; expected
+1 to 1048576 bytes` (param name `length`); a non-integer → Param `length: invalid integer
+'<text>'` (hint `decimal digits with an optional leading '-' only (§4.6)`). When no length
+is given it is prompted with the text `Number of random bytes`; a Param error at the
+prompt is shown and the prompt repeats; Ctrl-C at the prompt aborts (`Aborted.`).
 
 Output: the bytes are drawn under the spinner `random — <provider>` (`busy`, §4.9.8) with
 the §11 D13 boundaries of the crypto verbs (the abort flag is checked before
-`Provider::initialize`, after it, after the draw and before writing output). The console
-shows the hex result (§11 D28) titled `random — <provider>` with the `<n> bytes` bottom
-border; `--out <path>` writes raw bytes (or `--outformat hex|b64`) and prints `wrote <n>
-bytes to <path>`. The provider returns the bytes in a zeroizing buffer (§11 D3; as for
-`decrypt`, the console hex result copies them into `Renderable::Hex.data`, a plain
-`Vec<u8>` — `--out` avoids that copy); only the length is logged (`<provider>: generated
-<n> random bytes` at INFO for PKCS#11), never the bytes.
+`Provider::initialize`, after it, after the draw and before writing output); the draw is
+timed (§11 D31). The console shows the hex result (§11 D28) titled `random — <provider>`
+with the `<n> bytes` bottom border (`<n> bytes in <t>` in an interactive session);
+`--out <path>` writes raw bytes (or `--outformat hex|b64`) and prints `wrote <n> bytes to
+<path>` (plus ` in <t>`). The provider returns the bytes in a zeroizing buffer, the console
+hex result copies them into the zeroizing `Renderable::Hex.data`, and the rendered hex
+text is wiped after it is written (§4.9.2, §4.9.7, §11 D3); only the length is logged
+(`<provider>: generated <n> random bytes` at INFO for PKCS#11), never the bytes.
 Completion: provider names for the first argument, filesystem paths after `--out`,
-nothing after `--outformat`, otherwise `--out`/`--outformat`.
+nothing after `--outformat`, otherwise `--out`/`--outformat`. Because `random` is a
+command name, it is also a difflib candidate for unknown commands and `help <name>`
+(§11 D29).
 
 ## 6. Non-functional requirements
 
@@ -7166,10 +7325,13 @@ nothing after `--outformat`, otherwise `--out`/`--outformat`.
   to `<name>=***` (c2 `RedactingFilter`); key bytes are never logged — log lengths, labels,
   mechanism names, CKR codes. Key material (`KeyMaterial.data`), transport keys, decrypted
   payloads (`Provider::decrypt`), random output (`Provider::generate_random`,
-  `Backend::generate_random`, §5.17), RSA-RAW results, PKCS#11 attribute reads and raw
-  templates live in `zeroize::Zeroizing` buffers and are wiped on drop; template snapshots
+  `Backend::generate_random`, §5.17), RSA-RAW results, PKCS#11 attribute reads, raw
+  templates and the console hex result (`Renderable::Hex.data`, and the rendered hex text,
+  which `LineIo::print` wipes after writing it — §4.9.2, §4.9.7) live in
+  `zeroize::Zeroizing` buffers and are wiped on drop; template snapshots
   (`KeyTemplate`/`AttrValue`, e.g. a `key template` dump the operator writes to a file)
-  are plain buffers (§11 D3).
+  are plain buffers (§11 D3). Terminal, pty and stdout buffers outside the process are
+  out of r2's reach.
 - **Error style**: every `ConsoleError` carries an operator-actionable message, optionally a
   hint; PKCS#11 failures append the CKR name. OpenSSL `ErrorStack` `Display` (it embeds
   build-specific source paths and line numbers) and cryptoki `Display`/`Debug` texts are
@@ -7247,7 +7409,17 @@ nothing after `--outformat`, otherwise `--out`/`--outformat`.
   spinner need a TrueType console font (raster fonts may show `?`, as with rich).
 - **Startup**: no PKCS#11 library is loaded until first use of its provider; a broken
   configured library must not prevent startup. `providers`, `status()`, completion and
-  SoftHSM autodetection never load a library.
+  SoftHSM autodetection never load a library. On a terminal (stdout a terminal and the IO
+  not injected) a plain-text dog banner is printed above the startup line; pipes and
+  tests never see it (§11 D33).
+- **Operation timing** (an r2 addition, §11 D31): the wall-clock time of each provider
+  operation a command performs (crypto verbs, derive, random, generate, load, export,
+  csr, copy, `--kek` wrap/unwrap) is measured with `std::time::Instant` around the
+  provider call alone (`r2_core::runtime::timed`, §4.9.8) — prompts, the template editor,
+  parsing, lookups and file I/O are excluded — and shown after the result in real sessions
+  (`16 bytes in 4ms`, `… in 17µs`; §5.1). It is informational: a PKCS#11 figure includes
+  the token's round trip, and nothing is logged or persisted. Timing adds no thread and
+  no state beyond two thread-locals.
 
 ## 7. Default configuration (embedded `defaults.yaml` of `r2-config`)
 
@@ -7496,6 +7668,17 @@ custom_mechanisms: []      # entry schema: spec §4.8 / example §5.14
     differential-tested (its bytes are random by design); `normalize.py` drops r2's
     `help` row for it (exactly `random Generate random bytes with a provider's RNG` after
     glyph normalization), so a changed summary or any other extra row is still reported.
+  - *r2 additions inside shared output* (§11 D30–D33), each removed from r2's raw output
+    only, before the lines are compared (`normalize.py`): the random-IV note — `, empty
+    = random)` becomes `)`, so `IV (16 bytes, empty = random)` compares as c2's `IV (16
+    bytes)` (no session leaves an IV empty, so `IV (random): <hex>` never appears;
+    `test_normalize.py` `RandomIvPrompt`); the operation time — ` in <t>` (`412µs`, `4ms`,
+    `1.23s`) is removed wherever rich wrapped it, a regex over the words with newlines
+    allowed between them, including the hex result's footer and an empty result's `in
+    <t>` (`OperationTiming`); the RSA size hint `choices: 2048, 3072, 4096, 8192` becomes
+    c2's `choices: 2048, 3072, 4096` (`RsaSizeChoices`). The dog banner needs no rule:
+    the harness pipes stdout, so r2 never prints it (§11 D33). c2's output is never
+    rewritten by these rules, and any other difference is still reported.
 - **Coverage**: `cargo llvm-cov` with an 80% line floor on the workspace, enforced from R13
   (as c2's floor was wired in L13). As built (R13): the `coverage` CI job runs `cargo llvm-cov nextest --workspace
   --features softhsm --fail-under-lines 80` on the SoftHSM 2.6.1 fixture token (`just
@@ -7700,12 +7883,20 @@ names the test or harness check that pins the deviation.
   (`Provider::generate_random`, `Backend::generate_random`; §5.17, D29), RSA-RAW results
   (`rsa_raw_modexp`), PKCS#11 attribute reads (`Backend::get_attr`) and raw templates
   (`RawAttr`), decoded `DataInput` bytes, PINs and passwords (secrets are wrapped by the
-  line reader itself, `SecretRead`). Template snapshots (`KeyTemplate`/`AttrValue`, e.g. the
-  `read_full_template` dump the operator writes to a file) are ordinary buffers. c2 §5.5
-  documented only best-effort zeroization (CPython may keep transient copies).
+  line reader itself, `SecretRead`), and the console hex result (user decision
+  2026-10-03): `Renderable::Hex.data` is a `Zeroizing<Vec<u8>>`, `render_hex` writes the
+  hex digits straight into the single pre-sized output `String` (no intermediate hex
+  string, no reallocated leftovers), and `LineIo::print` holds the rendered text in a
+  `Zeroizing<String>`, writes it and then the newline separately (no copy) and wipes it
+  (§4.9.2, §4.9.7) — so a decrypted, derived or random value shown on the console leaves
+  no copy in r2's memory. Terminal, pty and stdout buffers outside r2 are out of reach.
+  Template snapshots (`KeyTemplate`/`AttrValue`, e.g. the `read_full_template` dump the
+  operator writes to a file) are ordinary buffers. c2 §5.5 documented only best-effort
+  zeroization (CPython may keep transient copies).
 - *Reason*: Rust makes the caveat obsolete (PLAN §1 goal). Not observable at the console.
 - *Verified by*: code review; R10 transfer tests assert the transport-key guard runs on
-  success and failure.
+  success and failure; r2-core render `renderable_from_strings_is_text` (the zeroizing
+  `Hex.data`) and the unchanged hex layout tests of D28.
 
 **D4 — Debug output, unexpected errors and the log format.**
 - *Description*: `--debug` prints a Rust backtrace instead of a Python traceback. An
@@ -8367,20 +8558,31 @@ one OpenSSL's `X509` decoder accepts). Verified by R6 x509build tests
   (c2's panel could crop the count of a short result), and stop at the console width.
   `ui.hex_group`/`ui.hex_width` are still accepted, validated and shown by `config show`
   (c2 config files load unchanged) but no longer shape the result. An empty result is
-  still c2's panel (`(empty — 0 bytes)`, no subtitle); `--out` files and all other output
-  are unchanged.
+  still c2's panel (`(empty — 0 bytes)`, no subtitle); `--out` files are unchanged. The
+  one other text that named c2's layout, the hint of `--outformat requires --out`, follows
+  it (user decision 2026-10-03): c2 (and r2 before) said `console output is always the
+  grouped hex dump (§5.1)`, r2 now says `console output is always the hex result (§5.1)`
+  (`make_output`, `commands/crypto.rs`; also `random`'s, §5.17). No parity session reaches
+  it (the one `--outformat` error session fails on an invalid format first). In an
+  interactive session the bottom border also carries the operation time (`16 bytes in
+  4ms`, D31); the hex result's buffers are wiped (D3).
 - *Reason*: operators copy results into other tools; the grouped, bordered rows had to be
-  cleaned by hand.
+  cleaned by hand. A hint naming a layout r2 no longer prints would mislead.
 - *Verified by*: r2-core render `hex_result_is_one_copyable_line_between_the_borders`,
   `hex_result_borders_fit_the_annotations_and_the_console`, `hex_panel_matches_rich_content`
   (rich 15's title, digits and byte count for every hex panel vector); r2-console
-  `tests::crypto_cmd::test_hex_panel_ignores_ui_hex_layout`; the parity harness joins
-  c2's hex panel rows into one line (`normalize.py`, `test_normalize.py` `HexResult`).
+  `tests::crypto_cmd::{test_hex_panel_ignores_ui_hex_layout, test_outformat_requires_out}`,
+  `tests::console_crypto::command_errors_render_as_error_lines`,
+  `tests::random_cmd::random_outformat_requires_out`; the parity harness joins c2's hex
+  panel rows into one line (`normalize.py`, `test_normalize.py` `HexResult`).
 
 **D29 — random: provider-generated random bytes (r2 addition; user decision 2026-10-03).**
-- *Description*: c2@408d6f2 had no `random` command. r2 adds `random <provider> [<length>]
-  [--out <path>] [--outformat raw|hex|b64]` (§5.17): `<length>` bytes (1 to 1048576,
-  prompted as `Number of random bytes` when omitted) from the provider's own RNG — OpenSSL
+- *Description*: c2@408d6f2 had no `random` command. r2 adds `random <provider> [<length>
+  | length=<n>] [--out <path>] [--outformat raw|hex|b64]` (§5.17): `<length>` bytes (1 to
+  1048576, given positionally or as `length=<n>` — both at once → Generic `the length is
+  given twice`, any other `name=value` → Param `unknown parameter '<name>' for random`,
+  hint `valid parameters: length` — and prompted as `Number of random bytes` when omitted)
+  from the provider's own RNG — OpenSSL
   `RAND_bytes` for memory (no login), `C_GenerateRandom` on the logged-in session for
   PKCS#11 (AuthRequired while logged out, checked before the length prompt; CKR errors
   through the §5.2 choke point with context `random generation`) — shown as the hex result
@@ -8389,8 +8591,12 @@ one OpenSSL's `X509` decoder accepts). Verified by R6 x509build tests
   does not support random generation"), the PKCS#11 backend seam `Backend::generate_random`;
   the output is zeroizing (D3) and only its length is logged. Nothing seeds an RNG:
   `C_SeedRandom` is never called and there is no seed option. `random` appears in `help`
-  (summary "Generate random bytes with a provider's RNG") and in completion; every other
-  command and output is unchanged.
+  (summary "Generate random bytes with a provider's RNG") and in completion. Being a
+  command name, `random` is also a difflib candidate (§5.1): the unknown-command and
+  `help <name>` hints for names close to it — e.g. `read`, `ran`, `rand`, `rando` — say
+  `did you mean: random` where c2 said `type 'help' for the command list`. The same
+  provider RNG later also fills IVs left empty at a prompt (D30). Every other command and
+  output is unchanged.
 - *Reason*: operators need key, IV, nonce and test material drawn from the HSM's own RNG
   (or OpenSSL's), without leaving the console.
 - *Verified by*: the contract case `test_generate_random_returns_requested_length` on
@@ -8417,7 +8623,10 @@ one OpenSSL's `X509` decoder accepts). Verified by R6 x509build tests
   successive draws, `--out` raw/hex/b64 and the shown path, the prompt and its re-prompts,
   Ctrl-C at the prompt, inline length range/integer/maximum, argument and option errors,
   AuthRequired before prompting, a logged-in pkcs11-presented provider, provider errors
-  unchanged, the D13 interrupt flag, completion, `help random`),
+  unchanged, the D13 interrupt flag, completion, `help random`), among them
+  `random_takes_the_length_as_length_equals_n_too`, `random_length_given_twice_is_an_error`,
+  `random_rejects_other_name_value_tokens`, `random_argument_errors_come_in_order` and
+  `unknown_commands_suggest_random` (the difflib hints),
   `tests::crypto_cmd::crypto_commands_name_summary_usage`,
   `tests::random_softhsm::{random_on_the_logged_in_token_softhsm,
   random_out_file_on_the_token_softhsm, random_prompts_for_the_length_softhsm,
@@ -8427,6 +8636,146 @@ one OpenSSL's `X509` decoder accepts). Verified by R6 x509build tests
   softhsm::softhsm_random_requires_login_then_draws_from_token}`;
   the parity harness drops r2's `random` help row (`normalize.py`, `test_normalize.py`
   `RandomHelpRow`).
+
+**D30 — Random IV fallback (r2 addition; user decision 2026-10-03).**
+- *Description*: c2 had no fallback: an empty answer at an IV prompt was the codec error
+  `iv: empty input` (hint `paste hex, base64 or PEM data`) and the prompt repeated. r2
+  lets the operator leave the IV of a new encryption or MAC to the provider's RNG:
+  `ParamSpec` gains `random: Option<usize>` and the builder `random(len)` (§4.6.1), set on
+  `aes.encrypt.cbc` `iv` (16), `aes.encrypt.gcm` `iv` (12), `aes.encrypt.ctr`
+  `counter_block` (16) and `aes.sign.gmac` `iv` (12) (§4.6.6 `rnd=N`), and on `wrapload`'s
+  cbc/gcm `iv` (16/12, §5.4); custom-mechanism params never carry it, and
+  `OperationSpec::mirrored` clears it, so the decrypt/verify rows never have it (§4.6.2).
+  `ParamResolver::with_rng(provider)` (§4.6.4) attaches the RNG: `encrypt` and `sign`
+  attach the key's provider (`VerbShape::resolve`, `commands/crypto.rs`), `export --kek`
+  the KEK's provider (`commands/kek.rs`); `decrypt`, `verify` and `load --kek` never do —
+  they need the IV the data was made with, so they keep c2's prompt, error and re-prompt.
+  With an RNG attached, such a param's prompt reads `<prompt without ')'>, empty =
+  random)`, e.g. `IV (16 bytes, empty = random)`, `IV / nonce (12 bytes typical, empty =
+  random)`, `Initial counter block (16 bytes, empty = random)` (a prompt without a trailing
+  parenthesis gains ` (empty = random)`). An empty or whitespace-only answer draws `len`
+  bytes with `Provider::generate_random` (§5.17; an RNG error, e.g. AuthRequired or a CKR,
+  propagates and ends the command), prints `<label> (random): <hex>` (label = the prompt
+  before ` (`: `IV`, `IV / nonce`, `Initial counter block`) and uses them; any other
+  answer parses as before, and an inline `iv=…` never draws. The draw is not timed (D31).
+  The printed IV is what the operator needs to decrypt (or `load --kek`) later.
+- *Reason*: operators otherwise had to invent an IV or nonce by hand for every
+  encryption; reusing one under the same key breaks CBC/CTR confidentiality and GCM/GMAC
+  authenticity. The key's own provider (the HSM's RNG for a token key) supplies it.
+- *Verified by*: r2-ops `params::{random_iv_cbc_empty_answer_draws_from_rng,
+  random_iv_whitespace_only_answer_counts_as_empty,
+  random_iv_successive_draws_follow_the_rng_sequence,
+  random_iv_non_empty_answer_is_parsed_without_drawing,
+  random_iv_invalid_answer_reprompts_then_empty_draws,
+  without_rng_empty_iv_answer_is_an_error_and_reprompts,
+  mirrored_decrypt_and_verify_never_draw_random,
+  random_rows_gcm_ctr_gmac_prompts_labels_and_lengths,
+  random_rng_error_propagates_out_of_resolve,
+  random_prompt_without_trailing_parenthesis_gains_suffix,
+  random_is_inert_on_non_bytes_params, random_inline_value_never_prompts_nor_draws}`,
+  `ops_model::shared_param_lists_match_the_spec`,
+  `ops_registry::test_mirror_rows_share_cli_mechanism_and_params`; r2-services
+  `wrapload::param_specs_equal_the_registered_builtin_rows`; r2-console
+  `tests::random_iv::{encrypt_with_an_empty_iv_answer_uses_a_random_iv,
+  encrypt_with_a_random_iv_round_trips_through_decrypt,
+  sign_gmac_with_an_empty_iv_answer_uses_a_random_iv, a_given_iv_answer_is_used_as_is,
+  a_blank_iv_answer_also_draws, the_draw_comes_from_the_keys_pkcs11_provider,
+  other_providers_are_never_asked, an_rng_failure_aborts_the_command_with_that_error,
+  ctrl_c_at_the_iv_prompt_aborts_without_a_draw,
+  decrypt_with_an_empty_iv_answer_is_an_error_and_reprompts,
+  decrypt_mirrors_never_offer_random, verify_gmac_with_an_empty_iv_answer_is_not_random,
+  export_kek_cbc_with_an_empty_iv_uses_a_random_iv,
+  export_kek_random_iv_round_trips_on_the_memory_provider,
+  load_kek_cbc_with_an_empty_iv_is_not_random}`,
+  `tests::crypto_cmd::test_missing_required_param_is_prompted`,
+  `tests::export_kek::test_omitted_param_is_prompted`; r2-cli
+  `e2e_timing_iv::{memory_random_iv_round_trip_across_sessions,
+  memory_decrypt_empty_iv_is_not_random,
+  softhsm::softhsm_encrypt_empty_iv_draws_from_token}`; the parity harness removes the
+  `, empty = random` note from r2's prompts (`normalize.py`, `test_normalize.py`
+  `RandomIvPrompt`).
+
+**D31 — Operation timing (r2 addition; user decision 2026-10-03).**
+- *Description*: c2 never showed how long an operation took. r2 measures the wall-clock
+  time of the provider call(s) a command makes and shows it after the result in real
+  sessions. `r2_core::runtime` gains a per-thread accumulator (§4.9.8): `timed(f)` wraps
+  ONE provider call (always measuring), `repl::dispatch` calls `reset_operation_time()`
+  before every `Command::run` (§4.9.5), `take_operation_time()` returns the sum (None when
+  nothing was timed or the display is off) and `timing_suffix()` renders ` in <t>`;
+  `format_elapsed` prints whole µs under 1 ms (`412µs`), whole ms under 1 s (`4ms`), else
+  seconds with two decimals (`1.23s`), truncated. The display is per thread and off by
+  default; r2-cli's `session()` calls `set_timing_shown(io.is_none())`, so the `r2` binary
+  (terminal or pipe) shows it and in-process sessions with an injected IO (tests) print
+  c2's output. Timed — only the provider call, never prompts, the template editor,
+  parsing, file I/O or lookups (`find_key`, `list_keys`, `status`): the crypto verbs,
+  `derive` and `random` (inside `busy_with`), `generate`, `load` (`import_key`), `export`
+  (`export_key`, both calls of a `--cert` PKCS#12 export), `csr` (the SPKI `export_key`
+  and the `sign` calls), `export --kek` (`wrap_key`), `load --kek` (`unwrap_key`) and
+  `copy` (the export/import/generate/wrap/unwrap of its route; not the cleanup deletes).
+  Shown: the hex result's bottom border reads `16 bytes in 4ms` (`Renderable::Hex.elapsed`,
+  `io::hex_timed`, §4.9.2; empty data: `in 4ms`; the borders widen to show it whole), and
+  the result lines end with ` in <t>` — `generated mem:a (256-bit aes) in 1ms`, the
+  keypair line, the table titles `loaded into mem in 17µs` / `unwrapped into mem
+  (AES-KEY-WRAP-PAD) in 45µs`, `wrote <n> bytes to <path> (pem) in 50µs`, `wrote CSR for …
+  (subject: CN=e) in 761µs`, `wrote <path>: 24-byte blob wrapped under mem:a with
+  AES-KEY-WRAP-PAD, hex-encoded in 52µs`, `copied mem:k -> mem:k3 (secret aes) in 18µs`,
+  the verbs' `--out` line `wrote 16 bytes to x in 4ms`, `signature VALID in 39µs` (a plain
+  span after the styled verdict) and `derived key (provider-resident): <ref> in 3ms`. The
+  suffix is always at the very end of its line, so rich's wrapping of the text before it
+  is unchanged. `delete`, `key` (info/edit), `keys`, `login`, `ops` and the other commands
+  are not timed. Service signatures are unchanged (§4.9.10).
+- *Reason*: operators compare HSM and software performance and spot slow tokens (an RSA
+  8192 keygen takes seconds, D32) without external tooling.
+- *Verified by*: r2-core `runtime::{format_elapsed_uses_adaptive_truncated_units,
+  timed_accumulates_until_taken_and_only_shows_when_on, operation_time_is_per_thread}`,
+  render `hex_result_footer_shows_the_operation_time`; r2-console
+  `tests::timing::{encrypt_hex_result_shows_the_provider_time,
+  encrypt_out_line_ends_with_the_time, sign_and_verify_show_the_time,
+  random_hex_result_shows_the_time, generate_lines_end_with_the_time,
+  load_table_title_shows_the_time, export_lines_end_with_the_time,
+  csr_line_ends_with_the_time, export_kek_line_ends_with_the_time,
+  load_kek_table_title_shows_the_time, copy_line_ends_with_the_time,
+  timing_off_by_default_leaves_the_output_unchanged, timing_can_be_switched_off_again,
+  run_line_resets_the_time_before_each_command, a_failed_commands_time_does_not_leak}`;
+  r2-cli `e2e_timing_iv::memory_session_shows_operation_timing`,
+  `e2e_random::{memory_random_console_files_prompt_and_errors,
+  softhsm::softhsm_random_requires_login_then_draws_from_token}` (timed footers and
+  `--out` line); the parity harness strips the suffix from r2's raw output wherever rich
+  wrapped it (`normalize.py`, `test_normalize.py` `OperationTiming`).
+
+**D32 — RSA 8192 (r2 addition; user decision 2026-10-03).**
+- *Description*: c2's `generate … rsa` offered `size` ∈ {2048, 3072, 4096}; r2 adds 8192
+  (`RSA_SIZES`, `commands/keys.rs`, §5.3): the size choices, the invalid-choice hint
+  (`choices: 2048, 3072, 4096, 8192`) and completion (`size=8192`) list it. Nothing else
+  limited RSA sizes — the providers, keyparse and every buffer are size-derived — so
+  8192-bit keys load, export, copy, sign/verify and encrypt/decrypt as before; SoftHSM 2.6
+  and 2.7 advertise RSA key sizes up to 16384 bits. Costs: an 8K keygen takes 5–60 s with
+  OpenSSL (memory) and ~13–20 s on SoftHSM (the time is shown, D31); loading an 8K private
+  key costs ~5 s per `RSA_check_key`, which runs twice for a memory load (pyca parity:
+  once in keyparse, once on the memory import).
+- *Reason*: long-lived RSA keys (roots, archival KEKs) are commonly 8192-bit.
+- *Verified by*: r2-memory `memory_parity::rsa_8192_signs_encrypts_and_exports` (a
+  committed 8K test vector, `support/rsa8192.der`); r2-pkcs11
+  `softhsm_crypto::softhsm_rsa_8192_generate_sign_and_oaep` (real 8K keygen on SoftHSM);
+  r2-console `tests::keys_cmd::generate_rsa_8192_is_offered` (choices, hint,
+  completion); the parity harness maps r2's size hint to c2's list (`normalize.py`,
+  `test_normalize.py` `RsaSizeChoices`).
+
+**D33 — Startup banner (r2 addition; user decision 2026-10-03).**
+- *Description*: c2 printed only `c2 <version> — type 'help' for commands`. On a terminal
+  — stdout is a terminal and the IO is not injected — r2 prints a plain-text dog (`DOG`,
+  `crates/r2-cli/src/main.rs`, a `Renderable::Text`, so no colors on any sink) above its
+  `r2 <version> — type 'help' for commands` line; never into a pipe and never in tests, so
+  scripted sessions and the parity harness keep c2's banner. It replaces a colored boat
+  banner added in commit 165b8bc, which was never recorded here. The terminal check
+  (`stdout_is_terminal`) is the second sanctioned `std::io::IsTerminal::is_terminal` site
+  (`#[allow(clippy::disallowed_methods)]`; §4.1.3 and the `clippy.toml` reason list it): it
+  only decides decoration, so an msys pipe mistaken for a terminal is harmless.
+- *Reason*: a friendlier start for a person at a terminal, without touching any output a
+  script or the harness reads.
+- *Verified by*: r2-cli (bin) `tests::{dog_banner_render_is_the_art_verbatim_without_colors,
+  dog_banner_is_not_shown_on_an_injected_io}`; the piped `e2e_timing_iv` sessions assert
+  that no banner is printed (`no_banner`).
 
 **Resolved without deviation** (recorded so they are not mistaken for gaps):
 
