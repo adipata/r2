@@ -532,6 +532,37 @@ fn test_generate_keypair_on_pkcs11_opens_private_then_public_editor() {
     );
 }
 
+/// §11 D32: RSA 8192 is offered next to c2's 2048/3072/4096; other sizes stay refused.
+#[test]
+fn generate_rsa_8192_is_offered() {
+    let p = make_pair(&[]);
+    run_line(&p.ctx, "generate mem rsa size=8192 --label big").unwrap();
+    let call = &calls_of(&p.mem, "generate_key")[0];
+    assert_eq!(
+        (call[1].as_str(), call[2].as_str()),
+        ("KeyAlgorithm.RSA", "8192")
+    );
+    assert_eq!(
+        p.io.output(),
+        ["generated 8192-bit rsa keypair mem:big (public key shares the label/id)"]
+    );
+    let err = run_line(&p.ctx, "generate mem rsa size=1024 --label small").unwrap_err();
+    assert_eq!(
+        err.kind,
+        ErrorKind::Param {
+            param_name: "size".into()
+        }
+    );
+    assert_eq!(err.message, "size: invalid choice '1024'");
+    assert_eq!(err.hint.as_deref(), Some("choices: 2048, 3072, 4096, 8192"));
+    assert_eq!(calls_of(&p.mem, "generate_key").len(), 1);
+    let sizes: Vec<String> = complete(&p.ctx, "generate", &["generate", "mem", "rsa"], "")
+        .into_iter()
+        .filter(|c| c.starts_with("size="))
+        .collect();
+    assert_eq!(sizes, ["size=2048", "size=3072", "size=4096", "size=8192"]);
+}
+
 #[test]
 fn test_generate_not_logged_in_fails_before_prompts() {
     let p = make_pair(&[]); // empty queue: any prompt would panic instead

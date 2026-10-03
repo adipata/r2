@@ -246,12 +246,12 @@ pub fn run_export(ctx: &AppContext, args: &BoundArgs) -> r2_core::Result<()> {
         format!(", {outformat}-encoded")
     };
     ctx.io.print(Renderable::Text(format!(
-        "wrote {}: {}-byte blob wrapped under {} with {}{}{encoding}",
+        "wrote {}: {}-byte blob wrapped under {} with {}{encoding}{}",
         path.display(),
         blob.len(),
         kek.key_ref.display(),
         entry.spec.mechanism,
-        timing_suffix()
+        timing_suffix() // §11 D31: last, so the wrap of the text before it is unchanged
     )));
     Ok(())
 }
