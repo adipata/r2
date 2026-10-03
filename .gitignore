@@ -2,3 +2,6 @@
 *.profraw
 __pycache__/
 *.pyc
+
+# JetBrains IDE project folder (RustRover)
+.idea/

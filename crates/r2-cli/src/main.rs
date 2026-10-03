@@ -23,7 +23,7 @@ use r2_console::commands::all_commands;
 use r2_console::io::open_console_io;
 use r2_console::template_editor::create_template_editor;
 use r2_core::error::ConsoleError;
-use r2_core::io::{ConsoleIo, Renderable};
+use r2_core::io::{ConsoleIo, Renderable, Span, Tone};
 use r2_core::text::py_repr;
 use r2_ops::build_operation_registry;
 use r2_provider::ProviderRegistry;
@@ -66,6 +66,62 @@ fn install_ctrlc() {
     if let Err(err) = ctrlc::set_handler(r2_core::runtime::request_interrupt) {
         tracing::warn!(target: "r2::app", "cannot install the Ctrl-C handler: {err}");
     }
+}
+
+/// Whether stdout is a terminal, for the decorative boat only. The std check may accept
+/// an msys pipe on Windows (why `IsTty` decides the real TerminalIo/PlainIo switch); for
+/// a cosmetic banner that is harmless.
+#[allow(clippy::disallowed_methods)] // the banner-only std terminal check
+fn stdout_is_terminal() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdout().is_terminal()
+}
+
+/// The sailing boat shown above the banner on a terminal.
+const BOAT: &str = r"     ~~~             |
+~~~~     ~~~~      -----                    |
+     ~~~           )___(                  -----
+                     |                    )___(
+                 ---------                  |
+                /         \              -------
+               /___________\            /       \
+                     |                 /_________\
+              ---------------               |
+             /               \        -------------
+            /                 \      /             \
+           /___________________\    /_______________\
+         ____________|______________________|__________
+          \_                                        _/
+            \______________________________________/
+     ~~..             ...~~~.           ....~~~...     ..~";
+
+/// The boat as styled lines: waves dim, sails and masts bold, hull red.
+fn boat_banner() -> Renderable {
+    let lines = BOAT
+        .lines()
+        .enumerate()
+        .map(|(row, text)| {
+            let hull = (12..=14).contains(&row);
+            let mut spans: Vec<Span> = Vec::new();
+            for ch in text.chars() {
+                let tone = match ch {
+                    '~' | '.' if !hull => Tone::Dim,
+                    ' ' => Tone::Plain,
+                    _ if hull => Tone::Danger,
+                    _ => Tone::Bold,
+                };
+                match spans.last_mut() {
+                    Some(span) if span.tone == tone => span.text.push(ch),
+                    _ => spans.push(Span {
+                        text: ch.to_string(),
+                        tone,
+                    }),
+                }
+            }
+            spans
+        })
+        .collect();
+    Renderable::Styled(lines)
 }
 
 /// How the provider registry is built (`build_provider_registry`; tests inject stubs).
@@ -148,6 +204,9 @@ fn session(
 ) -> u8 {
     r2_core::crypto::ensure_legacy_provider();
     let config = &loaded.config;
+    // The boat is decoration for a person at a terminal: never on an injected (test) IO,
+    // never into a pipe, so scripted sessions and the parity harness keep c2's banner.
+    let show_boat = io.is_none() && stdout_is_terminal();
     let io = io.unwrap_or_else(|| open_console_io(config));
     let startup = || -> r2_core::Result<_> {
         let providers = build_providers(config)?;
@@ -172,6 +231,9 @@ fn session(
         template_editor,
     });
     tracing::info!(target: "r2::app", "r2 {VERSION} started ({count} providers)");
+    if show_boat {
+        ctx.io.print(boat_banner());
+    }
     ctx.io.print(Renderable::Text(format!(
         "r2 {VERSION} — type 'help' for commands"
     )));
@@ -214,6 +276,45 @@ mod tests {
 
     use super::*;
     use crate::bootstrap::tests::{CUSTOM_MECH, StubProviders};
+
+    #[test]
+    fn boat_banner_plain_render_is_the_art_verbatim() {
+        let cfg = r2_core::render::RenderConfig::CAPTURE;
+        let plain = r2_core::render::render_plain(&boat_banner(), &cfg);
+        assert_eq!(plain, BOAT);
+        assert_eq!(BOAT.lines().count(), 16);
+    }
+
+    #[test]
+    fn boat_banner_colors_hull_red_and_waves_dim() {
+        let cfg = r2_core::render::RenderConfig::CAPTURE;
+        let lines: Vec<String> = r2_core::render::render(&boat_banner(), &cfg)
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        let red = "\u{1b}[31m";
+        let dim = "\u{1b}[2m";
+        let bold = "\u{1b}[1m";
+        assert!(lines[0].contains(dim) && !lines[0].contains(red)); // waves
+        assert!(lines[6].contains(bold) && !lines[6].contains(red)); // sails
+        assert!(lines[13].contains(red) && !lines[13].contains(bold)); // hull
+        assert!(lines[15].contains(dim) && !lines[15].contains(red)); // water
+    }
+
+    #[test]
+    fn boat_banner_is_not_shown_on_an_injected_io() {
+        let _lock = global_state_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let config = write_isolated_config(dir.path(), "");
+        let io = Rc::new(ScriptedIo::new(["exit"]));
+        let code = run(
+            &args(&["--config", &config.display().to_string()]),
+            Some(Rc::clone(&io) as Rc<dyn ConsoleIo>),
+            &|c: &AppConfig| crate::bootstrap::build_with(c, &StubProviders::default()),
+        );
+        assert_eq!(code, 0);
+        assert!(!io.output().iter().any(|line| line.contains("~~~")));
+    }
 
     /// An external config keeping history/log inside `dir` and autodetect off.
     fn write_isolated_config(dir: &Path, extra: &str) -> std::path::PathBuf {
