@@ -45,6 +45,7 @@ r2> generate mem aes size=256 --label demo
 r2> encrypt mem:demo gcm iv=0x000102030405060708090a0b deadbeef
 r2> generate mem generic size=256 --label mac     # CKK_GENERIC_SECRET (HMAC key)
 r2> sign mem:mac hmac hash=sha256 deadbeef
+r2> random mem 32                                 # 32 bytes from the provider's RNG
 r2> load mem data 48656c6c6f --label note        # CKO_DATA: opaque bytes
 r2> load mem --file server.pem --format cert --label srv   # X.509 certificate
 r2> keys mem                                      # every object: keys, certs, data

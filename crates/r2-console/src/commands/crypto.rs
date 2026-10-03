@@ -12,8 +12,8 @@
 // Results default to the hex result on the console (one unbroken hex line between the
 // titled panel borders, §11 D28); `--out` writes raw bytes unless `--outformat hex|b64`
 // is given. `random` (§5.17, §11 D29; r2 only) draws bytes from a provider's RNG and
-// emits them the same way. Payload bytes travel through `r2_core::datainput` (§4.4). Commands return
-// errors, never print them (§4.2).
+// emits them the same way. Payload bytes travel through `r2_core::datainput` (§4.4).
+// Commands return errors, never print them (§4.2).
 //
 // The `ops` table: the OperationRegistry deliberately has no global enumeration surface
 // (§4.6), so the per-provider table is assembled by probing `available_for()` with one

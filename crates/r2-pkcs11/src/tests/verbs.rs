@@ -3,8 +3,10 @@
 //! TestOtherKeyTypes refusals) and test_provider_objects.py (public RSA-RAW, CKR mapping,
 //! custom dispatch, derive, twin-targeted sign), plus r2 tests of every software fallback
 //! (ECB PKCS#7, non-SHA1 OAEP, DigestInfo, bare-ECDSA prehash, CMAC/HMAC truncation, GMAC
-//! construction, PSS salt) the spec requires (§5.8–§5.10).
+//! construction, PSS salt) the spec requires (§5.8–§5.10), and the r2-only random
+//! generation (§5.17).
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use indexmap::IndexMap;
 use openssl::pkey::PKey;
@@ -12,11 +14,14 @@ use openssl::rsa::Padding;
 use r2_core::error::ErrorKind;
 use r2_core::keys::{Curve, KeyAlgorithm, KeyClass, KeyInfo, KeyMaterial};
 use r2_core::template::AttrValue;
-use r2_provider::{GenerateRequest, KeySelector, Provider};
+use r2_provider::{AuthState, GenerateRequest, KeySelector, Provider};
 
-use super::{exportable, logged_in, logged_in_with, mech, pbytes, penum, pint, ul};
+use super::{
+    USER_PIN, exportable, logged_in, logged_in_with, mech, pbytes, penum, pin, pint, provider_over,
+    token_at, ul,
+};
 use crate::backend::fake::{DEFAULT_MECHANISMS, FakeBackend};
-use crate::backend::{Backend, MechSpec};
+use crate::backend::{Backend, BackendError, Ckr, MechSpec};
 use crate::ckr::rv;
 
 const CKA_CLASS: u64 = 0x0000;
@@ -1362,4 +1367,148 @@ fn certificates_stand_in_for_public_keys_only() {
             Some("certificates stand in for PUBLIC keys only (encrypt/verify/wrap)")
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// random generation (§5.17; r2-only, no c2 counterpart)
+// ---------------------------------------------------------------------------
+
+/// How many times the backend saw a C_GenerateRandom (failed attempts included).
+fn random_calls(backend: &FakeBackend) -> usize {
+    backend
+        .calls()
+        .iter()
+        .filter(|c| **c == "generate_random")
+        .count()
+}
+
+#[test]
+fn generate_random_draws_the_requested_length_from_the_token() {
+    let (backend, provider) = logged_in();
+    let first = provider.generate_random(32).unwrap();
+    assert_eq!(first.len(), 32);
+    assert_eq!(random_calls(&backend), 1); // one C_GenerateRandom, never in software
+    let second = provider.generate_random(32).unwrap();
+    assert_ne!(first.as_slice(), second.as_slice()); // successive draws differ
+    for len in [1, 16, 1024, 1_048_576] {
+        assert_eq!(provider.generate_random(len).unwrap().len(), len);
+    }
+    // the fake's bytes depend on the draw number only: a fresh token's first draw matches
+    let (_fresh_backend, fresh) = logged_in();
+    assert_eq!(
+        fresh.generate_random(32).unwrap().as_slice(),
+        first.as_slice()
+    );
+}
+
+#[test]
+fn generate_random_requires_login_before_touching_the_token() {
+    // never logged in
+    let backend = Rc::new(FakeBackend::new());
+    let provider = provider_over(&backend);
+    let err = provider.generate_random(16).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::AuthRequired);
+    assert_eq!(err.message, "login required: run `login hsm`");
+    assert_eq!(err.hint, None);
+    assert_eq!(random_calls(&backend), 0);
+    // logged out again: the session stays open, but the provider still refuses
+    let (backend, provider) = logged_in();
+    provider.logout().unwrap();
+    let err = provider.generate_random(16).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::AuthRequired);
+    assert_eq!(err.message, "login required: run `login hsm`");
+    assert_eq!(random_calls(&backend), 0);
+}
+
+#[test]
+fn generate_random_ckr_failures_go_through_the_choke_point() {
+    let (backend, provider) = logged_in();
+    backend.fail_next("generate_random", rv::CKR_RANDOM_NO_RNG);
+    let err = provider.generate_random(16).unwrap_err();
+    assert_eq!(err.kind.class_name(), "Pkcs11Error");
+    assert_eq!(err.ckr(), Some((0x121, "CKR_RANDOM_NO_RNG")));
+    assert_eq!(
+        err.message,
+        "PKCS#11 random generation failed (CKR_RANDOM_NO_RNG)"
+    );
+    assert_eq!(err.hint, None);
+
+    backend.fail_next("generate_random", rv::CKR_FUNCTION_NOT_SUPPORTED);
+    let err = provider.generate_random(16).unwrap_err();
+    assert_eq!(err.ckr(), Some((0x54, "CKR_FUNCTION_NOT_SUPPORTED")));
+    assert_eq!(
+        err.message,
+        "token firmware lacks this function (CKR_FUNCTION_NOT_SUPPORTED)"
+    );
+    assert_eq!(
+        err.hint.as_deref(),
+        Some("capability missing for random generation")
+    );
+    assert_eq!(random_calls(&backend), 2); // not retried: neither is a session loss
+    assert_eq!(provider.status().auth, AuthState::LoggedIn);
+    assert_eq!(provider.generate_random(16).unwrap().len(), 16); // the session is intact
+}
+
+#[test]
+fn generate_random_recovers_a_lost_session_with_keep_pin() {
+    let backend = Rc::new(FakeBackend::new());
+    let provider = provider_over(&backend);
+    provider
+        .login(&token_at(&provider, 0), &pin(USER_PIN), true)
+        .unwrap();
+    backend.invalidate_session(); // token dropped the session
+    let bytes = provider.generate_random(24).unwrap(); // transparently recovered
+    assert_eq!(bytes.len(), 24);
+    assert_eq!(random_calls(&backend), 2); // the failed call and its one retry
+    assert_eq!(backend.sessions_opened(), 2); // a fresh session was opened
+    assert_eq!(provider.status().auth, AuthState::LoggedIn);
+}
+
+#[test]
+fn generate_random_without_keep_pin_drops_to_logged_out() {
+    let (backend, provider) = logged_in(); // default: no stored PIN
+    backend.invalidate_session();
+    let err = provider.generate_random(24).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::AuthRequired);
+    assert_eq!(err.message, "session lost — login again");
+    assert_eq!(
+        err.hint.as_deref(),
+        Some("run `login hsm` (use --keep-pin for auto-reconnect)")
+    );
+    assert_eq!(provider.status().auth, AuthState::LoggedOut);
+    assert_eq!(random_calls(&backend), 1); // no retry without a stored PIN
+}
+
+#[test]
+fn generate_random_second_session_loss_drops_even_with_keep_pin() {
+    let backend = Rc::new(FakeBackend::new());
+    let provider = provider_over(&backend);
+    provider
+        .login(&token_at(&provider, 0), &pin(USER_PIN), true)
+        .unwrap();
+    backend.invalidate_all(); // recovery succeeds, the retry fails
+    let err = provider.generate_random(24).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::AuthRequired);
+    assert_eq!(err.message, "session lost — login again");
+    assert_eq!(provider.status().auth, AuthState::LoggedOut);
+    assert_eq!(random_calls(&backend), 2); // retried exactly once
+}
+
+#[test]
+fn fake_generate_random_needs_a_live_session_but_no_login() {
+    // PKCS#11 semantics the FakeBackend models: C_GenerateRandom is a session call, not an
+    // object call; the provider's login requirement is r2 policy layered on top
+    let backend = FakeBackend::new();
+    backend.initialize().unwrap();
+    assert_eq!(
+        backend.generate_random(8).unwrap_err(),
+        BackendError::Ckr(Ckr {
+            code: rv::CKR_SESSION_HANDLE_INVALID,
+            function: "generate_random",
+        })
+    );
+    backend.open_session(0).unwrap();
+    assert!(!backend.is_logged_in(0));
+    assert_eq!(backend.generate_random(8).unwrap().len(), 8);
+    assert!(backend.generate_random(0).unwrap().is_empty());
 }

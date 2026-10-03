@@ -19,6 +19,7 @@ use r2_provider::*;
 use r2_testkit::fixtures::rsa_pkcs8_and_cert;
 use r2_testkit::{FakeHooks, FakeProvider};
 use secrecy::SecretString;
+use zeroize::Zeroizing;
 
 fn err<T>(result: Result<T>) -> ConsoleError {
     match result {
@@ -668,6 +669,118 @@ fn hmac_truncation_and_derive_default_length() {
         .unwrap();
     let raw = fake.derive(&pair, &mech("ECDH")).unwrap().raw.unwrap();
     assert_eq!(raw.len(), 32); // SHA-256 base without out_len
+}
+
+// -- random generation (§5.17) ---------------------------------------------------------------
+
+#[test]
+fn generate_random_records_and_is_deterministic_per_name() {
+    let fake = FakeProvider::new("mem");
+    let first = fake.generate_random(16).unwrap();
+    assert_eq!(first.len(), 16);
+    assert_eq!(fake.calls(), vec![call(&["generate_random", "16"])]);
+    // same name, same sequence; successive draws differ; another name differs
+    let twin = FakeProvider::new("mem");
+    assert_eq!(*twin.generate_random(16).unwrap(), *first);
+    let second = fake.generate_random(16).unwrap();
+    assert_eq!(second.len(), 16);
+    assert_ne!(*second, *first);
+    let other = FakeProvider::new("other");
+    assert_ne!(*other.generate_random(16).unwrap(), *first);
+}
+
+#[test]
+fn generate_random_requires_login_on_a_login_capable_fake() {
+    let hsm = FakeProvider::new("hsm")
+        .with_type_name("pkcs11")
+        .starting_logged_out();
+    let error = err(hsm.generate_random(8));
+    assert_eq!(error.kind, ErrorKind::AuthRequired);
+    assert_eq!(error.message, "login required: run `login hsm`");
+    // recorded before the login check
+    assert_eq!(hsm.calls(), vec![call(&["generate_random", "8"])]);
+    // a logged-in pkcs11 fake draws; logout refuses again
+    let hsm = FakeProvider::new("hsm").with_type_name("pkcs11");
+    assert_eq!(hsm.generate_random(8).unwrap().len(), 8);
+    hsm.logout().unwrap();
+    assert_eq!(
+        err(hsm.generate_random(8)).message,
+        "login required: run `login hsm`"
+    );
+    // the memory presentation never needs a login
+    let memory = FakeProvider::new("mem").starting_logged_out();
+    assert_eq!(memory.generate_random(8).unwrap().len(), 8);
+}
+
+/// Overrides `generate_random` with fixed bytes, or delegates to `next`.
+struct Rng {
+    fixed: Option<Vec<u8>>,
+    seen: RefCell<Vec<usize>>,
+}
+
+impl FakeHooks for Rng {
+    fn generate_random(
+        &self,
+        next: &dyn Provider,
+        len: usize,
+    ) -> Option<Result<Zeroizing<Vec<u8>>>> {
+        self.seen.borrow_mut().push(len);
+        Some(match &self.fixed {
+            Some(bytes) => Ok(Zeroizing::new(bytes.clone())),
+            None => next.generate_random(len),
+        })
+    }
+}
+
+#[test]
+fn generate_random_hooks_override_and_delegate() {
+    // an overriding hook returns its bytes; nothing is recorded for the call
+    let rng = Rc::new(Rng {
+        fixed: Some(vec![0xAA; 4]),
+        seen: RefCell::default(),
+    });
+    let fake = FakeProvider::new("mem").with_hooks(rng.clone());
+    assert_eq!(*fake.generate_random(32).unwrap(), [0xAA; 4]);
+    assert_eq!(*rng.seen.borrow(), [32]);
+    assert!(fake.calls().is_empty());
+    // a delegating hook reaches the base method (recorded, base bytes)
+    let rng = Rc::new(Rng {
+        fixed: None,
+        seen: RefCell::default(),
+    });
+    let fake = FakeProvider::new("mem").with_hooks(rng.clone());
+    let bytes = fake.generate_random(16).unwrap();
+    assert_eq!(*rng.seen.borrow(), [16]);
+    assert_eq!(fake.calls(), vec![call(&["generate_random", "16"])]);
+    assert_eq!(
+        *bytes,
+        *FakeProvider::new("mem").generate_random(16).unwrap()
+    );
+}
+
+#[test]
+fn generate_random_does_not_shift_generated_keys() {
+    let aes_key = |fake: &FakeProvider| {
+        let key = fake
+            .generate_key(&GenerateRequest {
+                size_bits: Some(256),
+                ..GenerateRequest::new(KeyAlgorithm::Aes, "k")
+            })
+            .unwrap();
+        fake.export_key(&key).unwrap().data
+    };
+    let drew = FakeProvider::new("mem");
+    drew.generate_random(32).unwrap();
+    drew.generate_random(32).unwrap();
+    let fresh = FakeProvider::new("mem");
+    let key = aes_key(&drew);
+    assert_eq!(key.len(), 32);
+    assert_eq!(*key, *aes_key(&fresh));
+    // and generating a key does not shift the random sequence either
+    let third = drew.generate_random(32).unwrap();
+    fresh.generate_random(32).unwrap();
+    fresh.generate_random(32).unwrap();
+    assert_eq!(*third, *fresh.generate_random(32).unwrap());
 }
 
 // -- editing ---------------------------------------------------------------------------------

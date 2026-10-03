@@ -73,6 +73,8 @@ history):
    operations with prompted parameters, no code changes.
 8. Data objects (CKO_DATA): load/export/copy/delete opaque values; `keys` lists every
    object class, including key types r2 cannot operate on (shown as `other`) (c2 L16).
+9. Random bytes from a provider's own RNG (`random`; OpenSSL for memory, C_GenerateRandom
+   on a logged-in token) — an r2 addition, §5.17, §11 D29.
 
 Rewrite goals (PLAN §1), in priority order:
 
@@ -329,7 +331,8 @@ Conventions used in every code block of §4:
   method overridden (the owning loop adds overrides). Exceptions: `Provider::as_any` gets
   the working body `self`; `Drop::drop` stubs are empty (`{}`), never a panic;
   `Pkcs11Provider` gets `as_token_init → Some(self)`, the ten R5b delegations
-  `self.<method>_impl(..)` (§4.5.5; five of them override trait defaults) and
+  `self.<method>_impl(..)` (§4.5.5; five of them override trait defaults; a sixth
+  overriding one, `generate_random_impl`, was added after R0 by §11 D29) and
   `TokenInit::init_token → Pkcs11Provider::init_token(self, ..)` (the inherent method).
 - Paths are crate paths (`r2_core::keys::KeyInfo`). A `use` line at the top of a block only
   documents where names come from.
@@ -476,7 +479,7 @@ crates/r2-pkcs11/             (lib; only `catalog` and `softhsm` are pub modules
   src/provider/objects.rs     list/find/import/generate/delete/export, KeyInfo
                               building, identity resolution, twin guard            R5a
   src/provider/crypto.rs      encrypt/decrypt/sign/verify/derive + software
-                              fallbacks                                            R5b
+                              fallbacks, generate_random (§5.17)                   R5b
   src/provider/wrap.rs        wrap/unwrap, KWP preference, CKA_VALUE_LEN retry     R5b
   src/provider/edit.rs        read_key_template, update_key, read_full_template    R5b
   src/mechanisms.rs (crate-private) custom packers, MechanismInvocation → MechSpec R5b
@@ -569,7 +572,8 @@ another loop's test file, loops.md rule 6):
   `crypto_cmd.rs` R9, `load_kek.rs` R15). r2-pkcs11's `src/tests/mod.rs` is created by
   R5a; R5b appends its own `mod` lines (sequential handoff).
 - End-to-end tests that spawn the `r2` binary (assert_cmd): `crates/r2-cli/tests/`
-  (`e2e_repl.rs` R7, `e2e_console_keys.rs` R8, `e2e_wizard.rs` R11, …).
+  (`e2e_repl.rs` R7, `e2e_console_keys.rs` R8, `e2e_random.rs` R9, `e2e_wizard.rs` R11,
+  …).
 
 **R0 skeleton handoff (the only sanctioned shared-file handoffs).**
 
@@ -2033,7 +2037,8 @@ use crate::error::Result;
 #[allow(clippy::disallowed_methods)] // the one sanctioned openssl::memcmp::eq call (§4.1.3)
 pub fn ct_eq(a: &[u8], b: &[u8]) -> bool { .. }
 /// `openssl::rand::rand_bytes` into a zeroizing buffer (CKA_IDs, transport keys, AES/generic
-/// keygen). Failure → Crypto "random number generation failed".
+/// keygen, MemoryProvider::generate_random — §5.17). Failure → Crypto "random number
+/// generation failed".
 pub fn random_bytes(len: usize) -> Result<Zeroizing<Vec<u8>>> { .. }
 /// Load the OpenSSL "legacy" provider once per process:
 /// `static LEGACY: OnceLock<Option<openssl::provider::Provider>>` initialized with
@@ -2293,6 +2298,16 @@ pub trait Provider {
     /// Peer public key travels as `mech.params["peer"]` (SPKI DER or raw point).
     fn derive(&self, key: &KeyInfo, mech: &MechanismInvocation) -> Result<DeriveResult>;
 
+    // -- random generation (§5.17, §11 D29) --
+    /// `len` bytes from the provider's own RNG, in a zeroizing buffer (D3): memory = OpenSSL
+    /// (`r2_core::crypto::random_bytes`), PKCS#11 = C_GenerateRandom on the logged-in session
+    /// (AuthRequired while logged out). No seeding: C_SeedRandom is never called. The
+    /// console bounds `len` (§5.17); providers return exactly `len` bytes.
+    fn generate_random(&self, len: usize) -> Result<Zeroizing<Vec<u8>>> {
+        let _ = len;
+        Err(ConsoleError::unsupported(format!("{} does not support random generation", self.name())))
+    }
+
     // -- wrap/unwrap (frozen-provisional, §4.11) --
     fn wrap_key(&self, wrapping_key: &KeyInfo, mech: &MechanismInvocation, target: &KeyInfo, options: &WrapOptions) -> Result<Vec<u8>> {
         let _ = (wrapping_key, mech, target, options);
@@ -2507,7 +2522,8 @@ impl MemoryProvider {
     /// incl. RSA-AES-KEY-WRAP (OAEP(eph-AES-256)‖KWP blob, c2 format) and the wrap-capable
     /// AES-CBC/AES-GCM/RSA-PKCS1 rows of §5.4. Certificates are classified with
     /// `x509info::cert_facts(.., Classifier::KeyParse)` and carry
-    /// `x509info::memory_cert_attributes` (§4.4.5).
+    /// `x509info::memory_cert_attributes` (§4.4.5). `generate_random` =
+    /// `r2_core::crypto::random_bytes` (OpenSSL `RAND_bytes`; §5.17).
     pub fn new(name: &str) -> Self { .. }
 }
 impl r2_provider::Provider for MemoryProvider { .. }
@@ -2549,7 +2565,8 @@ impl r2_provider::TokenInit for Pkcs11Provider { .. }
 `impl Provider for Pkcs11Provider` is a single block in `provider/mod.rs` (R5a). Its
 crypto/wrap/edit methods delegate to `pub(crate)` inherent methods that the skeleton
 places in R5b's files: `encrypt_impl`, `decrypt_impl`, `sign_impl`, `verify_impl`,
-`derive_impl` (`provider/crypto.rs`), `wrap_key_impl`, `unwrap_key_impl`
+`derive_impl`, `generate_random_impl` (§5.17, §11 D29) (`provider/crypto.rs`),
+`wrap_key_impl`, `unwrap_key_impl`
 (`provider/wrap.rs`), `read_key_template_impl`, `update_key_impl`,
 `read_full_template_impl` (`provider/edit.rs`). Each `*_impl` has the corresponding trait
 method's signature minus the trait. `mechanisms()` (and the default `supports()`) are
@@ -2913,6 +2930,10 @@ pub(crate) trait Backend {
     fn wrap_key(&self, mech: &MechSpec, wrapping_key: u64, key: u64) -> BResult<Vec<u8>>;
     fn unwrap_key(&self, mech: &MechSpec, unwrapping_key: u64, wrapped: &[u8], template: &[RawAttr]) -> BResult<u64>;
     fn derive_key(&self, mech: &MechSpec, base_key: u64, template: &[RawAttr]) -> BResult<u64>;
+    /// C_GenerateRandom of `len` bytes on this backend's session, into a zeroizing buffer
+    /// (§5.17). Never C_SeedRandom. CryptokiBackend: `Session::generate_random_slice` into
+    /// a `Zeroizing` buffer of `len` bytes (cryptoki's `seed_random` is never called).
+    fn generate_random(&self, len: usize) -> BResult<Zeroizing<Vec<u8>>>;
 }
 ```
 
@@ -4420,7 +4441,7 @@ R0 stub of every command module: `commands()` returns `vec![]` (§4.1.1), so dis
 | misc (R7) | exit, quit, clear, config |
 | providers (R8) | providers, slots, login, logout |
 | keys (R8) | keys, key, generate, load, export, csr, delete |
-| crypto (R9) | encrypt, decrypt, sign, verify, derive, ops |
+| crypto (R9) | encrypt, decrypt, sign, verify, derive, ops, random (§5.17, §11 D29) |
 | copy (R10) | copy |
 | key_template (R14) | none — `commands()` returns `vec![]`; entry point is the §4.9.9 hook |
 | kek (R15) | none — `commands()` returns `vec![]`; entry points are the §4.9.9 hooks |
@@ -5400,6 +5421,7 @@ pub trait FakeHooks {
     fn sign(&self, next: &dyn Provider, key: &KeyInfo, mech: &MechanismInvocation, data: &[u8]) -> Option<Result<Vec<u8>>> { None }
     fn verify(&self, next: &dyn Provider, key: &KeyInfo, mech: &MechanismInvocation, data: &[u8], signature: &[u8]) -> Option<Result<bool>> { None }
     fn derive(&self, next: &dyn Provider, key: &KeyInfo, mech: &MechanismInvocation) -> Option<Result<DeriveResult>> { None }
+    fn generate_random(&self, next: &dyn Provider, len: usize) -> Option<Result<Zeroizing<Vec<u8>>>> { None }
     fn wrap_key(&self, next: &dyn Provider, wrapping_key: &KeyInfo, mech: &MechanismInvocation, target: &KeyInfo, options: &WrapOptions) -> Option<Result<Vec<u8>>> { None }
     fn unwrap_key(&self, next: &dyn Provider, wrapping_key: &KeyInfo, mech: &MechanismInvocation, wrapped: &[u8], request: &UnwrapRequest) -> Option<Result<KeyInfo>> { None }
     fn read_key_template(&self, next: &dyn Provider, key: &KeyInfo) -> Option<Result<KeyTemplate>> { None }
@@ -5421,15 +5443,18 @@ on, not an exhaustive restatement.
   instances; generated keypairs share one transform secret (encrypt-with-public/
   decrypt-with-private, sign/verify and two-party ECDH pair up). HMAC output lengths per
   hash: sha1 20, sha224 28, sha256 32, sha384 48, sha512 64. `wrap_key`/`unwrap_key` are
-  FUNCTIONAL for every advertised wrap mechanism.
+  FUNCTIONAL for every advertised wrap mechanism. `generate_random(len)` (§5.17) returns
+  `len` bytes of the keystream of ("{name}|random|{draw}", "blob"), `draw` = 1, 2, … from
+  a counter of its own (drawing never shifts generated key values): two fakes with the
+  same name yield the same sequence, successive draws differ.
 - "memory" presentation: NotRequired, login → the trait default UnsupportedOperation, key
   ids stay None when not given. Other presentations: LoggedIn at start; login/logout flip
   state (login while logged in → AlreadyLoggedIn "already logged in", hint "logout first");
-  `mechanisms()` is empty while logged out and key/crypto calls → AuthRequired "login
-  required: run `login {name}`"; key_id None → a counter-based 4-byte id (1, 2, …, big
-  endian), reproducible; `shutdown()` drops to LoggedOut. `list_tokens()`: the synthetic
-  token for login-capable presentations, `[]` for "memory" (unless `.with_tokens(..)` was
-  given); login stores the given token as the status token.
+  `mechanisms()` is empty while logged out and key/crypto calls and `generate_random` →
+  AuthRequired "login required: run `login {name}`"; key_id None → a counter-based
+  4-byte id (1, 2, …, big endian), reproducible; `shutdown()` drops to LoggedOut.
+  `list_tokens()`: the synthetic token for login-capable presentations, `[]` for "memory"
+  (unless `.with_tokens(..)` was given); login stores the given token as the status token.
 - import/generate/unwrap honor templates: exportable = CKA_EXTRACTABLE ∧ ¬CKA_SENSITIVE
   (defaults extractable=true, sensitive=false); secret/private `attributes` always carry
   both flags. Handles are a counter starting at 1. find_key via
@@ -5464,7 +5489,8 @@ on, not an exhaustive restatement.
   curve, label, key_id, template, public_template)`; `delete_key(key)`; `export_key(key)`;
   `read_key_template(key)`; `read_full_template(key)`; `update_key(key, changes)`;
   `encrypt|decrypt|sign(key, mech, data)`; `verify(key, mech, data, signature)`;
-  `derive(key, mech)`; `wrap_key(wrapping_key, mech, target)`; `unwrap_key(wrapping_key,
+  `derive(key, mech)`; `generate_random(len)` (len decimal; recorded before the login
+  check, §11 D29); `wrap_key(wrapping_key, mech, target)`; `unwrap_key(wrapping_key,
   mech, wrapped, result_algorithm, result_class, label, key_id, template)`;
   `init_token(slot, label)`; `set_env_and_reset(key, value)`. Not recorded: status,
   mechanisms, supports, list_tokens. Summaries: KeyInfo/KeyRef → `display()`;
@@ -5484,8 +5510,10 @@ use r2_provider::Provider;
 pub type MakeProvider<'a> = &'a dyn Fn() -> Rc<dyn Provider>;
 
 /// One `pub fn <case>(make: MakeProvider<'_>)` per c2 ProviderContractTests method, same
-/// names (34 cases). A mechanism-dependent case whose mechanism is not advertised returns
-/// early after `skip(reason)` (never a failure).
+/// names (34 c2 cases), plus the r2-only case
+/// `test_generate_random_returns_requested_length` (§11 D29; 35 in all, each instantiated
+/// by every `provider_contract_tests!` user). A mechanism-dependent case whose mechanism is
+/// not advertised returns early after `skip(reason)` (never a failure).
 pub mod cases {
     pub fn test_status_token_iff_logged_in(make: super::MakeProvider<'_>) { .. }
     pub fn test_login_rejected_when_not_required(make: super::MakeProvider<'_>) { .. }
@@ -5521,6 +5549,10 @@ pub mod cases {
     pub fn test_data_object_identity_and_verbs(make: super::MakeProvider<'_>) { .. }
     pub fn test_certificate_import_list_export_delete(make: super::MakeProvider<'_>) { .. }
     pub fn test_read_full_template_has_no_key_type_for_cert_and_data(make: super::MakeProvider<'_>) { .. }
+    // ---- r2-only cases (no c2 counterpart) ----
+    /// §5.17 / §11 D29: `generate_random(len)` returns exactly `len` bytes for len 1, 16,
+    /// 32 and 1024; two 32-byte draws differ.
+    pub fn test_generate_random_returns_requested_length(make: super::MakeProvider<'_>) { .. }
 }
 /// Prints "SKIP: {reason}" to stderr (an allowed print site, §4.1.3).
 pub fn skip(reason: &str) { .. }
@@ -5649,7 +5681,12 @@ CKR_ARGUMENTS_BAD only — what PyKCS11's local empty-buffer refusal produced, �
 (CKR_ARGUMENTS_BAD otherwise); CKA_KEY_GEN_MECHANISM of imported objects reads as
 CK_UNAVAILABLE_INFORMATION; `find_objects` returns matches in creation order (list_keys
 order tests, §4.5.2); objects may be created with a zero-length CKA_ID (R5a test: it lists
-and resolves with `key_id == None`, §4.3). Tests share the backend via
+and resolves with `key_id == None`, §4.3); `generate_random(len)` (§5.17) needs a live
+session but no login (PKCS#11 does not require one for C_GenerateRandom; the login gate is
+the provider's), honours `fail_next`/`fail_always`/`invalidate_session` like every
+session-bound call, records "generate_random" in `calls()`, and returns `len` bytes of a
+deterministic keystream of a draw counter of its own (successive draws differ; generated
+key values are not shifted). Tests share the backend via
 `Rc<FakeBackend>` (cloned into `Pkcs11Provider::with_backend` as `Rc<dyn Backend>`).
 
 #### 4.10.5 SoftHSM fixture (`r2_testkit::softhsm`, R0) and `scripts/softhsm-init.sh`
@@ -5779,10 +5816,10 @@ new allowed threads are §4 changes.
 `Provider::wrap_key`/`unwrap_key` signatures and `WrapOptions`/`UnwrapRequest` (the
 `WrapOptions` struct is the escape hatch), `DeriveResult`, `read_key_template`/
 `update_key`/`read_full_template` and `AttrEditOutcome`/`KeyEditResult` (§5.15/§5.16),
-`CustomMechanismConfig` param encoding (v1 = the five `ParamStruct` packers), the
-`ConsoleIo`/`TemplateEditor` trait surfaces (incl. the provisional `busy` and the
-spinner flag in `runtime`), the `FakeHooks` trait (methods may be added with a `None`
-default), and the R7-internal terminal I/O items of §4.9.7.
+`Provider::generate_random` (§5.17, §11 D29), `CustomMechanismConfig` param encoding (v1 =
+the five `ParamStruct` packers), the `ConsoleIo`/`TemplateEditor` trait surfaces (incl.
+the provisional `busy` and the spinner flag in `runtime`), the `FakeHooks` trait (methods
+may be added with a `None` default), and the R7-internal terminal I/O items of §4.9.7.
 
 #### 4.11.3 c2 §4 coverage map (every c2 §4 item has an r2 counterpart or an n/a)
 
@@ -5981,6 +6018,9 @@ verify  <provider>:<label> [<mech>] [<name>=<value> ...] [<data>] [--in <path>]
                            (--sig <data> | --sig-file <path>)
 derive  <provider>:<label> [<mech>] [<name>=<value> ...] [--out <path>]
         [--outformat raw|hex|b64]
+random <provider> [<length>] [--out <path>] [--outformat raw|hex|b64]
+                                  # r2 addition (§5.17, §11 D29): <length> bytes (1 to
+                                  # 1048576; prompted when omitted) from the provider's RNG
 ```
 
 Interactive fallbacks (all through `ParamResolver`/`ConsoleIo` — never a second code
@@ -6012,9 +6052,10 @@ completion inside an open quote). `Command::complete` keeps returning full repla
 tokens. Completion and highlighting never call `ctx.io` and never surface an error: any
 `ConsoleError` inside them yields no suggestions / unstyled text.
 
-Results default to the hex result on the console (§11 D28: a top border titled with what
-the bytes are, the bytes as one unbroken line of continuous hex that copies whole, a bottom
-border reading `<n> bytes`; empty data is c2's panel `(empty — 0 bytes)` with no subtitle;
+Results of `encrypt`/`decrypt`/`sign`/`derive` and `random` (§5.17) default to the hex
+result on the console (§11 D28: a top border titled with what the bytes are, the bytes as
+one unbroken line of continuous hex that copies whole, a bottom border reading `<n>
+bytes`; empty data is c2's panel `(empty — 0 bytes)` with no subtitle;
 `ui.hex_group`/`hex_width` no longer apply); `--out` writes raw bytes unless
 `--outformat hex|b64` is given. Errors: a panel
 titled `error` with a red border, the message in bold red and a dim `hint: …` line;
@@ -7025,6 +7066,61 @@ subject/issuer/serial — `NON_CREATION_ATTRS`) arrive **disabled** (enabled the
 draw CKR failures at creation); everything else arrives enabled with its file value. The
 operator re-enables rows deliberately in the always-shown editor (§5.12).
 
+### 5.17 Random generation (r2 addition, §11 D29)
+
+```
+random <provider> [<length>] [--out <path>] [--outformat raw|hex|b64]
+```
+
+c2 had no counterpart; the command lives in `commands/crypto.rs` (R9, summary "Generate
+random bytes with a provider's RNG") and draws `<length>` bytes from the provider's own RNG
+through `Provider::generate_random` (§4.5.2). Provider mapping:
+
+- **memory**: OpenSSL `RAND_bytes` via `r2_core::crypto::random_bytes` (§4.4.8); no login.
+  A length above `i32::MAX` (unreachable from the console) → Crypto "random number
+  generation failed"; 0 → an empty buffer.
+- **PKCS#11**: `C_GenerateRandom` (cryptoki `Session::generate_random_slice`) on the
+  logged-in session through `op` (`generate_random_impl`, `provider/crypto.rs`): login
+  required — AuthRequired ``login required: run `login <provider>` `` while logged out —,
+  §5.2 session auto-recovery (`--keep-pin`), and every CKR through the §5.2 choke point with
+  context `random generation`, e.g. `PKCS#11 random generation failed (CKR_RANDOM_NO_RNG)`,
+  or for CKR_FUNCTION_NOT_SUPPORTED `token firmware lacks this function
+  (CKR_FUNCTION_NOT_SUPPORTED)` with hint `capability missing for random generation`.
+  `C_SeedRandom` is never called and there is no seed option: the token's RNG is used as
+  it is.
+- Any other provider: the trait default, UnsupportedOperation "{name} does not support
+  random generation".
+
+Run order (each step's error ends the command before the next): unknown `--options` →
+Generic `unknown option --<name>` (hint `usage: <usage>`); a `name=value` token → Generic
+`unexpected name=value token '<name>=…'` (hint `usage: <usage> (quote values containing
+'=')`); more than two positionals → Generic `too many arguments` (hint `usage: <usage>`);
+`--out`/`--outformat` checks with the verbs' texts (§5.1: `invalid --outformat '<x>'` /
+`choose one of: raw, hex, b64`; `--outformat requires --out`); the provider (missing →
+`missing <provider> argument`, hint `usage: <usage>`; unknown → ProviderNotFound `unknown
+provider '<n>'`, hint `known providers: …`); then the provider must be usable — a
+logged-out PKCS#11 provider raises AuthRequired BEFORE any prompt; then the length.
+
+Length: an `Int` parameter `length` resolved by `ParamResolver` (§4.6.4, one code path
+for inline and prompted values). Valid range 1 to 1048576 bytes; anything else → Param
+`invalid random length <n>; expected 1 to 1048576 bytes` (param name `length`); a
+non-integer → Param `length: invalid integer '<text>'` (hint `decimal digits with an
+optional leading '-' only (§4.6)`). When `<length>` is omitted it is prompted with the text
+`Number of random bytes`; a Param error at the prompt is shown and the prompt repeats;
+Ctrl-C at the prompt aborts (`Aborted.`).
+
+Output: the bytes are drawn under the spinner `random — <provider>` (`busy`, §4.9.8) with
+the §11 D13 boundaries of the crypto verbs (the abort flag is checked before
+`Provider::initialize`, after it, after the draw and before writing output). The console
+shows the hex result (§11 D28) titled `random — <provider>` with the `<n> bytes` bottom
+border; `--out <path>` writes raw bytes (or `--outformat hex|b64`) and prints `wrote <n>
+bytes to <path>`. The provider returns the bytes in a zeroizing buffer (§11 D3; as for
+`decrypt`, the console hex result copies them into `Renderable::Hex.data`, a plain
+`Vec<u8>` — `--out` avoids that copy); only the length is logged (`<provider>: generated
+<n> random bytes` at INFO for PKCS#11), never the bytes.
+Completion: provider names for the first argument, filesystem paths after `--out`,
+nothing after `--outformat`, otherwise `--out`/`--outformat`.
+
 ## 6. Non-functional requirements
 
 - **Single-threaded invariant**: every cryptoki call happens on the REPL thread. PKCS#11
@@ -7069,7 +7165,8 @@ operator re-enables rows deliberately in the always-shown editor (§5.12).
   logging passes through a redaction layer that rewrites `(?i)\b(pin|password)\s*=\s*\S+`
   to `<name>=***` (c2 `RedactingFilter`); key bytes are never logged — log lengths, labels,
   mechanism names, CKR codes. Key material (`KeyMaterial.data`), transport keys, decrypted
-  payloads (`Provider::decrypt`), RSA-RAW results, PKCS#11 attribute reads and raw
+  payloads (`Provider::decrypt`), random output (`Provider::generate_random`,
+  `Backend::generate_random`, §5.17), RSA-RAW results, PKCS#11 attribute reads and raw
   templates live in `zeroize::Zeroizing` buffers and are wiped on drop; template snapshots
   (`KeyTemplate`/`AttrValue`, e.g. a `key template` dump the operator writes to a file)
   are plain buffers (§11 D3).
@@ -7291,9 +7388,10 @@ custom_mechanisms: []      # entry schema: spec §4.8 / example §5.14
   `C_SetAttributeValue` simulation, HMAC CKMs with real digest widths). Real behavior via
   SoftHSM integration tests.
 - **Contract suite**: `provider_contract_tests!(make_provider_expr)` (R3) expands c2's
-  `ProviderContractTests` (34 tests) into `#[test]` functions. Each provider instantiates it
-  in its own test file: FakeProvider in both presentations (R3), MemoryProvider (R4),
-  Pkcs11Provider on SoftHSM (R5b, feature `softhsm`). Other loops never edit the macro body
+  `ProviderContractTests` (34 tests) plus the r2-only
+  `test_generate_random_returns_requested_length` (§11 D29) into `#[test]` functions. Each
+  provider instantiates it in its own test file: FakeProvider in both presentations (R3),
+  MemoryProvider (R4), Pkcs11Provider on SoftHSM (R5b, feature `softhsm`). Other loops never edit the macro body
   except through §4.11.
 - **KATs** (fixtures in-repo, c2's vectors copied verbatim): NIST CAVP/SP 800-38A/B/D
   vectors for AES ECB/CBC/CTR/GCM/CMAC (incl. McGrew–Viega GCM test case 16); Wycheproof
@@ -7394,6 +7492,10 @@ custom_mechanisms: []      # entry schema: spec §4.8 / example §5.14
     80/100: the column allocation is compared where columns are squeezed), and
     `## final-newline: no` pipes it without the newline after its last line (the
     `transcript_unterminated_*` sessions; R13 fix round 4).
+  - *r2-only commands*: `random` (§5.17, §11 D29) has no c2 counterpart and is not
+    differential-tested (its bytes are random by design); `normalize.py` drops r2's
+    `help` row for it (exactly `random Generate random bytes with a provider's RNG` after
+    glyph normalization), so a changed summary or any other extra row is still reported.
 - **Coverage**: `cargo llvm-cov` with an 80% line floor on the workspace, enforced from R13
   (as c2's floor was wired in L13). As built (R13): the `coverage` CI job runs `cargo llvm-cov nextest --workspace
   --features softhsm --fail-under-lines 80` on the SoftHSM 2.6.1 fixture token (`just
@@ -7594,7 +7696,8 @@ names the test or harness check that pins the deviation.
 **D3 — Real zeroization.**
 - *Description*: exactly these buffers are `Zeroizing` / `SecretString` and wiped on drop:
   key material (`KeyMaterial.data`), transport keys, derive results (`DeriveResult.raw`),
-  decrypted payloads (`Provider::decrypt`, `Backend::decrypt`), RSA-RAW results
+  decrypted payloads (`Provider::decrypt`, `Backend::decrypt`), random output
+  (`Provider::generate_random`, `Backend::generate_random`; §5.17, D29), RSA-RAW results
   (`rsa_raw_modexp`), PKCS#11 attribute reads (`Backend::get_attr`) and raw templates
   (`RawAttr`), decoded `DataInput` bytes, PINs and passwords (secrets are wrapped by the
   line reader itself, `SecretRead`). Template snapshots (`KeyTemplate`/`AttrValue`, e.g. the
@@ -8273,6 +8376,57 @@ one OpenSSL's `X509` decoder accepts). Verified by R6 x509build tests
   (rich 15's title, digits and byte count for every hex panel vector); r2-console
   `tests::crypto_cmd::test_hex_panel_ignores_ui_hex_layout`; the parity harness joins
   c2's hex panel rows into one line (`normalize.py`, `test_normalize.py` `HexResult`).
+
+**D29 — random: provider-generated random bytes (r2 addition; user decision 2026-10-03).**
+- *Description*: c2@408d6f2 had no `random` command. r2 adds `random <provider> [<length>]
+  [--out <path>] [--outformat raw|hex|b64]` (§5.17): `<length>` bytes (1 to 1048576,
+  prompted as `Number of random bytes` when omitted) from the provider's own RNG — OpenSSL
+  `RAND_bytes` for memory (no login), `C_GenerateRandom` on the logged-in session for
+  PKCS#11 (AuthRequired while logged out, checked before the length prompt; CKR errors
+  through the §5.2 choke point with context `random generation`) — shown as the hex result
+  titled `random — <provider>` (D28) or written with `--out`/`--outformat` like the crypto
+  verbs. The trait gains `Provider::generate_random` (default UnsupportedOperation "{name}
+  does not support random generation"), the PKCS#11 backend seam `Backend::generate_random`;
+  the output is zeroizing (D3) and only its length is logged. Nothing seeds an RNG:
+  `C_SeedRandom` is never called and there is no seed option. `random` appears in `help`
+  (summary "Generate random bytes with a provider's RNG") and in completion; every other
+  command and output is unchanged.
+- *Reason*: operators need key, IV, nonce and test material drawn from the HSM's own RNG
+  (or OpenSSL's), without leaving the console.
+- *Verified by*: the contract case `test_generate_random_returns_requested_length` on
+  FakeProvider (`r2-testkit::contract_fake fake_memory::…`, `fake_pkcs11::…`), memory
+  (`r2-memory::contract memory_contract::…`) and SoftHSM (`r2-pkcs11::contract_softhsm
+  pkcs11_softhsm::…`); r2-provider
+  `provider_base::test_generate_random_defaults_to_unsupported`,
+  `fake_provider::{generate_random_records_and_is_deterministic_per_name,
+  generate_random_requires_login_on_a_login_capable_fake,
+  generate_random_hooks_override_and_delegate,
+  generate_random_does_not_shift_generated_keys}`;
+  r2-memory `memory_parity::{generate_random_returns_exactly_the_requested_length,
+  generate_random_of_zero_bytes_is_empty,
+  generate_random_beyond_rand_bytes_range_is_a_crypto_error}`; r2-pkcs11
+  `tests::verbs::{generate_random_draws_the_requested_length_from_the_token,
+  generate_random_requires_login_before_touching_the_token,
+  generate_random_ckr_failures_go_through_the_choke_point,
+  generate_random_recovers_a_lost_session_with_keep_pin,
+  generate_random_without_keep_pin_drops_to_logged_out,
+  generate_random_second_session_loss_drops_even_with_keep_pin,
+  fake_generate_random_needs_a_live_session_but_no_login}`,
+  `softhsm_crypto::{softhsm_generate_random_lengths_and_draws_differ,
+  softhsm_generate_random_requires_login}`; r2-console `tests::random_cmd::*` (hex result,
+  successive draws, `--out` raw/hex/b64 and the shown path, the prompt and its re-prompts,
+  Ctrl-C at the prompt, inline length range/integer/maximum, argument and option errors,
+  AuthRequired before prompting, a logged-in pkcs11-presented provider, provider errors
+  unchanged, the D13 interrupt flag, completion, `help random`),
+  `tests::crypto_cmd::crypto_commands_name_summary_usage`,
+  `tests::random_softhsm::{random_on_the_logged_in_token_softhsm,
+  random_out_file_on_the_token_softhsm, random_prompts_for_the_length_softhsm,
+  random_requires_login_softhsm}`; r2-cli
+  `e2e_random::{memory_random_console_files_prompt_and_errors,
+  memory_random_successive_draws_differ,
+  softhsm::softhsm_random_requires_login_then_draws_from_token}`;
+  the parity harness drops r2's `random` help row (`normalize.py`, `test_normalize.py`
+  `RandomHelpRow`).
 
 **Resolved without deviation** (recorded so they are not mistaken for gaps):
 

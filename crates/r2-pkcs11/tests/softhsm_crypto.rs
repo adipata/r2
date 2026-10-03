@@ -2,7 +2,8 @@
 //! tests/integration/test_pkcs11_provider.py TestCrypto / TestKeyEdit, the provider-level
 //! cases of tests/integration/test_objects_softhsm.py (HMAC, generic secrets), and the R5b
 //! acceptance checks (PSS/EdDSA/CMAC/derive/OAEP fallbacks/full template dump, CBC/GCM
-//! wraps tolerated where the token lacks CKF_WRAP, Montgomery translations, §11 D6).
+//! wraps tolerated where the token lacks CKF_WRAP, Montgomery translations, §11 D6), and
+//! the r2-only C_GenerateRandom (§5.17).
 //! Feature `softhsm`; fails (never skips) without the fixture from
 //! `scripts/softhsm-init.sh`. Session objects (CKA_TOKEN=false) under unique labels; each
 //! test holds `global_state_lock` so the `cargo test` fallback never finalizes a module
@@ -1350,5 +1351,34 @@ fn softhsm_rsa_aes_key_wrap_is_never_advertised() {
             "{name} missing from {mechanisms:?}"
         );
     }
+    provider.shutdown().unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// random generation (§5.17; r2-only, no c2 counterpart)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn softhsm_generate_random_lengths_and_draws_differ() {
+    let _lock = r2_testkit::global_state_lock();
+    let provider = logged_in();
+    for len in [1, 32, 4096, 1_048_576] {
+        assert_eq!(provider.generate_random(len).unwrap().len(), len);
+    }
+    let first = provider.generate_random(32).unwrap();
+    let second = provider.generate_random(32).unwrap();
+    assert_ne!(first.as_slice(), second.as_slice());
+    assert_ne!(first.as_slice(), [0u8; 32].as_slice()); // the buffer was filled
+    provider.shutdown().unwrap();
+}
+
+#[test]
+fn softhsm_generate_random_requires_login() {
+    let _lock = r2_testkit::global_state_lock();
+    let provider = logged_in();
+    provider.logout().unwrap();
+    let err = provider.generate_random(16).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::AuthRequired);
+    assert_eq!(err.message, "login required: run `login softhsm`");
     provider.shutdown().unwrap();
 }

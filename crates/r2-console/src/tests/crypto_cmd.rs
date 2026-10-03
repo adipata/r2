@@ -1577,7 +1577,8 @@ fn test_verify_on_keypair_ref_offers_mechanisms_and_verifies() {
 // r2-only: the help surface and the Ctrl-C flag
 // ---------------------------------------------------------------------------
 
-/// The six commands, their summaries and usages (c2 class attributes, verbatim).
+/// The seven commands, their summaries and usages (c2 class attributes, verbatim; `random`
+/// is r2-only, §11 D29).
 #[test]
 fn crypto_commands_name_summary_usage() {
     let table = crate::commands::all_commands().unwrap();
@@ -1624,6 +1625,13 @@ fn crypto_commands_name_summary_usage() {
                 "ops [<provider>] [--key <provider>:<label>]",
             ),
         ),
+        (
+            "random",
+            (
+                "Generate random bytes with a provider's RNG",
+                "random <provider> [<length>] [--out <path>] [--outformat raw|hex|b64]",
+            ),
+        ),
     ]
     .into_iter()
     .collect();
@@ -1633,7 +1641,9 @@ fn crypto_commands_name_summary_usage() {
         .collect();
     assert_eq!(
         module,
-        ["encrypt", "decrypt", "sign", "verify", "derive", "ops"]
+        [
+            "encrypt", "decrypt", "sign", "verify", "derive", "ops", "random"
+        ]
     );
     for (name, (summary, usage)) in expected {
         let command = table.get(name).unwrap();

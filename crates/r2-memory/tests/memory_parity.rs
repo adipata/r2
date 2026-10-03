@@ -1,8 +1,8 @@
 // MemoryProvider tests beyond c2's suite (R4 Accept list, spec §4.5.4/§5.4/§5.5/§5.8–§5.10):
 // byte-compatibility with c2's RSA-AES-KEY-WRAP blobs (vectors produced by c2 itself,
 // tests/support/gen_c2_vectors.py), the §5.8 pre-validated pyca texts, RFC 4231 / RFC 5649
-// KATs, round-trips for every advertised mechanism, the non-P curves pyca supports, and
-// the §4.3/§4.5.2 material and identity rules.
+// KATs, round-trips for every advertised mechanism, the non-P curves pyca supports, the
+// §4.3/§4.5.2 material and identity rules, and the r2-only `generate_random` (§5.17).
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -23,7 +23,7 @@ use r2_core::keys::{Curve, KeyAlgorithm, KeyClass, KeyMaterial};
 use r2_core::params::ParamValue;
 use r2_memory::MemoryProvider;
 use r2_provider::mechanism::CANONICAL_MECHANISMS;
-use r2_provider::{KeySelector, MechanismInvocation, Provider, WrapOptions};
+use r2_provider::{AuthState, KeySelector, MechanismInvocation, Provider, WrapOptions};
 use support::c2_vectors as c2;
 use support::*;
 
@@ -1419,4 +1419,46 @@ fn rsa_ciphertext_not_the_modulus_size_fails_like_pycas_length_check() {
             assert_eq!(err.message, unwrap_text, "{name} unwrap of {len} bytes");
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// generate_random (§5.17, §11 D29)
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn generate_random_returns_exactly_the_requested_length() {
+    // A fresh provider: no initialize(), no login (memory never requires one).
+    let provider = make();
+    assert_eq!(provider.status().auth, AuthState::NotRequired);
+    // 1 to 1048576 is the console's range (the `random` command's validator).
+    for len in [1usize, 32, 1024, 1_048_576] {
+        let data = provider.generate_random(len).unwrap();
+        assert_eq!(data.len(), len, "generate_random({len})");
+    }
+    let a = provider.generate_random(32).unwrap();
+    let b = provider.generate_random(32).unwrap();
+    assert_ne!(*a, *b);
+    assert_eq!(provider.status().auth, AuthState::NotRequired);
+}
+
+#[test]
+fn generate_random_of_zero_bytes_is_empty() {
+    // Provider level only: the console's validator rejects 0 before the provider runs.
+    let provider = make();
+    assert!(provider.generate_random(0).unwrap().is_empty());
+}
+
+#[test]
+fn generate_random_beyond_rand_bytes_range_is_a_crypto_error() {
+    // openssl::rand::rand_bytes asserts len <= c_int::MAX; random_bytes refuses first, so no
+    // allocation happens here (the r0_mandated precedent).
+    let Some(len) = usize::try_from(i32::MAX)
+        .ok()
+        .and_then(|m| m.checked_add(1))
+    else {
+        return;
+    };
+    let err = err_class(make().generate_random(len), "CryptoError");
+    assert_eq!(err.message, "random number generation failed");
+    assert_eq!(err.hint, None);
 }

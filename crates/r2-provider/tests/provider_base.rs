@@ -249,6 +249,14 @@ fn test_key_edit_defaults_to_unsupported() {
     assert!(MinimalProvider.as_token_init().is_none());
 }
 
+#[test]
+fn test_generate_random_defaults_to_unsupported() {
+    // r2-only (§5.17): a provider without an RNG refuses, naming itself.
+    let err = err_kind(MinimalProvider.generate_random(16));
+    assert_eq!(err.kind, ErrorKind::UnsupportedOperation);
+    assert_eq!(err.message, "mini does not support random generation");
+}
+
 // -- TestDataTypes -----------------------------------------------------------------------
 
 #[test]

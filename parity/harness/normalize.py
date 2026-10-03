@@ -22,6 +22,10 @@ records as a deviation (§11) or as non-TTY noise is normalized away, nothing el
   r2's layout; the title and byte count are compared as they are.
 - Table and panel glyphs (§11 D1): box-drawing characters become spaces, runs of
   whitespace collapse, blank lines are dropped — cell CONTENT, order and wording remain.
+- r2-only commands (§11 D29): c2 has no ``random``, so r2's ``help`` table has one extra
+  row; that row is dropped from r2's output when it normalizes to exactly
+  ``random Generate random bytes with a provider's RNG`` (``R2_ONLY_HELP_ROWS``), so a
+  changed summary, or any other extra row, is still reported.
 - PKCS#11 ULONG values >= 2^63 (§11 D18): r2 shows CK_UNAVAILABLE_INFORMATION unsigned
   (``18446744073709551615``) where c2 showed PyKCS11's signed ``-1``.
 - Token enumeration order (shared-token suite ONLY, opt-in via ``token_provider``):
@@ -49,6 +53,8 @@ _PROMPT_ENDS = (": ", "? ", "] ", "> ", "| ")
 _DOUBLED_RE = re.compile(r" *(\S.*?) +\1 *")
 _C2_WRAP_RE = re.compile(r"\r {79}(.)\r\n")
 PROMPT = "PROMPT: "
+# r2's help rows for commands c2 does not have (§11 D29), in their normalized form.
+R2_ONLY_HELP_ROWS = frozenset({"random Generate random bytes with a provider's RNG"})
 
 
 def _is_echo(line: str, want: str) -> bool:
@@ -203,6 +209,8 @@ def normalize(
         line = _WS_RE.sub(" ", line).strip()
         if token_provider:
             line = _HANDLE_RE.sub("handle N", line)
+        if tool == "r2" and line in R2_ONLY_HELP_ROWS:
+            continue  # §11 D29: an r2-only command's help row
         if line:
             out.append(line)
     return _sort_rows(out, token_provider) if token_provider else out

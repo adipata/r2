@@ -155,10 +155,6 @@ class RowOrderIsCompared(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class HexResult(unittest.TestCase):
     """§11 D28: c2's grouped hex panel compares equal to r2's one-line hex result."""
 
@@ -190,3 +186,43 @@ class HexResult(unittest.TestCase):
     def test_other_panels_are_left_alone(self) -> None:
         error = ["╭─ error ─╮", "│ dead    │", "╰─────────╯"]
         self.assertEqual(normalize("\n".join(error), "c2", "/w", "/f"), ["error", "dead"])
+
+
+class RandomHelpRow(unittest.TestCase):
+    """§11 D29: r2's help row of the r2-only ``random`` command is dropped, nothing else."""
+
+    HEAD = [" command     summary", "─" * 78]
+    ROWS = [
+        " quit        Leave the console (providers are shut down)",
+        " sign        Sign data or compute a MAC (mechanism prompted when omitted)",
+    ]
+    RANDOM = " random      Generate random bytes with a provider's RNG"
+
+    def help_text(self, *rows: str) -> str:
+        """The ``help`` table as printed (the command echo is covered by the echo tests)."""
+        return "\n".join([*self.HEAD, *rows, "help <command> shows its usage"])
+
+    def test_r2_help_with_the_row_equals_c2_help_without_it(self) -> None:
+        c2 = normalize(self.help_text(*self.ROWS), "c2", "/w", "/f")
+        r2_help = self.help_text(self.ROWS[0], self.RANDOM, self.ROWS[1])
+        r2 = normalize(r2_help, "r2", "/w", "/f")
+        self.assertEqual(c2, r2)
+        self.assertNotIn("random Generate random bytes with a provider's RNG", r2)
+
+    def test_a_changed_random_summary_is_still_a_difference(self) -> None:
+        c2 = normalize(self.help_text(*self.ROWS), "c2", "/w", "/f")
+        changed = self.RANDOM.replace("RNG", "random number generator")
+        r2 = normalize(self.help_text(self.ROWS[0], changed, self.ROWS[1]), "r2", "/w", "/f")
+        self.assertNotEqual(c2, r2)
+        self.assertIn(
+            "random Generate random bytes with a provider's random number generator", r2
+        )
+
+    def test_c2_output_is_untouched(self) -> None:
+        # the rule is r2-only: the same row in c2's output is kept (and so reported)
+        c2 = normalize(self.RANDOM, "c2", "/w", "/f")
+        self.assertEqual(c2, ["random Generate random bytes with a provider's RNG"])
+
+
+if __name__ == "__main__":
+    unittest.main()

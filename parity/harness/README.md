@@ -65,6 +65,12 @@ The user config file case (`transcript_user_config`) appends `fixtures/user_conf
   needed for the column allocation, which is rich's own (`_calculate_column_widths`) in
   r2 and is compared at narrower widths through the `## columns:` header below
   (`transcript_help` at 60/80/200, `transcript_narrow` at 80/100).
+- **r2-only commands** (§11 D29): c2 has no `random` command, so r2's `help` table has one
+  extra row; in r2's output only, the line that normalizes to exactly `random Generate
+  random bytes with a provider's RNG` (`R2_ONLY_HELP_ROWS`) is dropped. `random` itself is
+  not differential-tested (its bytes are random by design; r2's own tests cover it).
+  `test_normalize.py` `RandomHelpRow`: r2's help with the row equals c2's without it, a
+  changed summary is still reported, and c2's output is untouched.
 - **ULONG ≥ 2^63** (§11 D18): `18446744073709551615` is compared as c2's `-1`.
 - **Token enumeration** (token suite only; `normalize(..., token_provider="hsm")`):
   `handle <n>` loses its number and consecutive table rows starting with `hsm:` are
