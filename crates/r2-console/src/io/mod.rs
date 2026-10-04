@@ -143,6 +143,7 @@ pub mod assist;
 pub mod history;
 pub mod line;
 pub mod plain;
+pub mod session;
 pub mod terminal;
 
 pub use assist::{
@@ -151,4 +152,5 @@ pub use assist::{
 pub use history::{SecretFilteringHistory, is_secret_line};
 pub use line::{LineIo, LineReader, ReadOutcome, SecretRead};
 pub use plain::{PlainIo, PlainReader};
+pub use session::{FrameSession, TermOp, TerminalDriver};
 pub use terminal::{DegradingReader, TerminalIo};

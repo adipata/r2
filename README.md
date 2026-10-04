@@ -76,14 +76,19 @@ the provider entry to your config:
 ```text
 r2> providers
 r2> login softhsm          # first run: wizard, then PIN prompt
-r2> generate softhsm aes size=256 --label mykey   # template editor opens; 'ok' accepts
+r2> generate softhsm aes size=256 --label mykey   # template editor opens; OK row accepts
 r2> copy mem:demo softhsm
 r2> key template softhsm:mykey mykey.yaml         # dump the object's attribute template
 r2> logout softhsm
 ```
 
 Keys on PKCS#11 tokens go through a checklist template editor before creation — defaults
-are conservative (sensitive, non-extractable); flip rows deliberately.
+are conservative (sensitive, non-extractable); flip rows deliberately. On a terminal it is
+an inline panel: ↑/↓ move, Space toggles a checkbox or edits a value (hex for bytes such as
+CKA_ID, text for CKA_LABEL), `-`/`+` disable/enable a row, `a` adds an attribute from a
+list filtered as you type, `:` takes a line of the typed grammar (`5=0xc0fe`, `add
+CKA_X=v`), Enter on `[ OK ]` accepts, Esc cancels. Piped sessions use the typed grammar
+(`3`, `5=0xc0fe`, `-7`/`+7`, `add CKA_X=v`, `ok`, `cancel`) at the `template> ` prompt.
 
 c2 and r2 install side by side and share tokens and data files (exports, CSRs, PKCS#12,
 wrapped blobs, `key template` YAML), but not config, history or log files.

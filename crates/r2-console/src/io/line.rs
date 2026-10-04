@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use r2_core::error::ConsoleError;
-use r2_core::io::{CommandInput, Renderable, error_panel, table};
+use r2_core::io::{CommandInput, KeySession, Line, Renderable, error_panel, table};
 use r2_core::params::{ParamKind, ParamSpec};
 use r2_core::render::{RenderConfig, render, render_no_color, render_plain};
 use r2_core::runtime::set_spinner_active;
@@ -17,6 +17,7 @@ use r2_core::text::{os_error_text, py_isdigit, py_repr, py_strip};
 use secrecy::SecretString;
 
 use super::SinkStyle;
+use super::session::{FrameSession, TerminalDriver};
 
 /// One non-secret read.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -44,6 +45,16 @@ pub trait LineReader {
     fn read_secret(&mut self, prompt: &str) -> io::Result<SecretRead>;
     /// Terminal side of `clear` (reedline repaint). Default: nothing.
     fn clear_screen(&mut self) {}
+    /// The driver of an interactive key session (§11 D34): TerminalIo's reader while it has
+    /// not degraded. Default: None (PlainReader, the test readers).
+    fn terminal_driver(&mut self) -> Option<Box<dyn TerminalDriver>> {
+        None
+    }
+    /// A key session hit the terminal error `err`: switch to plain reads for good, exactly
+    /// like a failed read (the one §11 D2 warning). Default: nothing.
+    fn degrade(&mut self, err: &io::Error) {
+        let _ = err;
+    }
 }
 
 /// c2 `_BOOL_WORDS`: the completion words of a BOOL prompt.
@@ -432,5 +443,55 @@ impl<R: LineReader> r2_core::io::ConsoleIo for LineIo<R> {
             bar: Some(bar),
         };
         f();
+    }
+    fn interactive(&self, f: &mut dyn FnMut(&mut dyn KeySession)) -> bool {
+        // No escape sequences on the Plain sink; never under a running spinner (it would draw
+        // over the frame) — the caller's line prompts suspend it instead.
+        let spinning = self
+            .spinner
+            .try_borrow()
+            .map(|slot| slot.is_some())
+            .unwrap_or(true);
+        if self.sink.style == SinkStyle::Plain || spinning {
+            return false;
+        }
+        // The reader borrow ends here: `f` runs without any RefCell borrow of the IO.
+        let driver = match self.reader.try_borrow_mut() {
+            Ok(mut reader) => reader.terminal_driver(),
+            Err(_) => None,
+        };
+        let Some(driver) = driver else {
+            return false;
+        };
+        let cfg = RenderConfig {
+            // width 0: rows are laid out by the caller and never wrapped (§4.9.7)
+            width: 0,
+            hex_group: self.hex_group,
+            hex_width: self.hex_width,
+        };
+        let render = |line: &Line| {
+            self.sink
+                .render(&Renderable::Styled(vec![line.clone()]), &cfg)
+        };
+        let mut session = match FrameSession::open(driver, &render) {
+            Ok(session) => session,
+            Err(err) => {
+                self.degrade_reader(&err);
+                return false;
+            }
+        };
+        f(&mut session);
+        if let Some(err) = session.close() {
+            self.degrade_reader(&err);
+        }
+        true
+    }
+}
+
+impl<R: LineReader> LineIo<R> {
+    fn degrade_reader(&self, err: &io::Error) {
+        if let Ok(mut reader) = self.reader.try_borrow_mut() {
+            reader.degrade(err);
+        }
     }
 }

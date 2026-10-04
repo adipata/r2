@@ -75,6 +75,69 @@ pub trait ConsoleIo {
         let _ = message;
         f();
     }
+    /// Hand `f` the keyboard and the screen rows below the output so far (provisional r2
+    /// addition, §11 D34; c2 never had one). TerminalIo on a working terminal with styled
+    /// output calls `f` exactly once with a `KeySession`, erases the last frame when `f`
+    /// returns, and returns true. Otherwise — the default: PlainIo, ScriptedIo, a degraded
+    /// session, the Plain sink — it returns false WITHOUT calling `f`, and the caller falls
+    /// back to line prompts. A terminal failure surfaces as Generic "terminal error: …"
+    /// from `draw`/`read_key`; TerminalIo then degrades the session like a failed read (the
+    /// §11 D2 warning) once `f` has returned. No `RefCell` borrow of the IO is held while
+    /// `f` runs, but `f` must not print or prompt through the IO while the session is open.
+    fn interactive(&self, f: &mut dyn FnMut(&mut dyn KeySession)) -> bool {
+        let _ = f;
+        false
+    }
+}
+
+/// One key of an interactive session (`ConsoleIo::interactive`; provisional, §11 D34).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Key {
+    /// A printable character (Shift applied; no Ctrl, no Alt).
+    Char(char),
+    /// Ctrl + a letter, lower-case: `Ctrl('c')` is Ctrl-C.
+    Ctrl(char),
+    Enter,
+    Esc,
+    Tab,
+    BackTab,
+    Backspace,
+    Delete,
+    Insert,
+    Up,
+    Down,
+    Left,
+    Right,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    /// A bracketed paste: the whole text as one event.
+    Paste(String),
+    /// The terminal changed size; the session's owner redraws.
+    Resize,
+}
+
+/// One screen of an interactive session (provisional, §11 D34).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Frame {
+    /// The rows, top to bottom. A row wider than the terminal minus one column is clipped;
+    /// rows beyond the terminal height minus one are not drawn; control characters show
+    /// as U+FFFD.
+    pub lines: Vec<Line>,
+    /// Where the terminal cursor is shown: (row, column in cells). None hides it.
+    pub cursor: Option<(usize, usize)>,
+}
+
+/// The terminal side of `ConsoleIo::interactive` (provisional, §11 D34).
+pub trait KeySession {
+    /// The terminal size: (columns, rows), each at least 1.
+    fn size(&self) -> (usize, usize);
+    /// Draw `frame` in place of the previous one (nothing on the first call), on the rows
+    /// below the output so far.
+    fn draw(&mut self, frame: &Frame) -> Result<()>;
+    /// The next key; blocks until one arrives.
+    fn read_key(&mut self) -> Result<Key>;
 }
 
 /// Runs `f` through `io.busy(message, ..)` and returns its value; if the implementation

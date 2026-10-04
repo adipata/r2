@@ -14,10 +14,14 @@ use reedline::{
     default_emacs_keybindings,
 };
 
+use crossterm::event as ct;
+use r2_core::io::Key;
+
 use super::assist::{BridgeCompleter, BridgeHighlighter, plain_text};
 use super::history::SecretFilteringHistory;
 use super::line::{LineIo, LineReader, ReadOutcome, SecretRead};
 use super::plain::{PlainReader, rpassword_secret};
+use super::session::{TermOp, TerminalDriver};
 use crate::parser::line_is_complete;
 use crate::repl::CONTINUATION_PROMPT;
 
@@ -238,19 +242,24 @@ impl DegradingReader {
         if let Some(primary) = self.primary.as_mut() {
             match f(primary) {
                 Ok(outcome) => return Ok(outcome),
-                Err(err) => {
-                    let _ = crossterm::terminal::disable_raw_mode();
-                    // one of the two sanctioned stderr warnings (§4.1.3)
-                    let mut stderr = io::stderr().lock();
-                    let _ = writeln!(
-                        stderr,
-                        "warning: line editor unavailable ({err}); continuing with plain input"
-                    );
-                    self.primary = None;
-                }
+                Err(err) => self.fall_back(&err),
             }
         }
         f(&mut self.plain)
+    }
+
+    /// Raw mode off, the one warning, plain reads from now on (a no-op once degraded).
+    fn fall_back(&mut self, err: &io::Error) {
+        if self.primary.take().is_none() {
+            return;
+        }
+        let _ = crossterm::terminal::disable_raw_mode();
+        // one of the two sanctioned stderr warnings (§4.1.3)
+        let mut stderr = io::stderr().lock();
+        let _ = writeln!(
+            stderr,
+            "warning: line editor unavailable ({err}); continuing with plain input"
+        );
     }
 }
 
@@ -278,5 +287,123 @@ impl LineReader for DegradingReader {
             primary.clear_screen();
         }
     }
+    fn terminal_driver(&mut self) -> Option<Box<dyn TerminalDriver>> {
+        self.primary
+            .as_ref()
+            .map(|_| Box::new(CrosstermDriver { raw: false }) as Box<dyn TerminalDriver>)
+    }
+    fn degrade(&mut self, err: &io::Error) {
+        self.fall_back(err);
+    }
 }
 pub type TerminalIo = LineIo<DegradingReader>;
+
+/// The crossterm side of an interactive key session (§11 D34): raw mode, no auto-wrap and
+/// bracketed paste while it is open; keys come from crossterm's reader on the controlling
+/// terminal (`use-dev-tty`), the one reedline uses, so nothing typed ahead is lost between
+/// the two.
+pub(crate) struct CrosstermDriver {
+    raw: bool,
+}
+
+impl TerminalDriver for CrosstermDriver {
+    fn enter(&mut self) -> io::Result<()> {
+        crossterm::terminal::enable_raw_mode()?;
+        self.raw = true;
+        let mut out = io::stdout().lock();
+        crossterm::execute!(out, crossterm::terminal::DisableLineWrap)?;
+        // legacy Windows consoles have no bracketed paste (pastes arrive as keystrokes)
+        let _ = crossterm::execute!(out, crossterm::event::EnableBracketedPaste);
+        Ok(())
+    }
+    fn size(&self) -> io::Result<(u16, u16)> {
+        crossterm::terminal::size()
+    }
+    fn read_key(&mut self) -> io::Result<Key> {
+        loop {
+            if let Some(key) = key_of(crossterm::event::read()?) {
+                return Ok(key);
+            }
+        }
+    }
+    fn apply(&mut self, ops: &[TermOp]) -> io::Result<()> {
+        use crossterm::cursor::{Hide, MoveTo, MoveToColumn, MoveUp, Show};
+        use crossterm::style::Print;
+        use crossterm::terminal::{
+            BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate,
+        };
+        let mut out = io::stdout().lock();
+        crossterm::queue!(out, BeginSynchronizedUpdate)?;
+        for op in ops {
+            match op {
+                TermOp::Up(n) => crossterm::queue!(out, MoveUp(*n))?,
+                TermOp::Column(column) => crossterm::queue!(out, MoveToColumn(*column))?,
+                TermOp::ClearLineRight => crossterm::queue!(out, Clear(ClearType::UntilNewLine))?,
+                TermOp::ClearDown => crossterm::queue!(out, Clear(ClearType::FromCursorDown))?,
+                TermOp::ClearScreen => crossterm::queue!(out, Clear(ClearType::All), MoveTo(0, 0))?,
+                TermOp::Text(text) => crossterm::queue!(out, Print(text.as_str()))?,
+                TermOp::Newline => crossterm::queue!(out, Print("\r\n"))?,
+                TermOp::ShowCursor => crossterm::queue!(out, Show)?,
+                TermOp::HideCursor => crossterm::queue!(out, Hide)?,
+            }
+        }
+        crossterm::queue!(out, EndSynchronizedUpdate)?;
+        out.flush()
+    }
+    fn leave(&mut self) {
+        let mut out = io::stdout().lock();
+        let _ = crossterm::execute!(
+            out,
+            crossterm::event::DisableBracketedPaste,
+            crossterm::terminal::EnableLineWrap,
+            crossterm::cursor::Show
+        );
+        if self.raw {
+            self.raw = false;
+            let _ = crossterm::terminal::disable_raw_mode();
+        }
+    }
+}
+
+/// The session key of one crossterm event; None for events the session ignores (key
+/// releases — Windows reports them —, Alt combinations, mouse and focus events). Ctrl+Alt
+/// with a character is AltGr on Windows: the character itself.
+pub(crate) fn key_of(event: ct::Event) -> Option<Key> {
+    let ct::KeyEvent {
+        code,
+        modifiers,
+        kind,
+        ..
+    } = match event {
+        ct::Event::Key(key) => key,
+        ct::Event::Paste(text) => return Some(Key::Paste(text)),
+        ct::Event::Resize(..) => return Some(Key::Resize),
+        _ => return None,
+    };
+    if kind == ct::KeyEventKind::Release {
+        return None;
+    }
+    let ctrl = modifiers.contains(ct::KeyModifiers::CONTROL);
+    let alt = modifiers.contains(ct::KeyModifiers::ALT);
+    Some(match code {
+        ct::KeyCode::Char(c) if ctrl && !alt => Key::Ctrl(c.to_ascii_lowercase()),
+        ct::KeyCode::Char(_) if alt && !ctrl => return None,
+        ct::KeyCode::Char(c) => Key::Char(c),
+        ct::KeyCode::Enter => Key::Enter,
+        ct::KeyCode::Esc => Key::Esc,
+        ct::KeyCode::Tab => Key::Tab,
+        ct::KeyCode::BackTab => Key::BackTab,
+        ct::KeyCode::Backspace => Key::Backspace,
+        ct::KeyCode::Delete => Key::Delete,
+        ct::KeyCode::Insert => Key::Insert,
+        ct::KeyCode::Up => Key::Up,
+        ct::KeyCode::Down => Key::Down,
+        ct::KeyCode::Left => Key::Left,
+        ct::KeyCode::Right => Key::Right,
+        ct::KeyCode::Home => Key::Home,
+        ct::KeyCode::End => Key::End,
+        ct::KeyCode::PageUp => Key::PageUp,
+        ct::KeyCode::PageDown => Key::PageDown,
+        _ => return None,
+    })
+}

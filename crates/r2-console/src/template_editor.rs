@@ -1,10 +1,13 @@
 // Checklist template editor (spec §5.12) behind the frozen §4.9.3 factory — owner R10.
-// Port of c2 console/template_editor.py.
+// Port of c2 console/template_editor.py, plus the r2 interactive panel (§11 D34).
 //
-// Line-based checklist — works in every terminal and is scriptable via ScriptedIo
-// (deliberately not a full-screen dialog). Rendered as a table: index, state glyph
+// On a terminal (`ConsoleIo::interactive`) the editor is the inline panel of `panel.rs`:
+// arrows move, Space/Enter toggle or edit, `-`/`+` disable/enable, `a` adds from a filtered
+// list, `:` takes one line of the grammar below, Enter on the OK row accepts, Esc cancels.
+// Everywhere else (PlainIo, ScriptedIo, a degraded or too small terminal) it is the
+// line-based checklist — scriptable via ScriptedIo, rendered as a table: index, state glyph
 // (`[x]`/`[ ]` bool, `(-)` disabled, `(*)` locked), attribute, kind, value. Mini-REPL
-// grammar (§5.12):
+// grammar (§5.12), shared by the panel's `:` line:
 //
 //     3             toggle boolean attr #3
 //     5=0xAABBCC    set value of attr #5 (BYTES/STR/ULONG; bytes as 0x…)
@@ -27,6 +30,10 @@ use r2_core::io::{self, ConsoleIo, TemplateEditor};
 use r2_core::params::ParamSpec;
 use r2_core::template::{AttrKind, AttrValue, KeyTemplate, TemplateAttr};
 use r2_core::text::{py_fromhex, py_int, py_isdigit, py_repr, py_strip};
+
+use panel::{End, Panel};
+
+pub(crate) mod panel;
 
 /// The editor help line (c2 `_HELP`).
 pub(crate) const HELP: &str = "commands: <n> toggle | <n>=<value> set | -<n>/+<n> disable/enable | add CKA_X=<value> | ok | cancel";
@@ -72,6 +79,41 @@ pub(crate) struct ChecklistTemplateEditor {
 
 impl TemplateEditor for ChecklistTemplateEditor {
     fn edit(&self, template: KeyTemplate, title: &str) -> Result<KeyTemplate> {
+        let mut panel = Panel::new(template, title, &self.custom);
+        let mut end = None;
+        self.io
+            .interactive(&mut |session| end = Some(panel.run(session)));
+        match end {
+            Some(End::Accept) => {
+                // the panel's frame is gone: the accepted template stays in the scrollback
+                self.io.print(render_table(&panel.template, title));
+                Ok(panel.template)
+            }
+            Some(End::Cancel) => Err(ConsoleError::user_abort("template edit cancelled")),
+            Some(End::Abort) => Err(aborted()),
+            Some(End::Failed(err)) => Err(err),
+            // no panel (no interactive terminal, too small, or the terminal failed and the
+            // session degraded): the line checklist, with any edits made so far
+            Some(End::TooSmall | End::TerminalLost) | None => {
+                self.edit_lines(panel.template, title)
+            }
+        }
+    }
+}
+
+/// Ctrl-C / Ctrl-D: what c2's prompt raised at the editor's line ("template edit
+/// cancelled" is only for a typed `cancel`/`abort`).
+fn aborted() -> ConsoleError {
+    ConsoleError::user_abort("aborted while entering 'template'")
+}
+
+impl ChecklistTemplateEditor {
+    pub(crate) fn new(io: Rc<dyn ConsoleIo>, custom: IndexMap<String, CustomAttributeDef>) -> Self {
+        Self { io, custom }
+    }
+
+    /// The §5.12 line-based checklist (c2's editor loop).
+    fn edit_lines(&self, template: KeyTemplate, title: &str) -> Result<KeyTemplate> {
         let mut working = template;
         let spec = ParamSpec::str("template", "template> ");
         self.render(&working, title);
@@ -91,123 +133,135 @@ impl TemplateEditor for ChecklistTemplateEditor {
             if line == "cancel" || line == "abort" {
                 return Err(ConsoleError::user_abort("template edit cancelled"));
             }
-            match self.apply(&mut working, line) {
-                Ok(()) => self.render(&working, title),
+            match apply(&mut working, line, &self.custom) {
+                Ok(note) => {
+                    if let Some(note) = note {
+                        self.io.print(note.into());
+                    }
+                    self.render(&working, title);
+                }
                 // keep editing (ParamResolver pattern); anything else propagates
                 Err(err) if err.param_name().is_some() => self.io.print_error(&err),
                 Err(err) => return Err(err),
             }
         }
     }
-}
-
-impl ChecklistTemplateEditor {
-    pub(crate) fn new(io: Rc<dyn ConsoleIo>, custom: IndexMap<String, CustomAttributeDef>) -> Self {
-        Self { io, custom }
-    }
 
     // -- rendering ------------------------------------------------------------------
 
     fn render(&self, template: &KeyTemplate, title: &str) {
-        let rows = template
-            .attrs
-            .iter()
-            .enumerate()
-            .map(|(index, attr)| {
-                vec![
-                    (index + 1).to_string(),
-                    glyph(attr).to_owned(),
-                    attr.name.clone(),
-                    attr.kind.as_str().to_owned(),
-                    attr.value.render_value(),
-                ]
-            })
-            .collect();
-        self.io.print(io::table(
-            Some(title),
-            &["#", "state", "attribute", "kind", "value"],
-            rows,
-        ));
+        self.io.print(render_table(template, title));
         self.io.print(HELP.into());
     }
+}
 
-    // -- mini-REPL commands -----------------------------------------------------------
+/// The checklist table (c2 `_render` without the help line): index, state glyph, attribute,
+/// kind, value.
+fn render_table(template: &KeyTemplate, title: &str) -> io::Renderable {
+    let rows = template
+        .attrs
+        .iter()
+        .enumerate()
+        .map(|(index, attr)| {
+            vec![
+                (index + 1).to_string(),
+                glyph(attr).to_owned(),
+                attr.name.clone(),
+                attr.kind.as_str().to_owned(),
+                attr.value.render_value(),
+            ]
+        })
+        .collect();
+    io::table(
+        Some(title),
+        &["#", "state", "attribute", "kind", "value"],
+        rows,
+    )
+}
 
-    fn apply(&self, template: &mut KeyTemplate, line: &str) -> Result<()> {
-        if line == "add" || line.starts_with("add ") {
-            return self.add(template, py_strip(&line[3..]));
-        }
-        if let Some(rest) = line.strip_prefix(['+', '-']) {
-            let (index, attr) = row(template, py_strip(rest))?;
-            reject_locked(index, attr)?;
-            attr.enabled = line.starts_with('+');
-            return Ok(());
-        }
-        if let Some((index_text, value_text)) = line.split_once('=') {
-            let (index, attr) = row(template, py_strip(index_text))?;
-            reject_locked(index, attr)?;
-            attr.value = parse_value(&attr.name, attr.kind, value_text)?;
-            return Ok(());
-        }
-        let (index, attr) = row(template, line)?;
-        reject_locked(index, attr)?;
-        if attr.kind != AttrKind::Bool {
-            return Err(ConsoleError::param(
-                format!("row {index} ({}) is not boolean", attr.name),
-                attr.name.clone(),
-            )
-            .with_hint(format!("set its value with {index}=<value>")));
-        }
-        if !attr.enabled {
-            return Err(ConsoleError::param(
-                format!("row {index} ({}) is disabled", attr.name),
-                attr.name.clone(),
-            )
-            .with_hint(format!("re-enable it first with +{index}")));
-        }
-        attr.value = AttrValue::Bool(!truthy(&attr.value));
-        Ok(())
+// -- mini-REPL commands ---------------------------------------------------------------
+
+/// Apply one grammar line (not `ok`/`cancel`/`abort`/empty) to `template`. Returns the
+/// §4.7 identity note when the line added CKA_ID/CKA_LABEL (the caller shows it).
+fn apply(
+    template: &mut KeyTemplate,
+    line: &str,
+    custom: &IndexMap<String, CustomAttributeDef>,
+) -> Result<Option<&'static str>> {
+    if line == "add" || line.starts_with("add ") {
+        return add(template, py_strip(&line[3..]), custom);
     }
+    if let Some(rest) = line.strip_prefix(['+', '-']) {
+        let (index, attr) = row(template, py_strip(rest))?;
+        reject_locked(index, attr)?;
+        attr.enabled = line.starts_with('+');
+        return Ok(None);
+    }
+    if let Some((index_text, value_text)) = line.split_once('=') {
+        let (index, attr) = row(template, py_strip(index_text))?;
+        reject_locked(index, attr)?;
+        attr.value = parse_value(&attr.name, attr.kind, value_text)?;
+        return Ok(None);
+    }
+    let (index, attr) = row(template, line)?;
+    reject_locked(index, attr)?;
+    if attr.kind != AttrKind::Bool {
+        return Err(ConsoleError::param(
+            format!("row {index} ({}) is not boolean", attr.name),
+            attr.name.clone(),
+        )
+        .with_hint(format!("set its value with {index}=<value>")));
+    }
+    if !attr.enabled {
+        return Err(ConsoleError::param(
+            format!("row {index} ({}) is disabled", attr.name),
+            attr.name.clone(),
+        )
+        .with_hint(format!("re-enable it first with +{index}")));
+    }
+    attr.value = AttrValue::Bool(!truthy(&attr.value));
+    Ok(None)
+}
 
-    fn add(&self, template: &mut KeyTemplate, spec_text: &str) -> Result<()> {
-        let (name, value_text) = match spec_text.split_once('=') {
-            Some((name, value)) if !py_strip(name).is_empty() => (py_strip(name), value),
-            _ => {
-                return Err(
-                    ConsoleError::param("add expects: add CKA_NAME=<value>", "add").with_hint(HELP),
-                );
-            }
-        };
-        if let Some(position) = template.attrs.iter().position(|attr| attr.name == name) {
-            let row = position + 1;
+fn add(
+    template: &mut KeyTemplate,
+    spec_text: &str,
+    custom: &IndexMap<String, CustomAttributeDef>,
+) -> Result<Option<&'static str>> {
+    let (name, value_text) = match spec_text.split_once('=') {
+        Some((name, value)) if !py_strip(name).is_empty() => (py_strip(name), value),
+        _ => {
             return Err(
-                ConsoleError::param(format!("{name} is already row {row}"), name)
-                    .with_hint(format!("set it with {row}=<value>")),
+                ConsoleError::param("add expects: add CKA_NAME=<value>", "add").with_hint(HELP),
             );
         }
-        let kind = self.kind_of(name)?;
-        let value = parse_value(name, kind, value_text)?;
-        template.attrs.push(TemplateAttr::new(name, kind, value));
-        if let Some(note) = identity_note(name) {
-            self.io.print(note.into());
-        }
-        Ok(())
+    };
+    if let Some(position) = template.attrs.iter().position(|attr| attr.name == name) {
+        let row = position + 1;
+        return Err(
+            ConsoleError::param(format!("{name} is already row {row}"), name)
+                .with_hint(format!("set it with {row}=<value>")),
+        );
     }
+    let kind = kind_of(name, custom)?;
+    let value = parse_value(name, kind, value_text)?;
+    template.attrs.push(TemplateAttr::new(name, kind, value));
+    Ok(identity_note(name))
+}
 
-    /// §5.12: names come from CKA_CATALOG or templates.custom_attributes, which also
-    /// supply the AttrKind used to parse the value.
-    fn kind_of(&self, name: &str) -> Result<AttrKind> {
-        if let Some(entry) = catalog::cka(name) {
-            return Ok(entry.kind);
-        }
-        if let Some(custom) = self.custom.get(name) {
-            return Ok(custom.kind);
-        }
-        Err(
-            ConsoleError::param(format!("unknown attribute {}", py_repr(name)), name)
-                .with_hint("add accepts CKA catalog names or templates.custom_attributes entries"),
-        )
+/// §5.12: names come from CKA_CATALOG or templates.custom_attributes, which also supply the
+/// AttrKind used to parse the value.
+fn kind_of(name: &str, custom: &IndexMap<String, CustomAttributeDef>) -> Result<AttrKind> {
+    if let Some(entry) = catalog::cka(name) {
+        return Ok(entry.kind);
     }
+    if let Some(custom) = custom.get(name) {
+        return Ok(custom.kind);
+    }
+    Err(
+        ConsoleError::param(format!("unknown attribute {}", py_repr(name)), name)
+            .with_hint("add accepts CKA catalog names or templates.custom_attributes entries"),
+    )
 }
 
 // ---------------------------------------------------------------------------------------
