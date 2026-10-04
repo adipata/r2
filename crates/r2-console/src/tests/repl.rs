@@ -9,7 +9,7 @@ use r2_core::io::{ConsoleIo, Renderable};
 use r2_core::text::{py_bool, py_repr};
 use r2_testkit::{ScriptedIo, global_state_lock};
 
-use super::io::{Step, harness, line};
+use super::io::{FAIL_TEXT, Step, harness, line};
 use crate::commands::{Command, all_commands};
 use crate::context::AppContext;
 use crate::parser::BoundArgs;
@@ -235,7 +235,8 @@ fn test_unexpected_error_with_debug_prints_traceback() {
     let _ = std::panic::take_hook();
     assert!(out.contains("stack backtrace"));
     assert!(out.contains("kaputt at "));
-    assert!(out.contains("src/tests/repl.rs"));
+    // locations use the platform's separator (`src\tests\repl.rs` on Windows)
+    assert!(out.replace('\\', "/").contains("src/tests/repl.rs"));
     // the report precedes the panel
     let report = out.find("kaputt at ").unwrap();
     let panel = out.find("unexpected error: kaputt").unwrap();
@@ -324,7 +325,7 @@ fn eof_in_a_continuation_leaves_the_repl() {
 fn reader_errors_are_rendered_and_end_the_repl() {
     // §11 D12 (c): c2 let the exception escape as a traceback
     let out = run_steps(vec![Step::Fail, line("echo y")], false);
-    assert!(out.contains("cannot read input: Input/output error"));
+    assert!(out.contains(&format!("cannot read input: {FAIL_TEXT}")));
     assert!(!out.contains("echo:"));
 }
 

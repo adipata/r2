@@ -654,6 +654,9 @@ fn complete_paths_keeps_the_typed_directory_part_and_expands_tilde() {
     let _lock = r2_testkit::global_state_lock();
     let dir = tree();
     let _home = r2_testkit::set_env("HOME", Some(&dir.path().display().to_string()));
+    // Windows: `~` expands from %USERPROFILE% (std::env::home_dir, like Python's ntpath)
+    let _profile = cfg!(windows)
+        .then(|| r2_testkit::set_env("USERPROFILE", Some(&dir.path().display().to_string())));
     assert_eq!(complete_paths("~/al"), ["~/alpha.txt"]);
     assert_eq!(complete_paths("~/sub"), ["~/subdir/"]);
 }

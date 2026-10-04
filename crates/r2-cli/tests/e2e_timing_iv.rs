@@ -22,6 +22,9 @@ fn r2(dir: &Path, softhsm_conf: Option<&Path>) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_r2"));
     cmd.env_clear()
         .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|v| ("LLVM_PROFILE_FILE", v)))
+        // Windows: the crypto APIs behind OpenSSL's entropy source fail in a process without
+        // %SystemRoot% (random bytes, key generation and key checks would all fail)
+        .envs(std::env::var_os("SYSTEMROOT").map(|v| ("SYSTEMROOT", v)))
         .env("HOME", dir)
         .current_dir(dir);
     if let Some(conf) = softhsm_conf {

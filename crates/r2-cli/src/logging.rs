@@ -631,14 +631,36 @@ mod tests {
         let err = configure(&bad, false, None).unwrap_err();
         assert_eq!(err.kind, r2_core::ErrorKind::Config);
         assert!(err.message.contains("cannot open log file"));
-        assert_eq!(
-            err.message,
-            format!(
-                "cannot open log file {}: [Errno 20] Not a directory: {}",
-                bad.file.display(),
-                r2_core::text::py_repr(&blocker.join("sub").display().to_string())
-            )
-        );
+        if cfg!(unix) {
+            assert_eq!(
+                err.message,
+                format!(
+                    "cannot open log file {}: [Errno 20] Not a directory: {}",
+                    bad.file.display(),
+                    r2_core::text::py_repr(&blocker.join("sub").display().to_string())
+                )
+            );
+        } else {
+            // Windows: mkdir of `blocker\sub` is ERROR_PATH_NOT_FOUND, so pathlib's
+            // mkdir(parents=True) recurses and fails on `blocker` itself (the OS wording is
+            // the system's)
+            assert!(
+                err.message.starts_with(&format!(
+                    "cannot open log file {}: [Errno ",
+                    bad.file.display()
+                )),
+                "{}",
+                err.message
+            );
+            assert!(
+                err.message.ends_with(&format!(
+                    ": {}",
+                    r2_core::text::py_repr(&blocker.display().to_string())
+                )),
+                "{}",
+                err.message
+            );
+        }
         assert_eq!(
             err.hint.as_deref(),
             Some("check app.log.file in the configuration")
@@ -649,14 +671,30 @@ mod tests {
             ..bad
         };
         let err = configure(&as_dir, false, None).unwrap_err();
-        assert_eq!(
-            err.message,
-            format!(
-                "cannot open log file {}: [Errno 21] Is a directory: {}",
-                dir.path().display(),
-                r2_core::text::py_repr(&dir.path().display().to_string())
-            )
-        );
+        let shown = r2_core::text::py_repr(&dir.path().display().to_string());
+        if cfg!(unix) {
+            assert_eq!(
+                err.message,
+                format!(
+                    "cannot open log file {}: [Errno 21] Is a directory: {shown}",
+                    dir.path().display()
+                )
+            );
+        } else {
+            assert!(
+                err.message.starts_with(&format!(
+                    "cannot open log file {}: [Errno ",
+                    dir.path().display()
+                )),
+                "{}",
+                err.message
+            );
+            assert!(
+                err.message.ends_with(&format!(": {shown}")),
+                "{}",
+                err.message
+            );
+        }
     }
 
     #[test]

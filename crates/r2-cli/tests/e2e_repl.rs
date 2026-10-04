@@ -438,10 +438,20 @@ fn log_files_follow_the_python_rules() {
     let output = r2(dir.path()).arg("--config").arg(&path).output().unwrap();
     assert_eq!(output.status.code(), Some(2));
     let err = String::from_utf8(output.stderr).unwrap();
-    assert!(err.starts_with(&format!(
-        "error: cannot open log file {}: [Errno 20] Not a directory: ",
-        blocker.join("sub").join("r2.log").display()
-    )));
+    // c2's ENOTDIR on Unix; on Windows the failing directory and the OS wording are the
+    // system's (r2-cli logging::tests::test_unwritable_log_path_raises_config_error)
+    let errno = if cfg!(unix) {
+        "[Errno 20] Not a directory: "
+    } else {
+        "[Errno "
+    };
+    assert!(
+        err.starts_with(&format!(
+            "error: cannot open log file {}: {errno}",
+            blocker.join("sub").join("r2.log").display()
+        )),
+        "{err}"
+    );
     assert!(err.ends_with(" (hint: check app.log.file in the configuration)\n"));
 }
 

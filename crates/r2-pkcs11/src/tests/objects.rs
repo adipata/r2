@@ -1268,9 +1268,12 @@ fn imported_objects_read_key_gen_mechanism_as_unavailable() {
     // §4.10.4 SoftHSM flavor: imported key objects carry CK_UNAVAILABLE_INFORMATION
     let (backend, provider) = logged_in();
     provider.import_key(&aes(), "kgm", None, None).unwrap();
+    // the platform's CK_ULONG width: 2^64 - 1 on LP64, 2^32 - 1 on Windows
     assert_eq!(
         object_of(&backend, "kgm")[&CKA_KEY_GEN_MECHANISM],
-        ul(u64::MAX)
+        ul(crate::ulong_to_u64(
+            cryptoki_sys::CK_UNAVAILABLE_INFORMATION
+        ))
     );
 }
 

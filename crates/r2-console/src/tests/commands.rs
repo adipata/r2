@@ -216,12 +216,32 @@ fn c2_to_r2(text: &str) -> String {
     text.replace("/c2/", "/r2/").replace("c2.log", "r2.log")
 }
 
+/// `shown` for a byte comparison with a c2 vector captured on Linux. On Windows a path
+/// value prints with `\` (as c2's `str(Path)` does there), so each line that differs from
+/// c2's has its `\` read as `/`; every other line is compared as is.
+fn posix_paths(shown: &str, expected: &str) -> String {
+    if !cfg!(windows) {
+        return shown.to_owned();
+    }
+    let mut want = expected.split('\n');
+    shown
+        .split('\n')
+        .map(|line| match want.next() {
+            Some(same) if same == line => line.to_owned(),
+            _ => line.replace('\\', "/"),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[test]
 fn config_show_is_byte_identical_to_c2() {
     // Vectors: src/tests/fixtures/gen_config_show.py run in c2's venv with
     // HOME=/home/tester (c2's PyYAML safe_dump of `_to_plain(config)`, `.rstrip()`).
     let _lock = global_state_lock();
     let _home = set_env("HOME", Some("/home/tester"));
+    // Windows: `~` expands from %USERPROFILE% (std::env::home_dir, like Python's ntpath)
+    let _profile = cfg!(windows).then(|| set_env("USERPROFILE", Some("/home/tester")));
     let defaults = make_config(None);
     let overrides = make_config(Some(include_str!("fixtures/config_show_overrides.yaml")));
     for (config, expected) in [
@@ -239,7 +259,12 @@ fn config_show_is_byte_identical_to_c2() {
             .config(config)
             .build();
         run_line(&ctx, "config show").unwrap();
-        assert_eq!(io.renderables(), [Renderable::Text(c2_to_r2(expected))]);
+        let expected = c2_to_r2(expected);
+        let renderables = io.renderables();
+        let [Renderable::Text(shown)] = renderables.as_slice() else {
+            panic!("{renderables:?}");
+        };
+        assert_eq!(posix_paths(shown, &expected), expected);
     }
 }
 

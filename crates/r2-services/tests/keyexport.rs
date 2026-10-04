@@ -506,7 +506,17 @@ fn test_write_output_failure_is_dataioerror() {
         keyexport::write_output(&dir.path().join("missing-dir").join("out.bin"), b"x").unwrap_err();
     assert_eq!(err.kind, ErrorKind::DataIo);
     assert!(err.message.contains("cannot write"));
-    assert!(err.message.ends_with("out.bin: No such file or directory"));
+    // the OS wording is the system's on Windows (ERROR_PATH_NOT_FOUND)
+    let missing = if cfg!(windows) {
+        "The system cannot find the path specified."
+    } else {
+        "No such file or directory"
+    };
+    assert!(
+        err.message.ends_with(&format!("out.bin: {missing}")),
+        "{}",
+        err.message
+    );
 }
 
 // ---------------------------------------------------------------------------------------

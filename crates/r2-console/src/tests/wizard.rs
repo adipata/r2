@@ -1506,12 +1506,18 @@ fn append_io_errors_are_config_errors() {
     let entry = helper_entry(dir.path());
     let err = wizard::append_provider_entry(&missing, &entry).unwrap_err();
     assert_eq!(err.kind, ErrorKind::Config);
+    // the OS wording is the system's on Windows (ERROR_FILE_NOT_FOUND)
+    let not_found = if cfg!(windows) {
+        "The system cannot find the file specified."
+    } else {
+        "No such file or directory"
+    };
     assert_eq!(
         err.message,
         format!(
-            "cannot read config file {}: [Errno 2] No such file or directory: '{}'",
+            "cannot read config file {}: [Errno 2] {not_found}: {}",
             missing.display(),
-            missing.display()
+            r2_core::text::py_repr(&missing.display().to_string())
         )
     );
 

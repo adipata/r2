@@ -186,8 +186,14 @@ fn test_dump_write_failure_raises_dataioerror() {
     .unwrap_err();
     assert_eq!(err.kind, ErrorKind::DataIo);
     assert!(err.message.contains("cannot write"), "{}", err.message);
+    // the OS wording is the system's on Windows (ERROR_PATH_NOT_FOUND)
+    let missing = if cfg!(windows) {
+        "The system cannot find the path specified."
+    } else {
+        "No such file or directory"
+    };
     assert!(
-        err.message.ends_with("tpl.yaml: No such file or directory"),
+        err.message.ends_with(&format!("tpl.yaml: {missing}")),
         "{}",
         err.message
     );
@@ -199,9 +205,15 @@ fn test_load_missing_file_raises_dataioerror() {
     let path = dir.path().join("absent.yaml");
     let err = templatefile::load_seed_file(&path, &no_custom()).unwrap_err();
     assert_eq!(err.kind, ErrorKind::DataIo);
+    // the OS wording is the system's on Windows (ERROR_FILE_NOT_FOUND)
+    let missing = if cfg!(windows) {
+        "The system cannot find the file specified."
+    } else {
+        "No such file or directory"
+    };
     assert_eq!(
         err.message,
-        format!("cannot read {}: No such file or directory", path.display())
+        format!("cannot read {}: {missing}", path.display())
     );
 }
 

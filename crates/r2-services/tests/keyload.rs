@@ -53,9 +53,16 @@ fn test_read_key_file_missing_path_raises_dataioerror() {
     let err = keyload::read_key_file(&dir.path().join("absent.pem")).unwrap_err();
     assert_eq!(err.kind, ErrorKind::DataIo);
     assert!(err.message.contains("cannot read"), "{}", err.message);
+    // the OS wording is the system's on Windows (ERROR_FILE_NOT_FOUND)
+    let missing = if cfg!(windows) {
+        "The system cannot find the file specified."
+    } else {
+        "No such file or directory"
+    };
     assert!(
+        err.message.ends_with(&format!("absent.pem: {missing}")),
+        "{}",
         err.message
-            .ends_with("absent.pem: No such file or directory")
     );
 }
 
