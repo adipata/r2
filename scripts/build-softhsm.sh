@@ -5,8 +5,12 @@
 #
 # Ubuntu 22.04 and 24.04 both ship SoftHSM 2.6.1, so CI builds 2.7.0 itself:
 # CMake, -DENABLE_P11_KIT=OFF -DBUILD_TESTS=OFF, installed under PREFIX (default
-# $HOME/.local/softhsm-$SOFTHSM_VERSION). A PREFIX that already holds the module (a CI cache
-# hit) is reused as is. Needs git, cmake, a C++ compiler and the OpenSSL headers
+# $HOME/.local/softhsm-$SOFTHSM_VERSION), its configuration and state directories included
+# (CMAKE_INSTALL_SYSCONFDIR=PREFIX/etc, CMAKE_INSTALL_LOCALSTATEDIR=PREFIX/var: SoftHSM's
+# CMakeLists otherwise sets the absolute /etc and /var whatever the prefix, and an
+# unprivileged install fails writing /etc/softhsm2.conf and /var/lib/softhsm/tokens).
+# A PREFIX that already holds the module (a CI cache hit) is reused as is. Needs git,
+# cmake, a C++ compiler and the OpenSSL headers
 # (Debian/Ubuntu: cmake g++ libssl-dev). Prints the module path on stdout; point
 # $SOFTHSM2_LIB at it and put PREFIX/bin first on PATH (softhsm2-util) before running
 # scripts/softhsm-init.sh.
@@ -40,6 +44,8 @@ git clone --quiet --depth 1 --branch "$version" "$repo" "$work/src" >&2 ||
 cmake -S "$work/src" -B "$work/build" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$prefix" \
+    -DCMAKE_INSTALL_SYSCONFDIR="$prefix/etc" \
+    -DCMAKE_INSTALL_LOCALSTATEDIR="$prefix/var" \
     -DENABLE_P11_KIT=OFF \
     -DBUILD_TESTS=OFF >&2 || die "cmake configure failed"
 jobs="${SOFTHSM_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)}"

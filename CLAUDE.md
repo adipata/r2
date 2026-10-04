@@ -1,31 +1,34 @@
 # r2 — agent guide
 
-r2 is the Rust rewrite of c2, an interactive cryptographic operator console, held to full
-behavioral parity with c2. It runs a REPL (`r2>`; reedline + rpassword on a TTY, a plain
-line reader otherwise) over pluggable providers: memory (via the `openssl` crate) and
-PKCS#11 (via `cryptoki` 0.12, including auto-detected SoftHSM2). It ships as a single
-binary, `r2`. It is a Cargo workspace on edition 2024, with the toolchain pinned in
-`rust-toolchain.toml`, licensed GPL-3.0.
+r2 is an interactive cryptographic operator console, written in Rust. It runs a REPL
+(`r2>`; reedline + rpassword on a TTY, a plain line reader otherwise) over pluggable
+providers: memory (via the `openssl` crate) and PKCS#11 (via `cryptoki` 0.12, including
+auto-detected SoftHSM2). It ships as a single binary, `r2`. It is a Cargo workspace on
+edition 2024, with the toolchain pinned in `rust-toolchain.toml`, licensed GPL-3.0.
+
+## r2 and c2
+
+r2 began as a fork of c2, the Python original: a Rust rewrite held to full behavioral
+parity with c2@408d6f2, built loop by loop (`loops.md`). That port is done. r2 is now an
+independent project, and parity with c2 is no longer a goal:
+
+- A difference from c2 is not a bug in itself. r2 may change behavior it inherited.
+- Where `spec.md` (notably §11, the deviations from c2), `loops.md`, `parity/`, tests or
+  comments speak of c2 parity, read it as the history of the port, not as a rule for new
+  work.
+- c2 is no longer the behavioral oracle. It is still at `../c2` (`/home/user/c2` in this
+  environment), frozen at 408d6f2, and can explain why existing behavior is the way it
+  is. Never modify it. New work ports nothing from it and adds no `parity/ledger.csv`
+  rows.
 
 ## Before you write code
 
 1. **Read `spec.md` §4.** Every cross-crate interface is FROZEN there: crate and module
    paths, exact signatures, derives, constants and schemas. Never invent or alter one. If
-   §4 must change, follow spec §4.11. Spec §11 is the closed list of deviations from c2;
-   any other observable difference is a parity bug.
+   §4 must change, follow spec §4.11.
 2. **Read `loops.md`.** Check the STATUS table (and `git log --oneline` against it), then
    your loop's card: Owns, Ports, Depends on, Accept. Touch only the files your loop owns,
-   plus your tests, your STATUS row and your ledger rows.
-3. **List your rows in `parity/ledger.csv`** with
-   `python3 parity/generate_ledger.py --stats --gate <ID>`. These are the c2 tests you
-   must port (or mark `n/a:<reason>` for pure-Python mechanics). Rules are in
-   `parity/README.md`.
-4. **The Python reference is the behavioral oracle.** It lives at `../c2` (`/home/user/c2`
-   in this environment), frozen at 408d6f2. Never modify it. Read the c2 source and tests
-   your card names. Port test vectors, inputs and asserted messages/hints **verbatim**
-   (c2 → r2 only where the text names the tool), and translate only the mechanics. To
-   check what c2 actually does, run it: `cd ../c2 && uv run c2` or
-   `uv run pytest tests/...::test_x`.
+   plus your tests and your STATUS row.
 
 ## Commands
 
@@ -42,11 +45,12 @@ binary, `r2`. It is a Cargo workspace on edition 2024, with the toolchain pinned
                       (those modules are `include!`-only, so `cargo fmt` cannot see them)
 - Lint:               `cargo clippy --workspace --all-targets -- -D warnings`
 - Supply chain:       `cargo deny check`
-- Ledger gate:        `python3 parity/generate_ledger.py --stats --gate <ID>`
+- Ledger lint:        `python3 parity/generate_ledger.py --stats` (the c2 port's test ledger;
+                      CI lints it)
 - Coverage (≥ 80%):   `cargo llvm-cov nextest --workspace --fail-under-lines 80` (CI adds
                       `--features softhsm`)
-- Parity vs c2:       `python3 parity/harness/run_parity.py [--softhsm]` (c2 at `../c2` with
-                      `uv sync`; see `parity/harness/README.md`)
+- Parity vs c2:       `python3 parity/harness/run_parity.py [--softhsm]` (optional, history of
+                      the port: c2 at `../c2` with `uv sync`; see `parity/harness/README.md`)
 
 The `justfile` wraps these. Keep builds lean (4 CPUs): reuse the target dir, and don't
 run parallel cargo invocations.
@@ -71,7 +75,7 @@ crates/r2-console   REPL, io (TerminalIo/PlainIo), parser, completer, render (Si
 crates/r2-cli       the `r2` binary: args, bootstrap, logging, panic hook
 crates/r2-testkit   dev-dependency only: ScriptedIo, RecordingEditor, FakeProvider,
                     provider_contract_tests!, fixtures, softhsm fixture, set_env
-parity/             ledger.csv + generator (S0); differential harness vs c2 (R13)
+parity/             history of the c2 port: ledger.csv + generator (S0), harness vs c2 (R13)
 scripts/            softhsm-init.sh, build-softhsm.sh, release/
 ```
 
@@ -139,10 +143,9 @@ rustfmt --edition 2024 --check crates/r2-console/src/commands/*.rs crates/r2-con
 cargo clippy --workspace --all-targets -- -D warnings
 cargo nextest run --workspace
 cargo deny check
-python3 parity/generate_ledger.py --stats --gate <ID>
+python3 parity/generate_ledger.py --stats
 ```
 
 All of these must be green, plus `cargo nextest run --workspace --features softhsm` when
 SoftHSM is present (CI runs it regardless, on 2.6.1 and 2.7.0). Your STATUS row in
-`loops.md` and your `parity/ledger.csv` rows (`ported` + Rust test IDs, or
-`n/a:<reason>`) are updated in the same PR, or in the same `R<n>:` commit series.
+`loops.md` is updated in the same PR, or in the same `R<n>:` commit series.

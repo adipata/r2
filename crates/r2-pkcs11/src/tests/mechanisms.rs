@@ -182,11 +182,13 @@ fn gcm_params_leave_iv_bits_zero_like_pykcs11() {
     let mut iv = vec![1u8; 12];
     let aad = b"hdr".to_vec();
     let params = crate::backend::cryptoki::gcm_params(&mut iv, &aad, 96).unwrap();
-    assert_eq!(params.ulIvBits, 0);
-    assert_eq!(params.ulIvLen, 12);
-    assert_eq!(params.ulAADLen, 3);
-    assert_eq!(params.ulTagBits, 96);
-    assert_eq!(params.pIv, iv.as_mut_ptr());
+    // `{ … }` copies each field: CK_GCM_PARAMS is `repr(packed)` on Windows, where
+    // `assert_eq!` borrowing a field is E0793 (an unaligned reference)
+    assert_eq!({ params.ulIvBits }, 0);
+    assert_eq!({ params.ulIvLen }, 12);
+    assert_eq!({ params.ulAADLen }, 3);
+    assert_eq!({ params.ulTagBits }, 96);
+    assert_eq!({ params.pIv }, iv.as_mut_ptr());
 }
 
 #[test]

@@ -79,7 +79,13 @@ fn test_providers_missing_library_is_unavailable() {
     .unwrap();
     let text = io.text();
     assert!(text.contains("unavailable (library not found)"));
-    assert!(text.contains("/nonexistent/libvendor.so"));
+    // shown as the normalized path: `\nonexistent\libvendor.so` on Windows (pathlib)
+    let shown = if cfg!(windows) {
+        r"\nonexistent\libvendor.so"
+    } else {
+        "/nonexistent/libvendor.so"
+    };
+    assert!(text.contains(shown), "{text}");
 }
 
 #[test]

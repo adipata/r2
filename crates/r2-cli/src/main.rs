@@ -575,7 +575,8 @@ mod tests {
             )]
         );
         assert!(log.contains("ERROR   r2::console: unexpected error: kaputt at "));
-        assert!(log.contains("src/main.rs"));
+        // locations use the platform's separator (`src\main.rs` on Windows)
+        assert!(log.replace('\\', "/").contains("src/main.rs"));
         assert!(log.contains("a_panic_inside_a_command") || log.contains("panic_session"));
     }
 
@@ -585,7 +586,7 @@ mod tests {
         let (output, _log, _) = panic_session(true);
         assert_eq!(output.len(), 2);
         assert!(output[0].starts_with("kaputt at "));
-        assert!(output[0].contains("src/main.rs"));
+        assert!(output[0].replace('\\', "/").contains("src/main.rs"));
         assert!(output[0].lines().count() > 3); // the captured backtrace frames
         assert!(output[1].starts_with("error: unexpected error: kaputt"));
     }
@@ -599,7 +600,7 @@ mod tests {
         assert!(caught.is_err());
         let report = r2_core::runtime::take_panic_report().unwrap();
         assert!(report.starts_with("boom 7 at "));
-        assert!(report.contains("src/main.rs:"));
+        assert!(report.replace('\\', "/").contains("src/main.rs:"));
         assert!(r2_core::runtime::take_panic_report().is_none());
     }
 }

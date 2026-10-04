@@ -35,6 +35,14 @@ pub(crate) enum Step {
     Fail,
 }
 
+/// `os_error_text` of `Step::Fail`'s raw OS error 5: EIO on Unix (c2's text),
+/// ERROR_ACCESS_DENIED on Windows.
+pub(crate) const FAIL_TEXT: &str = if cfg!(windows) {
+    "Access is denied."
+} else {
+    "Input/output error"
+};
+
 pub(crate) fn line(text: &str) -> Step {
     Step::Line(text.to_owned())
 }
@@ -359,7 +367,7 @@ fn reader_errors_become_console_errors() {
     let h = harness(vec![Step::Fail]);
     let err = h.io.read_command("r2> ").unwrap_err();
     assert_eq!(err.kind, ErrorKind::Generic);
-    assert_eq!(err.message, "cannot read input: Input/output error");
+    assert_eq!(err.message, format!("cannot read input: {FAIL_TEXT}"));
     let h = harness(vec![Step::Fail]);
     assert!(h.io.prompt(&spec()).is_err());
 }

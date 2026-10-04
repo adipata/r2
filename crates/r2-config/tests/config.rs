@@ -82,6 +82,15 @@ impl Isolated {
     fn env(&mut self, key: &str, value: Option<&str>) {
         self._env.push(set_env(key, value));
     }
+
+    /// Points `~` at `value`: `$HOME`, and on Windows `%USERPROFILE%` too (where
+    /// `std::env::home_dir` looks, like Python's `ntpath.expanduser`).
+    fn home(&mut self, value: &str) {
+        self.env("HOME", Some(value));
+        if cfg!(windows) {
+            self.env("USERPROFILE", Some(value));
+        }
+    }
 }
 
 impl Drop for Isolated {
@@ -100,6 +109,24 @@ fn write(path: &Path, text: &str) -> PathBuf {
 
 fn home() -> PathBuf {
     std::env::home_dir().unwrap()
+}
+
+/// `dumped` for a byte comparison with a c2 vector captured on Linux. On Windows a path
+/// value prints with `\` (as c2's `str(Path)` does there), so each line that differs from
+/// c2's has its `\` read as `/`; every other line is compared as is.
+fn posix_paths(dumped: &str, expected: &str) -> String {
+    if !cfg!(windows) {
+        return dumped.to_owned();
+    }
+    let mut want = expected.split('\n');
+    dumped
+        .split('\n')
+        .map(|line| match want.next() {
+            Some(same) if same == line => line.to_owned(),
+            _ => line.replace('\\', "/"),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The `~`-expansion c2's tests compute with `Path(...).expanduser()`.
@@ -296,11 +323,12 @@ mod embedded_defaults {
     fn defaults_config_show_matches_c2() {
         let _iso = Isolated::new();
         let mut iso = _iso;
-        iso.env("HOME", Some("/home/tester"));
+        iso.home("/home/tester");
         let (text, expected) = vectors::CONFIG_SHOW[0];
         assert_eq!(text, "");
         let config = config_from_yaml(None).unwrap();
-        assert_eq!(yaml::dump(&config.to_value()), expected);
+        let dumped = yaml::dump(&config.to_value());
+        assert_eq!(posix_paths(&dumped, expected), expected);
     }
 }
 
@@ -454,7 +482,7 @@ mod discovery {
     #[test]
     fn cli_and_env_paths_are_user_expanded() {
         let mut iso = Isolated::new();
-        iso.env("HOME", Some(iso.path().to_str().unwrap()));
+        iso.home(iso.path().to_str().unwrap());
         let file = write(&iso.path().join("sub/c.yaml"), "ui: {hex_group: 6}\n");
         assert_eq!(home(), iso.path());
         let loaded = load_config(Some(Path::new("~/sub/./c.yaml"))).unwrap();
@@ -634,7 +662,7 @@ mod discovery {
     #[test]
     fn expand_user_is_python_expanduser() {
         let mut iso = Isolated::new();
-        iso.env("HOME", Some("/home/tester/"));
+        iso.home("/home/tester/");
         assert_eq!(expand_user("~"), PathBuf::from("/home/tester"));
         assert_eq!(
             expand_user("~/a//b/./c/"),
@@ -647,7 +675,7 @@ mod discovery {
         assert_eq!(expand_user("./x/../y"), PathBuf::from("x/../y"));
         assert_eq!(expand_user("a/~/b"), PathBuf::from("a/~/b"));
         assert_eq!(expand_user(""), PathBuf::from("."));
-        iso.env("HOME", Some("/"));
+        iso.home("/");
         assert_eq!(expand_user("~/x"), PathBuf::from("/x"));
         if cfg!(unix) {
             // posixpath.expanduser: a set-but-empty $HOME is used as is ('' → '/')
@@ -684,8 +712,10 @@ mod discovery {
     }
 
     /// A non-UTF-8 `--config` / `$R2_CONFIG` path is used byte for byte (Python keeps the
-    /// bytes through surrogateescape).
-    #[cfg(unix)]
+    /// bytes through surrogateescape). Not on macOS: APFS and HFS+ refuse a file name that is
+    /// not UTF-8 (EILSEQ, "Illegal byte sequence"), so no such config file can exist there;
+    /// `missing_non_utf8_path_is_reported` covers the case macOS can meet, on every Unix.
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn non_utf8_paths_are_kept() {
         use std::ffi::OsStr;
@@ -705,6 +735,32 @@ mod discovery {
             discover(None).unwrap_err().message,
             "config file not found: /home/tester/missing.yaml"
         );
+    }
+
+    /// A missing non-UTF-8 `--config` path is reported with its own bytes (shown lossily as
+    /// U+FFFD), never mistaken for another path — by `discover` and `load_config` alike.
+    #[cfg(unix)]
+    #[test]
+    fn missing_non_utf8_path_is_reported() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let iso = Isolated::new();
+        let file = iso.path().join(OsStr::from_bytes(b"cfg\xff.yaml"));
+        let err = discover(Some(&file)).unwrap_err();
+        assert_eq!(
+            err.message,
+            format!("config file not found: {}", file.display())
+        );
+        assert!(
+            err.message.ends_with("/cfg\u{fffd}.yaml"),
+            "{}",
+            err.message
+        );
+        assert_eq!(
+            err.hint.as_deref(),
+            Some("--config must point to an existing file")
+        );
+        assert_eq!(load_config(Some(&file)).unwrap_err().message, err.message);
     }
 }
 
@@ -1796,11 +1852,12 @@ mod config_show {
     #[test]
     fn to_value_dumps_like_c2() {
         let mut iso = Isolated::new();
-        iso.env("HOME", Some("/home/tester"));
+        iso.home("/home/tester");
         for (text, expected) in vectors::CONFIG_SHOW {
             let (config, _) = config_warnings(|| config_from_yaml(Some(text)));
             let config = config.unwrap();
-            assert_eq!(yaml::dump(&config.to_value()), *expected, "{text:?}");
+            let dumped = yaml::dump(&config.to_value());
+            assert_eq!(posix_paths(&dumped, expected), *expected, "{text:?}");
         }
     }
 }

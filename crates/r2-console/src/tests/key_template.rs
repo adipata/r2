@@ -18,6 +18,21 @@ use crate::commands::all_commands;
 use crate::commands::key_template::KEY_USAGE;
 use crate::testing::{CtxBuilder, run_line};
 
+/// `os_error_text` of a missing file: c2's strerror on Unix, the system's wording on
+/// Windows (ERROR_FILE_NOT_FOUND).
+const NO_FILE: &str = if cfg!(windows) {
+    "The system cannot find the file specified."
+} else {
+    "No such file or directory"
+};
+
+/// `os_error_text` of a path whose directory is missing: ERROR_PATH_NOT_FOUND on Windows.
+const NO_PATH: &str = if cfg!(windows) {
+    "The system cannot find the path specified."
+} else {
+    "No such file or directory"
+};
+
 fn find(provider: &dyn Provider, label: &str) -> KeyInfo {
     provider.find_key(&KeySelector::label(label)).unwrap()
 }
@@ -311,7 +326,9 @@ fn key_template_path_is_normalized_and_write_errors_are_dataio() {
     // `..` is kept verbatim by pathlib, so `sub` must exist
     std::fs::create_dir(dir.path().join("sub")).unwrap();
     run_line(&p.ctx, &format!("key template hsm:k {typed}")).unwrap();
-    let shown = format!("{}/sub/../tpl.yaml", dir.path().display());
+    // normalized with the platform's separator (`\` on Windows, like pathlib there)
+    let shown = dir.path().join("sub").join("..").join("tpl.yaml");
+    let shown = shown.display();
     assert!(
         p.io.text().ends_with(&format!("to {shown}")),
         "{}",
@@ -329,8 +346,8 @@ fn key_template_path_is_normalized_and_write_errors_are_dataio() {
     assert_eq!(
         err.message,
         format!(
-            "cannot write {}/absent/tpl.yaml: No such file or directory",
-            dir.path().display()
+            "cannot write {}: {NO_PATH}",
+            dir.path().join("absent").join("tpl.yaml").display()
         )
     );
 }
@@ -525,8 +542,8 @@ fn bad_template_file_fails_before_any_prompt_or_provider_call() {
     assert_eq!(
         err.message,
         format!(
-            "cannot read {}/absent.yaml: No such file or directory",
-            dir.path().display()
+            "cannot read {}: {NO_FILE}",
+            dir.path().join("absent.yaml").display()
         )
     );
     assert!(calls_of(&p.hsm, "import_key").is_empty());

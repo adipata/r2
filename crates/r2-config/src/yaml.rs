@@ -932,9 +932,23 @@ struct Composer<'a> {
     mark: Option<Marker>,
 }
 
+/// A collection `Composer::compose_node` has started and not yet closed.
+enum Open {
+    Seq {
+        items: Vec<Rc<Node>>,
+        anchor: usize,
+        tag: Option<EventTag>,
+    },
+    /// `key` holds a composed key until its value follows (None = key position).
+    Map {
+        pairs: Vec<(Rc<Node>, Rc<Node>)>,
+        key: Option<Rc<Node>>,
+        anchor: usize,
+        tag: Option<EventTag>,
+    },
+}
+
 impl Composer<'_> {
-    /// Kept out of line: `compose_node` recurses up to `MAX_DEPTH` deep.
-    #[inline(never)]
     fn scalar_node(
         &mut self,
         mut text: String,
@@ -964,66 +978,114 @@ impl Composer<'_> {
         Ok(event)
     }
 
-    fn compose_node(&mut self, event: Event, depth: usize) -> Result<Rc<Node>> {
-        if depth > MAX_DEPTH {
-            return Err(err(format!(
-                "maximum nesting depth of {MAX_DEPTH} exceeded"
-            )));
+    /// PyYAML `compose_node`, without recursion: the open sequences and mappings are kept on
+    /// an explicit stack, so the nesting depth costs no call stack (a recursive composer took
+    /// ~4.9 KB of stack per level in debug builds — 400 levels overflowed the 2 MiB of a test
+    /// thread on macOS). The events are read in the same order and checked at the same
+    /// points: a node deeper than `MAX_DEPTH` is an error before its event is looked at; a
+    /// sequence ends at a `SequenceEnd` in item position, a mapping at a `MappingEnd` in key
+    /// position; any other event where a node is expected is an unexpected event. A
+    /// collection is anchored once complete (an alias inside it to its own anchor is
+    /// undefined, as in PyYAML).
+    fn compose_node(&mut self, event: Event) -> Result<Rc<Node>> {
+        let mut open: Vec<Open> = Vec::new();
+        let mut event = event;
+        loop {
+            let closed = open.pop_if(|top| match top {
+                Open::Seq { .. } => event == Event::SequenceEnd,
+                Open::Map { key: None, .. } => event == Event::MappingEnd,
+                Open::Map { .. } => false,
+            });
+            let complete = if let Some(top) = closed {
+                self.close(top)
+            } else {
+                // a node: its depth is the number of collections around it
+                if open.len() > MAX_DEPTH {
+                    return Err(too_deep());
+                }
+                match event {
+                    Event::Alias(id) => self.alias_node(id)?,
+                    Event::Scalar(text, style, anchor, tag) => {
+                        let node = self.scalar_node(text, style, tag)?;
+                        self.anchored(node, anchor)
+                    }
+                    Event::SequenceStart(anchor, tag) => {
+                        open.push(Open::Seq {
+                            items: Vec::new(),
+                            anchor,
+                            tag,
+                        });
+                        event = self.next()?;
+                        continue;
+                    }
+                    Event::MappingStart(anchor, tag) => {
+                        open.push(Open::Map {
+                            pairs: Vec::new(),
+                            key: None,
+                            anchor,
+                            tag,
+                        });
+                        event = self.next()?;
+                        continue;
+                    }
+                    other => return Err(unexpected_event(&other)),
+                }
+            };
+            match open.last_mut() {
+                None => return Ok(complete),
+                Some(Open::Seq { items, .. }) => items.push(complete),
+                Some(Open::Map { pairs, key, .. }) => match key.take() {
+                    None => *key = Some(complete),
+                    Some(done) => pairs.push((done, complete)),
+                },
+            }
+            event = self.next()?;
         }
-        let (node, anchor) = match event {
-            Event::Alias(id) => {
-                return self.anchors.get(&id).cloned().ok_or_else(|| {
-                    err("found undefined alias (recursive aliases are not supported)")
-                });
-            }
-            Event::Scalar(text, style, anchor, tag) => {
-                (self.scalar_node(text, style, tag)?, anchor)
-            }
-            Event::SequenceStart(anchor, tag) => {
-                let mut items = Vec::new();
-                loop {
-                    let event = self.next()?;
-                    if event == Event::SequenceEnd {
-                        break;
-                    }
-                    items.push(self.compose_node(event, depth + 1)?);
-                }
-                (
-                    Node {
-                        kind: NodeKind::Seq(items),
-                        tag: full_tag(tag),
-                    },
-                    anchor,
-                )
-            }
-            Event::MappingStart(anchor, tag) => {
-                let mut pairs = Vec::new();
-                loop {
-                    let event = self.next()?;
-                    if event == Event::MappingEnd {
-                        break;
-                    }
-                    let key = self.compose_node(event, depth + 1)?;
-                    let event = self.next()?;
-                    let value = self.compose_node(event, depth + 1)?;
-                    pairs.push((key, value));
-                }
-                (
-                    Node {
-                        kind: NodeKind::Map(pairs),
-                        tag: full_tag(tag),
-                    },
-                    anchor,
-                )
-            }
-            other => return Err(err(format!("unexpected YAML event {other:?}"))),
+    }
+
+    /// A complete collection, built and anchored.
+    fn close(&mut self, top: Open) -> Rc<Node> {
+        let (kind, anchor, tag) = match top {
+            Open::Seq { items, anchor, tag } => (NodeKind::Seq(items), anchor, tag),
+            Open::Map {
+                pairs, anchor, tag, ..
+            } => (NodeKind::Map(pairs), anchor, tag),
         };
+        let node = Node {
+            kind,
+            tag: full_tag(tag),
+        };
+        self.anchored(node, anchor)
+    }
+
+    fn alias_node(&self, id: usize) -> Result<Rc<Node>> {
+        self.anchors
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| err("found undefined alias (recursive aliases are not supported)"))
+    }
+
+    /// The composed node, registered under its anchor (0 = none).
+    fn anchored(&mut self, node: Node, anchor: usize) -> Rc<Node> {
         let node = Rc::new(node);
         if anchor != 0 {
             self.anchors.insert(anchor, Rc::clone(&node));
         }
-        Ok(node)
+        node
     }
+}
+
+/// The error of a document nested deeper than `MAX_DEPTH` (out of line, like every cold path
+/// of the recursive `Constructor::construct`).
+#[cold]
+#[inline(never)]
+fn too_deep() -> ConsoleError {
+    err(format!("maximum nesting depth of {MAX_DEPTH} exceeded"))
+}
+
+#[cold]
+fn unexpected_event(event: &Event) -> ConsoleError {
+    err(format!("unexpected YAML event {event:?}"))
 }
 
 /// PyYAML `Composer.get_single_node`: None for an empty stream.
@@ -1048,7 +1110,7 @@ fn compose(text: &str) -> Result<Option<Rc<Node>>> {
                 }
                 composer.anchors.clear();
                 let event = composer.next()?;
-                root = Some(composer.compose_node(event, 0)?);
+                root = Some(composer.compose_node(event)?);
                 if composer.next()? != Event::DocumentEnd {
                     return Err(err("did not find expected <document end>"));
                 }
@@ -1338,48 +1400,35 @@ impl Constructor {
         Ok(())
     }
 
+    /// Recurses up to `MAX_DEPTH` deep (with `construct_mapping`): scalars, the `!!value`
+    /// key and the errors are kept out of line, which shrinks a level's stack in debug builds
+    /// (400 nested sequences: 1.1 → 0.6 MB; mappings: 2.3 → 1.7 MB, measured on Linux).
     fn construct(&mut self, node: &Node, depth: usize) -> Result<Value> {
         self.count()?;
         if depth > MAX_DEPTH {
-            return Err(err(format!(
-                "maximum nesting depth of {MAX_DEPTH} exceeded"
-            )));
+            return Err(too_deep());
         }
-        let tag = node.tag.as_deref();
+        let generic = matches!(node.tag.as_deref(), None | Some("!"));
         match &node.kind {
-            NodeKind::Scalar { text, plain } => {
-                self.charge_copy(node, text)?;
-                self.construct_scalar(text, *plain, tag)
-            }
-            NodeKind::Seq(items) => match tag {
-                None | Some("!") | Some(SEQ_TAG) => {
-                    let mut out = Vec::with_capacity(items.len());
-                    for item in items {
-                        out.push(self.construct(item, depth + 1)?);
-                    }
-                    Ok(Value::Sequence(out))
+            NodeKind::Scalar { text, plain } => self.construct_scalar_node(node, text, *plain),
+            NodeKind::Seq(items) if generic || node.tag.as_deref() == Some(SEQ_TAG) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items {
+                    out.push(self.construct(item, depth + 1)?);
                 }
-                Some(MAP_TAG) => Err(err(format!(
-                    "expected a mapping node, but found {}",
-                    node.id()
-                ))),
-                Some(t) if t.starts_with("tag:yaml.org,2002:") && is_scalar_tag(t) => Err(err(
-                    format!("expected a scalar node, but found {}", node.id()),
-                )),
-                Some(t) => Err(no_constructor(t)),
-            },
-            NodeKind::Map(_) => match tag {
-                None | Some("!") | Some(MAP_TAG) => self.construct_mapping(node, depth),
-                Some(SEQ_TAG) => Err(err(format!(
-                    "expected a sequence node, but found {}",
-                    node.id()
-                ))),
-                Some(t) if t.starts_with("tag:yaml.org,2002:") && is_scalar_tag(t) => Err(err(
-                    format!("expected a scalar node, but found {}", node.id()),
-                )),
-                Some(t) => Err(no_constructor(t)),
-            },
+                Ok(Value::Sequence(out))
+            }
+            NodeKind::Map(_) if generic || node.tag.as_deref() == Some(MAP_TAG) => {
+                self.construct_mapping(node, depth)
+            }
+            _ => Err(tag_mismatch(node)),
         }
+    }
+
+    #[inline(never)]
+    fn construct_scalar_node(&mut self, node: &Node, text: &str, plain: bool) -> Result<Value> {
+        self.charge_copy(node, text)?;
+        self.construct_scalar(text, plain, node.tag.as_deref())
     }
 
     fn construct_scalar(&mut self, text: &str, plain: bool, tag: Option<&str>) -> Result<Value> {
@@ -1428,9 +1477,7 @@ impl Constructor {
     /// that the earlier source wins), then the node's own pairs.
     fn flatten<'n>(&mut self, node: &'n Node, depth: usize) -> Result<Vec<(&'n Node, &'n Node)>> {
         if depth > MAX_DEPTH {
-            return Err(err(format!(
-                "maximum nesting depth of {MAX_DEPTH} exceeded"
-            )));
+            return Err(too_deep());
         }
         let NodeKind::Map(pairs) = &node.kind else {
             return Ok(Vec::new());
@@ -1479,27 +1526,56 @@ impl Constructor {
         let mut dict = PyDict::default();
         for (key_node, value_node) in pairs {
             let key = if is_value_key(key_node) {
-                // PyYAML `flatten_mapping` retags a `!!value` key as `!!str`.
-                self.count()?;
-                match &key_node.kind {
-                    NodeKind::Scalar { text, .. } => Value::String(text.clone()),
-                    _ => {
-                        return Err(err(format!(
-                            "expected a scalar node, but found {}",
-                            key_node.id()
-                        )));
-                    }
-                }
+                self.value_key(key_node)?
             } else {
                 self.construct(key_node, depth + 1)?
             };
             if matches!(key, Value::Sequence(_) | Value::Mapping(_)) {
-                return Err(err("found unhashable key"));
+                return Err(unhashable_key());
             }
             let value = self.construct(value_node, depth + 1)?;
             dict.insert(key, value);
         }
         Ok(Value::Mapping(dict.map))
+    }
+
+    /// PyYAML `flatten_mapping` retags a `!!value` key as `!!str`.
+    #[inline(never)]
+    fn value_key(&mut self, key_node: &Node) -> Result<Value> {
+        self.count()?;
+        match &key_node.kind {
+            NodeKind::Scalar { text, .. } => Ok(Value::String(text.clone())),
+            _ => Err(err(format!(
+                "expected a scalar node, but found {}",
+                key_node.id()
+            ))),
+        }
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn unhashable_key() -> ConsoleError {
+    err("found unhashable key")
+}
+
+/// The error of a sequence or mapping node whose explicit tag names another kind (`construct`
+/// handles the generic, `!!seq` and `!!map` tags; scalars never get here).
+#[cold]
+#[inline(never)]
+fn tag_mismatch(node: &Node) -> ConsoleError {
+    let tag = node.tag.as_deref().unwrap_or_default();
+    match (&node.kind, tag) {
+        (NodeKind::Seq(_), MAP_TAG) => {
+            err(format!("expected a mapping node, but found {}", node.id()))
+        }
+        (NodeKind::Map(_), SEQ_TAG) => {
+            err(format!("expected a sequence node, but found {}", node.id()))
+        }
+        (_, t) if t.starts_with("tag:yaml.org,2002:") && is_scalar_tag(t) => {
+            err(format!("expected a scalar node, but found {}", node.id()))
+        }
+        (_, t) => no_constructor(t),
     }
 }
 
