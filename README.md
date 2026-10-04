@@ -1,12 +1,9 @@
 # r2
 
-r2 is the Rust rewrite of [c2](https://github.com/adipata/c2) (CryptoConsole — Cx2), an
-interactive cryptographic operator console: a REPL for working with keys and crypto
-operations across pluggable providers — an in-memory software provider (always on, backed
-by OpenSSL) and any PKCS#11 module (HSMs, smartcards; SoftHSM2 is auto-detected). It ships
-as a single binary, `r2`, with full behavioral parity with c2@408d6f2: the same commands,
-messages, configuration schema, PKCS#11 object layouts and file formats. The deliberate
-differences are listed in [`spec.md`](spec.md) §11.
+r2 is an interactive cryptographic operator console written in Rust: a REPL for working
+with keys and crypto operations across pluggable providers — an in-memory software
+provider (always on, backed by OpenSSL) and any PKCS#11 module (HSMs, smartcards; SoftHSM2
+is auto-detected). It ships as a single binary, `r2`.
 
 This is a quick start; the full behavior, command set and configuration schema live in
 [`spec.md`](spec.md).
@@ -90,9 +87,6 @@ list filtered as you type, `:` takes a line of the typed grammar (`5=0xc0fe`, `a
 CKA_X=v`), Enter on `[ OK ]` accepts, Esc cancels. Piped sessions use the typed grammar
 (`3`, `5=0xc0fe`, `-7`/`+7`, `add CKA_X=v`, `ok`, `cancel`) at the `template> ` prompt.
 
-c2 and r2 install side by side and share tokens and data files (exports, CSRs, PKCS#12,
-wrapped blobs, `key template` YAML), but not config, history or log files.
-
 ## Configuration
 
 Everything runs on built-in defaults without a config file. To customize, create an
@@ -105,10 +99,8 @@ Everything runs on built-in defaults without a config file. To customize, create
    honoured), `~/Library/Application Support/r2/r2.yaml` on macOS,
    `%LOCALAPPDATA%\r2\r2\r2.yaml` on Windows
 
-Your file is deep-merged over the defaults — set only what you change (lists replace). A
-c2 `c2.yaml` works as an `r2.yaml` unchanged; paths it sets explicitly (history, log,
-SoftHSM dirs) are then shared with c2, so edit those when migrating. The most common
-addition is a real PKCS#11 module:
+Your file is deep-merged over the defaults — set only what you change (lists replace). The
+most common addition is a real PKCS#11 module:
 
 ```yaml
 providers:
@@ -136,13 +128,10 @@ $ cargo nextest run --workspace --features softhsm  # …for the SoftHSM suites
 $ cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings
 $ cargo deny check                                  # supply chain
 $ cargo llvm-cov nextest --workspace --fail-under-lines 80   # coverage floor
-$ python3 parity/harness/run_parity.py --softhsm    # differential parity vs c2 (../c2)
 ```
 
-See [`CLAUDE.md`](CLAUDE.md) for conventions, [`loops.md`](loops.md) for how the
-implementation was decomposed, [`parity/README.md`](parity/README.md) for the c2 test
-ledger and [`parity/harness/README.md`](parity/harness/README.md) for the differential
-harness.
+See [`CLAUDE.md`](CLAUDE.md) for conventions and [`loops.md`](loops.md) for how the
+implementation was decomposed.
 
 ## Building the binary
 
@@ -175,4 +164,4 @@ Packaging decisions are documented in spec §9.
 
 ## License
 
-GPL-3.0 (see [`LICENSE`](LICENSE)), as c2.
+GPL-3.0 (see [`LICENSE`](LICENSE)).
