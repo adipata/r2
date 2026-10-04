@@ -684,8 +684,10 @@ mod discovery {
     }
 
     /// A non-UTF-8 `--config` / `$R2_CONFIG` path is used byte for byte (Python keeps the
-    /// bytes through surrogateescape).
-    #[cfg(unix)]
+    /// bytes through surrogateescape). Not on macOS: APFS and HFS+ refuse a file name that is
+    /// not UTF-8 (EILSEQ, "Illegal byte sequence"), so no such config file can exist there;
+    /// `missing_non_utf8_path_is_reported` covers the case macOS can meet, on every Unix.
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn non_utf8_paths_are_kept() {
         use std::ffi::OsStr;
@@ -705,6 +707,32 @@ mod discovery {
             discover(None).unwrap_err().message,
             "config file not found: /home/tester/missing.yaml"
         );
+    }
+
+    /// A missing non-UTF-8 `--config` path is reported with its own bytes (shown lossily as
+    /// U+FFFD), never mistaken for another path — by `discover` and `load_config` alike.
+    #[cfg(unix)]
+    #[test]
+    fn missing_non_utf8_path_is_reported() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let iso = Isolated::new();
+        let file = iso.path().join(OsStr::from_bytes(b"cfg\xff.yaml"));
+        let err = discover(Some(&file)).unwrap_err();
+        assert_eq!(
+            err.message,
+            format!("config file not found: {}", file.display())
+        );
+        assert!(
+            err.message.ends_with("/cfg\u{fffd}.yaml"),
+            "{}",
+            err.message
+        );
+        assert_eq!(
+            err.hint.as_deref(),
+            Some("--config must point to an existing file")
+        );
+        assert_eq!(load_config(Some(&file)).unwrap_err().message, err.message);
     }
 }
 

@@ -43,7 +43,20 @@ fn write_config(dir: &Path, extra: &str) -> PathBuf {
 }
 
 fn session(dir: &Path, config: &Path, input: &[u8]) -> (String, String, i32) {
-    let output = r2(dir)
+    run_session(r2(dir), config, input)
+}
+
+/// `session` on a 1000-column console (`$COLUMNS`): a line carrying a temp path never wraps,
+/// however long the platform's temp directory is (macOS `$TMPDIR` under `/var/folders/…`,
+/// Windows `%TEMP%`); at the piped default of 80 columns such lines wrap there.
+fn wide_session(dir: &Path, config: &Path, input: &[u8]) -> (String, String, i32) {
+    let mut cmd = r2(dir);
+    cmd.env("COLUMNS", "1000");
+    run_session(cmd, config, input)
+}
+
+fn run_session(mut cmd: Command, config: &Path, input: &[u8]) -> (String, String, i32) {
+    let output = cmd
         .arg("--config")
         .arg(config)
         .write_stdin(input.to_vec())
@@ -299,7 +312,7 @@ fn crlf_and_invalid_utf8_input_keep_the_session_alive() {
 fn config_path_and_origin_render_provenance() {
     let dir = tempfile::tempdir().unwrap();
     let config = write_config(dir.path(), "");
-    let (out, _, _) = session(dir.path(), &config, b"config path\nconfig show --origin\n");
+    let (out, _, _) = wide_session(dir.path(), &config, b"config path\nconfig show --origin\n");
     assert!(out.contains(&format!(
         "r2> config path\nconfig file: {}\n",
         config.display()
@@ -353,7 +366,7 @@ fn config_show_defaults_and_effective() {
     let config = write_config(dir.path(), "");
     let (out, _, _) = session(dir.path(), &config, b"config show --defaults\n");
     assert!(out.contains("# Policy/usage attributes only."));
-    let (out, _, _) = session(dir.path(), &config, b"config show\n");
+    let (out, _, _) = wide_session(dir.path(), &config, b"config show\n");
     assert!(
         out.contains("providers:\n  memory:\n    enabled: false\n    name: mem\n  pkcs11: []\n")
     );

@@ -58,6 +58,7 @@ fn write_config(dir: &Path, extra: &str) -> PathBuf {
     path
 }
 
+#[cfg(feature = "softhsm")]
 /// Runs one piped session; returns (stdout, exit code).
 fn session(
     dir: &Path,
@@ -65,9 +66,28 @@ fn session(
     softhsm_conf: Option<&Path>,
     lines: &[String],
 ) -> (String, i32) {
+    run_session(r2(dir, softhsm_conf), config, lines)
+}
+
+/// `session` on a 1000-column console (`$COLUMNS`): a result line carrying a temp path or
+/// the module path never wraps, however long the platform's temp directory is (macOS
+/// `$TMPDIR` under `/var/folders/…`, Windows `%TEMP%`) or the module's install prefix (CI's
+/// SoftHSM 2.7.0 under `~/.local`); at the piped default of 80 columns such lines wrap.
+fn wide_session(
+    dir: &Path,
+    config: &Path,
+    softhsm_conf: Option<&Path>,
+    lines: &[String],
+) -> (String, i32) {
+    let mut cmd = r2(dir, softhsm_conf);
+    cmd.env("COLUMNS", "1000");
+    run_session(cmd, config, lines)
+}
+
+fn run_session(mut cmd: Command, config: &Path, lines: &[String]) -> (String, i32) {
     let mut input = lines.join("\n");
     input.push('\n');
-    let output = r2(dir, softhsm_conf)
+    let output = cmd
         .arg("--config")
         .arg(config)
         .write_stdin(input.into_bytes())
@@ -247,7 +267,7 @@ fn memory_console_keys_end_to_end() {
         "keys mem".to_owned(),
         "exit".to_owned(),
     ]);
-    let (out, code) = session(dir.path(), &config, None, &input);
+    let (out, code) = wide_session(dir.path(), &config, None, &input);
     assert_eq!(code, 0, "{out}");
     no_error_panel(&out);
     assert!(out.contains("ready"));
@@ -378,7 +398,7 @@ mod softhsm {
         input.push("logout hsm".to_owned());
         input.push("exit".to_owned());
 
-        let (out, code) = session(dir.path(), &config, Some(&token.conf_path), &input);
+        let (out, code) = wide_session(dir.path(), &config, Some(&token.conf_path), &input);
         assert_eq!(code, 0, "{out}");
         no_error_panel(&out);
 
