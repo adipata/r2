@@ -7764,9 +7764,10 @@ custom_mechanisms: []      # entry schema: spec §4.8 / example §5.14
   test path) or `n/a`; `parity/generate_ledger.py --stats --gate <loop>` checks it, and R13
   requires zero `todo` rows (`--gate all`). Ported tests keep c2's vectors, inputs and
   asserted messages verbatim and translate only the mechanics.
-- **Differential parity harness** (`parity/`, R13; optional CI job that checks out
-  c2@408d6f2 and runs `uv sync`): both sides get equivalent configs (`c2.yaml`/`r2.yaml`),
-  and the prompt and tool name are normalized, as is c2's prompt_toolkit non-TTY noise
+- **Differential parity harness** (`parity/`, R13; run locally on demand: CI stopped
+  running it when r2 became independent of c2): both sides get equivalent configs
+  (`c2.yaml`/`r2.yaml`), and the prompt and tool name are normalized, as is c2's
+  prompt_toolkit non-TTY noise
   (`Warning: Input is not a terminal (fd=0).`, CR padding, the doubled prompt echo) and the
   run of `*` c2 prints after a secret prompt (§11 D20).
   - *Transcript diff*: identical scripted sessions piped into both binaries on the memory
@@ -7780,10 +7781,11 @@ custom_mechanisms: []      # entry schema: spec §4.8 / example §5.14
     created by each (every kind, keypairs, PKCS#12 imports, data objects) are listed, used
     and copied by the other — the strongest check that attribute layouts match.
   - *As built (R13)*: `parity/harness/run_parity.py` (Python 3.10+, stdlib only; usage and
-    the complete normalization list in `parity/harness/README.md`; `just parity`; the
-    optional `parity` CI job checks out c2@408d6f2, runs `uv sync` and the harness with
-    `--softhsm`). Session files under `parity/harness/sessions/`, fixed key fixtures under
-    `parity/harness/fixtures/` (generated once with pyca). The interop and token suites run
+    the complete normalization list in `parity/harness/README.md`; `just parity`; until
+    r2 became independent of c2, an optional `parity` CI job checked out c2@408d6f2, ran
+    `uv sync` and the harness with `--softhsm`). Session files under
+    `parity/harness/sessions/`, fixed key fixtures under `parity/harness/fixtures/`
+    (generated once with pyca). The interop and token suites run
     each producer/creator against each consumer/user and require the four transcripts to
     be equal. `key template` YAML crosses tools in the token suite (dumped by one tool,
     re-seeded by the other) and a c2 user config renamed to `r2.yaml` in
@@ -7836,8 +7838,9 @@ custom_mechanisms: []      # entry schema: spec §4.8 / example §5.14
   about a minute, cached), because Ubuntu 22.04 and 24.04 both ship 2.6.1, so c2's
   "runner version = SoftHSM version" premise does not hold; the matrix catches the 2.6/2.7
   EdDSA, AES-KW-PAD, CBC_PAD, ECDSA_SHA* and RSA-AES-KW differences; `msrv` (build with the
-  pinned toolchain); `coverage` and `parity` added in R13; a release dry-run before
-  sign-off.
+  pinned toolchain); `coverage` (R13); `terminal` (r2 on a pty: `pty_paste_check.py` and
+  `pty_template_panel_check.py`), which replaced R13's `parity` job (it also ran the c2
+  harness) when r2 became independent of c2; a release dry-run before sign-off.
 - **Done gate** (every loop): `cargo fmt --check` && the `rustfmt --check` of the
   `include!`-only console modules (above) && `cargo clippy --workspace --all-targets -- -D
   warnings` && `cargo nextest run --workspace` (nextest is normative; plain `cargo test` is

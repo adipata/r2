@@ -1,8 +1,9 @@
-# r2 CI (spec §8 "CI"; owner R0, coverage + parity added by R13). Jobs: lint, test
+# r2 CI (spec §8 "CI"; owner R0, coverage + terminal checks added by R13). Jobs: lint, test
 # (ubuntu/macos/windows + doc tests), softhsm (SoftHSM 2.6.1 distro + 2.7.0 built from its
 # tag), msrv, coverage (cargo llvm-cov, 80% line floor over the workspace incl. the
-# softhsm feature) and the optional parity job (differential harness against c2@408d6f2,
-# parity/harness/README.md). release.yml is R12's.
+# softhsm feature) and terminal (r2 on a pty). The differential harness against c2 is not
+# run here: r2 is independent of c2 (CLAUDE.md), so it runs locally on demand
+# (parity/harness/README.md). release.yml is R12's.
 name: CI
 
 on:
@@ -163,43 +164,21 @@ jobs:
           name: lcov
           path: lcov.info
 
-  parity:
-    # Optional (spec §8): the differential harness against the frozen Python reference.
-    # Runs on manual dispatch and on pushes to the default branch; a red parity job means an
-    # unlisted difference from c2 (fix r2 or record a spec §11 deviation).
-    if: github.event_name == 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+  terminal:
+    # r2 on a pseudo-terminal (POSIX only, stdlib Python): the automated part of the terminal
+    # checklist (parity/terminal-checklist.md). It needs no c2.
     runs-on: ubuntu-24.04
-    env:
-      C2_REPOSITORY: ${{ vars.C2_REPOSITORY || format('{0}/c2', github.repository_owner) }}
     steps:
       - uses: actions/checkout@v4
-      - name: Check out c2@408d6f2 (the frozen reference)
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.C2_REPOSITORY }}
-          # c2@408d6f2: actions/checkout fetches a commit directly only for a FULL 40-hex
-          # SHA (a short one is looked up as a branch/tag name and fails).
-          ref: 408d6f29aa968ad4afcd7888b5958ba4608c902c
-          # A private c2 repository needs a token with read access (repository secret
-          # C2_TOKEN); the default token only reaches this repository and public ones.
-          token: ${{ secrets.C2_TOKEN || github.token }}
-          path: c2
-      - name: Verify the c2 reference commit
-        run: test "$(git -C c2 rev-parse HEAD)" = 408d6f29aa968ad4afcd7888b5958ba4608c902c
-      - uses: astral-sh/setup-uv@v6
-      - name: c2 virtualenv (uv sync)
-        run: cd c2 && uv sync --frozen
       - name: Install the pinned toolchain (rust-toolchain.toml)
         run: rustup toolchain install && cargo --version
       - name: Install SoftHSM2 (distro) + OpenSC
         run: sudo apt-get update && sudo apt-get install -y softhsm2 opensc
       - uses: Swatinem/rust-cache@v2
         with:
-          key: parity
+          key: terminal
       - name: Build r2
         run: cargo build -p r2-cli --locked
-      - name: Differential parity harness (transcript, interop, shared SoftHSM token)
-        run: python3 parity/harness/run_parity.py --c2-dir c2 --r2-bin target/debug/r2 --softhsm
       - name: Terminal check on a pty (bracketed PEM paste, hidden input, Ctrl-C)
         run: python3 parity/harness/pty_paste_check.py --r2-bin target/debug/r2
       - name: Terminal check on a pty (template panel on the SoftHSM fixture token, §11 D34)

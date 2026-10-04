@@ -17,11 +17,9 @@ python3 parity/harness/run_parity.py --suite token -v   # one suite, print trans
 
 Options: `--c2-dir` (default `../c2`, or `$C2_DIR`), `--r2-bin` (default
 `$CARGO_TARGET_DIR/debug/r2`, else `target/debug/r2`, or `$R2_BIN`), `--keep` (keep the
-work dir; it is always kept when something differs). `just parity` and the optional `parity`
-CI job run the same command. Exit status 0 means no unlisted difference. The CI job checks
-out c2 by its full commit SHA (`408d6f29aa968ad4afcd7888b5958ba4608c902c`); its repository
-is `vars.C2_REPOSITORY` (default `<owner>/c2`), and a private c2 needs a read token in the
-`C2_TOKEN` secret.
+work dir; it is always kept when something differs). `just parity` runs the same command.
+Exit status 0 means no unlisted difference. CI does not run the harness: r2 is independent
+of c2 (CLAUDE.md "r2 and c2"), so it is a local, on-demand tool from the port.
 
 ## Suites
 
@@ -109,7 +107,7 @@ stdout is a terminal, so every piped session opens with c2's banner line.)
 `pty_paste_check.py` (same requirements, POSIX only) is the automated part of the R13
 terminal checklist (`parity/terminal-checklist.md`): r2 on a pseudo-terminal as a real
 terminal session, a bracketed paste of a traditional encrypted PEM at the `| ` prompt,
-hidden passwords and Ctrl-C at a password prompt. The `parity` CI job runs it too. A difference is fixed in r2, or — if it must stay — recorded
+hidden passwords and Ctrl-C at a password prompt. The `terminal` CI job runs it. A difference is fixed in r2, or — if it must stay — recorded
 in spec §11 through the §4.11 procedure and only then normalized here.
 
 `pty_template_panel_check.py` (POSIX only; it needs the SoftHSM fixture environment of
@@ -118,7 +116,7 @@ terminal checklist item 13: the template panel (spec §5.12, §11 D34) that `gen
 opens, driven with real keystrokes through crossterm on a pty — a toggle, the hex input,
 the add list, the `:` line, Enter on `[ OK ]` (the key is created with the panel's CKA_ID)
 and Esc. It is r2-only (c2 has no panel: every harness session is piped, so the transcripts
-compare the line checklist). The `parity` CI job runs it after `pty_paste_check.py`.
+compare the line checklist). The `terminal` CI job runs it after `pty_paste_check.py`.
 
 ## Session files
 
