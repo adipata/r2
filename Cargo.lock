@@ -899,7 +899,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "r2-cli"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -920,7 +920,7 @@ dependencies = [
 
 [[package]]
 name = "r2-config"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "indexmap",
  "r2-core",
@@ -933,7 +933,7 @@ dependencies = [
 
 [[package]]
 name = "r2-console"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anstream",
  "anstyle",
@@ -961,7 +961,7 @@ dependencies = [
 
 [[package]]
 name = "r2-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anstyle",
  "base64",
@@ -982,7 +982,7 @@ dependencies = [
 
 [[package]]
 name = "r2-memory"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "openssl",
  "r2-core",
@@ -995,7 +995,7 @@ dependencies = [
 
 [[package]]
 name = "r2-ops"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "indexmap",
  "r2-config",
@@ -1007,7 +1007,7 @@ dependencies = [
 
 [[package]]
 name = "r2-pkcs11"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "cryptoki",
  "cryptoki-sys",
@@ -1026,7 +1026,7 @@ dependencies = [
 
 [[package]]
 name = "r2-provider"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "openssl",
  "r2-core",
@@ -1038,7 +1038,7 @@ dependencies = [
 
 [[package]]
 name = "r2-services"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "indexmap",
  "r2-config",
@@ -1056,7 +1056,7 @@ dependencies = [
 
 [[package]]
 name = "r2-testkit"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "indexmap",
  "openssl",
