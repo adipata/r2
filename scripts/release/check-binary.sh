@@ -125,7 +125,9 @@ case "$target" in
             [[ " $archs " == *" $arch "* ]] || fail "missing architecture $arch (has: $archs)"
         done
         echo "ok: architectures $archs"
-        libs="$(otool -L "$binary" | tail -n +2 | awk '{print $1}')"
+        # Dependencies are the indented lines: the others are headers, `<binary>:` for a thin
+        # binary and one `<binary> (architecture <arch>):` per slice of a universal one.
+        libs="$(otool -L "$binary" | awk '/^[[:space:]]/ {print $1}')"
         while IFS= read -r lib; do
             [[ -z "$lib" ]] && continue
             case "$lib" in
