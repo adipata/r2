@@ -99,3 +99,28 @@ fn test_core_stays_console_free() {
         assert!(!deps.iter().any(|dep| dep == banned), "{banned}");
     }
 }
+
+/// §4.9.1 / §11 D34: `ConsoleIo::interactive` defaults to "no interactive terminal" — it
+/// returns false and never calls `f` — so ScriptedIo (and every IO without a terminal)
+/// keeps callers on their line prompts.
+#[test]
+fn interactive_defaults_to_unavailable_without_calling_f() {
+    let io = ScriptedIo::empty();
+    let mut called = false;
+    let opened = (&io as &dyn ConsoleIo).interactive(&mut |_session| called = true);
+    assert!(!opened);
+    assert!(!called);
+    assert!(io.output().is_empty());
+}
+
+/// The interactive session types are plain data: a Frame defaults to no rows and a hidden
+/// cursor, and keys compare by value (a paste carries its whole text).
+#[test]
+fn frame_and_key_values() {
+    use r2_core::io::{Frame, Key};
+    let frame = Frame::default();
+    assert!(frame.lines.is_empty());
+    assert_eq!(frame.cursor, None);
+    assert_eq!(Key::Paste("c0fe".into()), Key::Paste("c0fe".into()));
+    assert_ne!(Key::Ctrl('c'), Key::Char('c'));
+}

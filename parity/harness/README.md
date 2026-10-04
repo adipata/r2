@@ -112,6 +112,14 @@ terminal session, a bracketed paste of a traditional encrypted PEM at the `| ` p
 hidden passwords and Ctrl-C at a password prompt. The `parity` CI job runs it too. A difference is fixed in r2, or — if it must stay — recorded
 in spec §11 through the §4.11 procedure and only then normalized here.
 
+`pty_template_panel_check.py` (POSIX only; it needs the SoftHSM fixture environment of
+`eval "$(scripts/softhsm-init.sh)"` and fails without it) is the automated part of
+terminal checklist item 13: the template panel (spec §5.12, §11 D34) that `generate`
+opens, driven with real keystrokes through crossterm on a pty — a toggle, the hex input,
+the add list, the `:` line, Enter on `[ OK ]` (the key is created with the panel's CKA_ID)
+and Esc. It is r2-only (c2 has no panel: every harness session is piped, so the transcripts
+compare the line checklist). The `parity` CI job runs it after `pty_paste_check.py`.
+
 ## Session files
 
 One input line per line, exactly as typed (template editor answers such as `ok`, select

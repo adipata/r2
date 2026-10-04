@@ -505,8 +505,9 @@ crates/r2-console/            (lib)
   src/lib.rs  src/context.rs  src/repl.rs  src/parser.rs  src/completer.rs
   src/render.rs  src/cmdutil.rs  src/testing.rs (cfg(test), §4.10.6)
   src/io/mod.rs  src/io/line.rs  src/io/plain.rs  src/io/terminal.rs
-  src/io/history.rs  src/io/assist.rs        (§4.9, item placement §4.9.7)         R7
-  src/template_editor.rs                                   (§4.9.3, §5.12)         R10
+  src/io/history.rs  src/io/assist.rs  src/io/session.rs
+                              (§4.9, item placement §4.9.7)                        R7
+  src/template_editor.rs  src/template_editor/panel.rs  (§4.9.3, §5.12, §11 D34)  R10
   src/wizard.rs                                            (§4.9.9, §5.13)         R11
   src/commands/mod.rs         Command trait + generated module list (§4.9.6)       R7
   src/commands/help.rs  src/commands/misc.rs                                       R7
@@ -4136,6 +4137,56 @@ pub trait ConsoleIo {
         let _ = message;
         f();
     }
+    /// Hand `f` the keyboard and the screen rows below the output so far (provisional r2
+    /// addition, §11 D34; c2 never had one). TerminalIo on a working terminal with styled
+    /// output calls `f` exactly once with a `KeySession`, erases the last frame when `f`
+    /// returns, and returns true. Otherwise — the default: PlainIo, ScriptedIo, a degraded
+    /// session, the Plain sink — it returns false WITHOUT calling `f`, and the caller falls
+    /// back to line prompts. A terminal failure surfaces as Generic "terminal error: …"
+    /// from `draw`/`read_key`; TerminalIo then degrades the session like a failed read (the
+    /// §11 D2 warning) once `f` has returned. No `RefCell` borrow of the IO is held while
+    /// `f` runs, but `f` must not print or prompt through the IO while the session is open.
+    fn interactive(&self, f: &mut dyn FnMut(&mut dyn KeySession)) -> bool {
+        let _ = f;
+        false
+    }
+}
+
+/// One key of an interactive session (`ConsoleIo::interactive`; provisional, §11 D34).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Key {
+    /// A printable character (Shift applied; no Ctrl, no Alt).
+    Char(char),
+    /// Ctrl + a letter, lower-case: `Ctrl('c')` is Ctrl-C.
+    Ctrl(char),
+    Enter, Esc, Tab, BackTab, Backspace, Delete, Insert,
+    Up, Down, Left, Right, Home, End, PageUp, PageDown,
+    /// A bracketed paste: the whole text as one event.
+    Paste(String),
+    /// The terminal changed size; the session's owner redraws.
+    Resize,
+}
+
+/// One screen of an interactive session (provisional, §11 D34).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Frame {
+    /// The rows, top to bottom. A row wider than the terminal minus one column is clipped;
+    /// rows beyond the terminal height minus one are not drawn; control characters show
+    /// as U+FFFD.
+    pub lines: Vec<Line>,
+    /// Where the terminal cursor is shown: (row, column in cells). None hides it.
+    pub cursor: Option<(usize, usize)>,
+}
+
+/// The terminal side of `ConsoleIo::interactive` (provisional, §11 D34).
+pub trait KeySession {
+    /// The terminal size: (columns, rows), each at least 1.
+    fn size(&self) -> (usize, usize);
+    /// Draw `frame` in place of the previous one (nothing on the first call), on the rows
+    /// below the output so far.
+    fn draw(&mut self, frame: &Frame) -> Result<()>;
+    /// The next key; blocks until one arrives.
+    fn read_key(&mut self) -> Result<Key>;
 }
 
 /// Runs `f` through `io.busy(message, ..)` and returns its value; if the implementation
@@ -4323,7 +4374,8 @@ use r2_config::model::AppConfig;
 use r2_core::io::{ConsoleIo, TemplateEditor};
 
 /// The §5.12 checklist editor over the loaded configuration (it reads
-/// `config.templates.custom_attributes`). Its mini-REPL line is read with
+/// `config.templates.custom_attributes`). On a terminal it is the inline panel
+/// (`io.interactive`, §11 D34); otherwise its mini-REPL line is read with
 /// `io.prompt(&ParamSpec::str("template", "template> "))`.
 /// R0 stub body (mandated): `Rc::new(r2_core::io::IdentityTemplateEditor)` — the r2
 /// equivalent of c2's lazy-import identity fallback, so R7's bootstrap is correct on both
@@ -4573,7 +4625,8 @@ Terminal I/O (normative behavior decided by S0 spike 3). Item placement in
 `crates/r2-console/src/io/`: `mod.rs` SinkStyle, resolve_color, open_console_io;
 `line.rs` ReadOutcome, SecretRead, LineReader, LineIo; `plain.rs` PlainReader, PlainIo;
 `terminal.rs` DegradingReader, TerminalIo and the R7-internal ReedlineReader,
-QuoteValidator, ChoiceCompleter, NarrowTerm; `history.rs` SecretFilteringHistory,
+QuoteValidator, ChoiceCompleter, NarrowTerm, CrosstermDriver, `key_of`; `session.rs`
+TermOp, TerminalDriver, FrameSession (§11 D34); `history.rs` SecretFilteringHistory,
 is_secret_line; `assist.rs` LineAssist, BridgeCompleter, BridgeHighlighter, AssistGuard,
 install_line_assist. Everything below except `open_console_io` (r2-cli's entry point) is
 R7-internal and frozen-provisional (§4.11.2); private fields and helpers are R7's choice.
@@ -4637,6 +4690,12 @@ pub trait LineReader {
     fn read_secret(&mut self, prompt: &str) -> io::Result<SecretRead>;
     /// Terminal side of `clear` (reedline repaint). Default: nothing.
     fn clear_screen(&mut self) {}
+    /// The driver of an interactive key session (§11 D34): TerminalIo's reader while it has
+    /// not degraded. Default: None (PlainReader, the test readers).
+    fn terminal_driver(&mut self) -> Option<Box<dyn TerminalDriver>> { None }
+    /// A key session hit the terminal error `err`: switch to plain reads for good, exactly
+    /// like a failed read (the one §11 D2 warning). Default: nothing.
+    fn degrade(&mut self, err: &io::Error) { .. }
 }
 
 /// The ONE ConsoleIo over a LineReader: the §4.9.1 prompt/secret/multiline/select/confirm
@@ -4728,6 +4787,30 @@ pub fn install_line_assist(assist: Rc<dyn LineAssist>) -> AssistGuard { .. }
   wraps each `read_line` in a guard that calls `crossterm::terminal::disable_raw_mode()`
   when the thread is panicking (a panic inside reedline must not leave the terminal raw;
   the panic hook itself never touches the terminal).
+- Interactive key sessions (§11 D34). `LineIo::interactive` returns false without calling
+  `f` on the Plain sink, while a spinner runs, or when the reader offers no
+  `terminal_driver()` (PlainReader; DegradingReader after a degrade); otherwise it opens a
+  `FrameSession` over the driver — `TerminalDriver::enter` (crossterm: raw mode, auto-wrap
+  off, bracketed paste best effort), on its failure `leave` + `degrade` + false — runs `f`
+  with NO RefCell borrow held (the reader borrow ends before), then closes the session and
+  degrades the reader if any terminal call failed. `FrameSession` draws each `Frame` in
+  place below the output so far, never on the alternate screen: rows rendered by the
+  Sink's style with width 0 (no wrapping) after `clip_line` (at most columns − 1 cells,
+  measured with unicode-width; control characters → U+FFFD), at most rows − 1 rows; ops
+  `HideCursor`, then `Up(cursor row)` + `Column(0)` to the previous frame's first row (on
+  the first frame only `Column(0)`; after the terminal narrowed `ClearScreen`, as it may
+  have re-wrapped the old rows), each row as `Text` + `ClearLineRight` joined by
+  `Newline` (CR LF, scrolling at the bottom), `ClearDown`, then the cursor (`Up` to its
+  row, `Column`, `ShowCursor`) or none; `Up(0)` is never sent (terminals read `CSI 0 A`
+  as one row). The first terminal error is kept: `draw`/`read_key` return Generic
+  "terminal error: {os_error_text}" from then on. `close` erases the frame (`Up`,
+  `Column(0)`, `ClearDown`, `ShowCursor`; nothing more after a failure) and calls
+  `leave`; its `Drop` does the same, and while unwinding only `leave` (no drawing).
+  `CrosstermDriver` performs the ops with crossterm commands inside a synchronized update
+  (ANSI or the Windows console API) and reads keys through crossterm's reader (the one
+  reedline uses, on `/dev/tty`); `key_of` maps events: Press/Repeat only (Windows reports
+  releases), Ctrl+letter → `Key::Ctrl(lower-case)`, Ctrl+Alt+char (AltGr) → the char,
+  Alt+char and function keys → skipped, paste → `Key::Paste`, resize → `Key::Resize`.
 - Reedline command editor: `SecretFilteringHistory` over
   `FileBackedHistory::with_file(1000, app.history_file)` (unusable path → in-memory
   `FileBackedHistory::new(1000)`), `DefaultHinter::default().with_style(
@@ -5930,7 +6013,8 @@ new allowed threads are §4 changes.
 `update_key`/`read_full_template` and `AttrEditOutcome`/`KeyEditResult` (§5.15/§5.16),
 `Provider::generate_random` (§5.17, §11 D29), `CustomMechanismConfig` param encoding (v1 =
 the five `ParamStruct` packers), the `ConsoleIo`/`TemplateEditor` trait surfaces (incl.
-the provisional `busy` and the spinner flag in `runtime`), the operation-timing API in
+the provisional `busy` and the spinner flag in `runtime`, and `interactive` with `Key`,
+`Frame`, `KeySession`; §11 D34), the operation-timing API in
 `runtime` (`set_timing_shown`, `timing_shown`, `timed`, `reset_operation_time`,
 `take_operation_time`, `timing_suffix`, `format_elapsed`; §4.9.8, §11 D31), the `FakeHooks`
 trait (methods may be added with a `None` default), and the R7-internal terminal I/O items
@@ -6981,8 +7065,12 @@ encodings, other string types as UTF-8), the whole Name being decoded as c2's
 
 ### 5.12 Template editor UX
 
-Line-based checklist (works in every terminal, scriptable via `ScriptedIo` — deliberately
-not a full-screen dialog). Rendered as a table (§4.9.2, §11 D1): index, state glyph
+Two faces over one working copy. On a terminal (`ConsoleIo::interactive`: TerminalIo, a
+working terminal, a styled sink, at least 40×10) the editor is the inline **terminal
+panel** below (§11 D34). Everywhere else — PlainIo (every piped session), `ScriptedIo`,
+the Plain sink, a degraded session, a smaller terminal — it is c2's line-based checklist
+(works in every terminal, scriptable via `ScriptedIo` — deliberately not a full-screen
+dialog). The checklist is rendered as a table (§4.9.2, §11 D1): index, state glyph
 (`[x]`/`[ ]` bool, `(-)` disabled, `(*)` locked), attribute, kind, value. Cell content is
 never interpreted as markup, so the glyphs render verbatim (c2 needed an L13 fix for rich
 eating `[x]`). Mini-REPL:
@@ -7016,6 +7104,49 @@ The editor is created by `create_template_editor` (§4.9) and invoked through th
 `TemplateEditor` hook before every `load`/`copy`/`generate` targeting a PKCS#11 provider.
 The bootstrap constructs it directly (a Rust binary has no optional modules, so c2's lazy
 import with an identity fallback has no counterpart).
+
+**Terminal panel (r2 addition, §11 D34).** Drawn in place below the command — never the
+alternate screen, so the scrollback stays — as the checklist table (title, `#`, state,
+attribute, kind, value; the row numbers stay so the `:` line can use them) with a cursor
+marker `❯`, an `[ OK ]` row under the attributes, a rule, then the open input, the status
+line and the key help. Rows that do not fit scroll (`rows a–b of n`); long values and names
+are cut with `…`. Keys:
+
+- ↑/↓, PgUp/PgDn, Home/End move over the attribute rows and the OK row; locked rows are
+  shown but skipped (the cursor starts on the first unlocked row).
+- Space/Enter on a row: a disabled row is re-enabled (its value kept); an enabled boolean
+  flips; any other row opens its value in an input. Enter on the OK row accepts.
+- `-` or Delete disables the row (omitted from the call), `+` enables it.
+- `a` or Insert opens the add list: `CKA_CATALOG` in its order, then the
+  `templates.custom_attributes` names not in it, each with its kind, filtered as typed
+  (case-insensitive, an own `CKA_` prefix ignored: names whose part after `CKA_` starts
+  with the filter first, then names containing it). A name already in the template shows
+  `row <n>` and Enter moves the cursor there (note `<name> is already row <n>`); a
+  `NON_CREATION_ATTRS` name (§5.16) shows `set automatically`, a custom one `custom`. A
+  boolean is added as `true` with the cursor on it (Space flips it); any other kind asks
+  for its value first (Esc adds nothing). Adding CKA_ID/CKA_LABEL shows the identity note
+  above. Enter with no match → the line editor's `unknown attribute '<text>'` error.
+- `:` opens one line of the grammar above — the same parser, messages and identity note;
+  `ok` accepts, `cancel`/`abort` cancel, an empty line closes it; after an error the line
+  stays for correction.
+- Esc cancels at once (UserAbort "template edit cancelled"; nothing is asked); in an input
+  or the add list Esc only closes it. Ctrl-C anywhere, and Ctrl-D in the table, abort with
+  the line prompt's UserAbort "aborted while entering 'template'".
+
+Value inputs are kind-aware and parsed on Enter with the line editor's own `parse_value`
+(its messages and hints): BYTES — hex digits only behind a fixed `0x` (any other key →
+`<name> takes hex digits (0-9, a-f)`), the byte count beside (`odd number of hex digits`
+while odd), a paste drops whitespace, `:` and one leading `0x`; STR — any text, its UTF-8
+byte count beside, a paste drops control characters; ULONG — decimal digits or `0x…`
+(`<name> takes decimal digits or 0x… hex`). An existing value opens as its current text
+(bytes without `0x`). A value set on a disabled row enables it (unlike `<n>=<value>`,
+which keeps the row's state). Errors show under the table as `✗ <message>` and
+`  hint: <hint>` (never error panels) and any later key clears them. Ctrl-A/Home,
+Ctrl-E/End, ←/→, Backspace, Delete/Ctrl-D, Ctrl-U and Ctrl-K edit inputs. On accept the
+frame is erased and the accepted template is printed once as the checklist table (without
+the help line); on cancel or abort nothing is printed (the REPL prints `Aborted.`). A
+terminal failure inside the panel degrades the session (§11 D2) and the line checklist
+continues with the edits made so far; so does a terminal smaller than 40×10.
 
 ### 5.13 SoftHSM auto-detection & first-run wizard
 
@@ -7369,7 +7500,8 @@ command name, it is also a difflib candidate for unknown commands and `help <nam
     when a terminal never answers the `ESC[6n` cursor-position query — emacs shell-mode,
     some serial/remote consoles) disables raw mode, prints one stderr line
     `warning: line editor unavailable (<error>); continuing with plain input` and switches
-    the session to plain reads permanently. The REPL never exits because of a terminal
+    the session to plain reads permanently (a failure inside the template panel's key
+    session does the same, §11 D34). The REPL never exits because of a terminal
     error. `TERM=dumb` selects PlainIo up front, so no query is ever sent.
   - **PlainIo** transcript format: write the prompt to stdout, read one line (byte-level
     `read_until(b'\n')` on `std::io::stdin()`'s global handle — never a second
@@ -7605,7 +7737,11 @@ custom_mechanisms: []      # entry schema: spec §4.8 / example §5.14
   binary with their own fresh `SOFTHSM2_CONF`; in-process wizard tests (c2 test_wizard.py
   ports, `crates/r2-console/src/tests/`) hold `r2_testkit::global_state_lock()` and change
   the environment only through `r2_testkit::set_env` (its guard restores it).
-- **Console flows**: `ScriptedIo` for params/template editor/wizard; c2's `test_io.py`
+- **Console flows**: `ScriptedIo` for params/template editor/wizard (the line checklist);
+  the template panel (§11 D34) is a pure state machine tested key by key with its frames,
+  through a scripted `KeySession`, and `LineIo::interactive` over a recording
+  `TerminalDriver`; the real crossterm driver is checked by the terminal checklist (item
+  13, `parity/harness/pty_template_panel_check.py`); c2's `test_io.py`
   ports to `LineIo` driven by a scripted `LineReader` yielding `Line` / `Interrupted` /
   `Eof` (replacing prompt_toolkit pipe input with `\x03`/`\x04`). c2's in-process suites
   over real providers (test_copy.py, test_objects_softhsm.py, test_console_crypto.py,
@@ -8785,6 +8921,46 @@ one OpenSSL's `X509` decoder accepts). Verified by R6 x509build tests
   dog_banner_shows_only_on_a_terminal_without_an_injected_io}` (the `shows_banner`
   truth table); the piped `e2e_timing_iv` sessions assert
   that no banner is printed (`no_banner`).
+
+**D34 — Interactive template panel on terminals (r2 addition; user decision 2026-10-04).**
+- *Description*: c2's template editor was one line-based checklist everywhere: a table
+  reprinted after every `<n>` / `<n>=<value>` / `-<n>` / `+<n>` / `add CKA_X=<value>` line
+  typed at `template> : `, with no completion. On a terminal — TerminalIo before any
+  degrade, a styled sink (not Plain), at least 40×10 — r2 opens an inline panel instead
+  (§5.12 "Terminal panel"): drawn in place below the command, never on the alternate
+  screen, through the new provisional `ConsoleIo::interactive` (§4.9.1, with `Key`,
+  `Frame`, `KeySession`; TerminalIo's `FrameSession` and crossterm driver, §4.9.7). The
+  arrows move over the rows (locked rows skipped) and an `[ OK ]` row; Space/Enter flip a
+  boolean, re-enable a disabled row or open a value in a kind-aware input (bytes: hex
+  digits behind a fixed `0x` with a live byte count, pastes cleaned; text: anything;
+  ulong: decimal or `0x…`) parsed on Enter by the line editor's own rules and messages (a
+  value set on a disabled row enables it); `-`/Delete disable, `+` enables; `a`/Insert
+  open an add list filtered as typed (catalog, then custom attributes; present names jump
+  to their row, `NON_CREATION_ATTRS` are marked `set automatically`; booleans are added as
+  true, other kinds ask for a value); `:` takes one line of the §5.12 grammar. Enter on the
+  OK row accepts: the frame is erased and the accepted template is printed once as the
+  checklist table (no help line). Esc cancels without asking (UserAbort `template edit
+  cancelled`); Ctrl-C (and Ctrl-D in the table) abort like the line prompt (`aborted while
+  entering 'template'`). Input errors show under the table as `✗ <message>` /
+  `  hint: <hint>` instead of error panels; two panel-only texts are new: `<name> takes hex
+  digits (0-9, a-f)` / `<name> takes decimal digits or 0x… hex` for a refused key, and
+  `<name> is already row <n>` as a note. PlainIo (every piped session — so `ScriptedIo`,
+  the e2e tests and the parity harness), the Plain sink, a degraded session and smaller
+  terminals keep c2's line checklist byte for byte; a terminal failure inside the panel
+  degrades the session (D2) and the line checklist continues with the edits made so far.
+- *Reason*: the checklist needed a row number and the exact grammar for every change,
+  reprinted the whole table after each, and helped with neither attribute names nor value
+  syntax (hex bytes versus text).
+- *Verified by*: r2-core `io::{interactive_defaults_to_unavailable_without_calling_f,
+  frame_and_key_values}`; r2-console `tests::template_panel::*` (navigation and locked
+  rows, toggles, accept/cancel/abort, every input kind with its errors and pastes, the add
+  list's ranking, marks and jumps, the `:` line, frames at 80×24 and 40×10, scrolling,
+  `run`, and the editor's panel-or-line choice including the fall-back with the edits
+  kept), `tests::key_session::*` (when a session opens, the in-place drawing ops, clipping,
+  the narrowing redraw, the erase, terminal failures and the degrade, panic safety, the
+  crossterm key mapping); the unchanged `tests::template_editor::*` and every piped e2e
+  and parity session (line checklist); terminal checklist item 13 with
+  `parity/harness/pty_template_panel_check.py` (the real binary on SoftHSM).
 
 **Resolved without deviation** (recorded so they are not mistaken for gaps):
 
