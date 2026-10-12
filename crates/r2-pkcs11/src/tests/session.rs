@@ -436,6 +436,92 @@ fn failed_init_token_keeps_the_provider_session() {
     provider.list_keys().unwrap();
 }
 
+// ---- TokenInit::init_pin (§5.18, §11 D35) ----
+
+#[test]
+fn init_pin_resets_the_user_pin_and_keeps_the_objects() {
+    let (backend, provider) = logged_in();
+    provider.import_key(&aes(), "keep-me", None, None).unwrap();
+    provider.logout().unwrap();
+    let token = token_at(&provider, 0);
+    TokenInit::init_pin(&provider, &token, &pin("4321"), &pin("5678")).unwrap();
+    // the SO session is gone and the provider stays logged out
+    assert!(!crate::backend::Backend::has_session(backend.as_ref()));
+    assert_eq!(provider.status().auth, AuthState::LoggedOut);
+    let calls = backend.calls();
+    let tail: Vec<_> = calls.iter().rev().take(4).rev().copied().collect();
+    assert_eq!(tail, ["login", "init_pin", "logout", "close_session"]);
+    // the old PIN no longer works, the new one does, and the key survived
+    let err = provider.login(&token, &pin(USER_PIN), false).unwrap_err();
+    assert_eq!(err.ckr().map(|(_, name)| name), Some("CKR_PIN_INCORRECT"));
+    provider.login(&token, &pin("5678"), false).unwrap();
+    provider.find_key(&KeySelector::label("keep-me")).unwrap();
+}
+
+#[test]
+fn init_pin_wrong_so_pin_names_the_so_pin() {
+    let (backend, provider) = new_provider();
+    let token = token_at(&provider, 0);
+    let err = provider
+        .init_pin(&token, &pin("0000"), &pin("5678"))
+        .unwrap_err();
+    assert_eq!(
+        err.message,
+        "wrong SO PIN for token 'fake-token' (CKR_PIN_INCORRECT)"
+    );
+    assert_eq!(err.hint.as_deref(), Some("re-enter the SO PIN"));
+    assert!(!crate::backend::Backend::has_session(backend.as_ref()));
+    // the user PIN is unchanged
+    provider.login(&token, &pin(USER_PIN), false).unwrap();
+}
+
+#[test]
+fn init_pin_locked_so_pin_is_reported_as_such() {
+    let (backend, provider) = new_provider();
+    let token = token_at(&provider, 0);
+    backend.set_pin_locked(0, true);
+    let err = provider
+        .init_pin(&token, &pin("4321"), &pin("5678"))
+        .unwrap_err();
+    assert_eq!(
+        err.message,
+        "SO PIN locked — too many bad SO PINs (CKR_PIN_LOCKED)"
+    );
+}
+
+#[test]
+fn init_pin_rejected_new_pin_gets_a_hint() {
+    let (backend, provider) = new_provider();
+    let token = token_at(&provider, 0);
+    backend.fail_next("init_pin", rv::CKR_PIN_LEN_RANGE);
+    let err = provider
+        .init_pin(&token, &pin("4321"), &pin("1"))
+        .unwrap_err();
+    assert_eq!(
+        err.message,
+        "PKCS#11 PIN initialization failed (CKR_PIN_LEN_RANGE)"
+    );
+    assert_eq!(
+        err.hint.as_deref(),
+        Some("the token rejects this user PIN; try another")
+    );
+    assert!(!crate::backend::Backend::has_session(backend.as_ref()));
+}
+
+#[test]
+fn init_pin_refuses_a_logged_in_provider() {
+    let (backend, provider) = logged_in();
+    let token = token_at(&provider, 0);
+    let before = backend.calls().len();
+    let err = provider
+        .init_pin(&token, &pin("4321"), &pin("5678"))
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::AlreadyLoggedIn);
+    assert_eq!(err.hint.as_deref(), Some("logout first"));
+    assert_eq!(backend.calls().len(), before);
+    assert_eq!(provider.status().auth, AuthState::LoggedIn);
+}
+
 // ---- TokenInit::set_env_and_reset (§5.13 step 2) ----
 
 #[test]

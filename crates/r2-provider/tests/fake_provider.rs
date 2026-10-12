@@ -421,6 +421,40 @@ fn token_init_seam_only_with_tokens() {
 }
 
 #[test]
+fn init_pin_needs_a_logged_out_fake_and_an_initialized_token() {
+    let initialized = TokenInfo {
+        slot_id: 16,
+        label: "beta".to_owned(),
+        manufacturer: "m".to_owned(),
+        model: "f".to_owned(),
+        serial: "S16".to_owned(),
+    };
+    let fake = FakeProvider::new("hsm")
+        .with_type_name("pkcs11")
+        .starting_logged_out()
+        .with_tokens(vec![free_token(0), initialized.clone()]);
+    let init = fake.as_token_init().unwrap();
+    init.init_pin(&initialized, &pin(), &pin()).unwrap();
+    // a free slot has no user PIN to set
+    let error = err(init.init_pin(&free_token(0), &pin(), &pin()));
+    assert_eq!(error.kind, ErrorKind::Provider);
+    assert_eq!(error.message, "no initialized token in slot 0");
+    fake.login(&initialized, &pin(), false).unwrap();
+    let error = err(init.init_pin(&initialized, &pin(), &pin()));
+    assert_eq!(error.kind, ErrorKind::AlreadyLoggedIn);
+    assert_eq!(error.hint.as_deref(), Some("logout first"));
+    // PINs are never recorded
+    assert_eq!(
+        fake.calls()
+            .iter()
+            .filter(|c| c[0] == "init_pin")
+            .map(|c| c[1..].join(" "))
+            .collect::<Vec<_>>(),
+        ["16 beta *** ***", "0  *** ***", "16 beta *** ***"]
+    );
+}
+
+#[test]
 fn starting_logged_out_order_independent_and_memory_unaffected() {
     let fake = FakeProvider::new("hsm")
         .starting_logged_out()

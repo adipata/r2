@@ -171,6 +171,80 @@ impl Pkcs11Provider {
         }
     }
 
+    /// = TokenInit::init_pin (§5.18, §11 D35): on an RW session on `token.slot_id`,
+    /// login(SO) + C_InitPIN(user_pin) + logout; nothing else on the token changes. Refused
+    /// while logged in; a session the provider held (logged out) is closed first.
+    pub fn init_pin(
+        &self,
+        token: &TokenInfo,
+        so_pin: &SecretString,
+        user_pin: &SecretString,
+    ) -> Result<()> {
+        if self.state.borrow().logged_in {
+            return Err(
+                ConsoleError::already_logged_in("already logged in").with_hint("logout first")
+            );
+        }
+        r2_provider::Provider::initialize(self)?;
+        // the backend owns ONE session: the SO session replaces the provider's
+        self.drop_session();
+        let backend = Rc::clone(&self.backend);
+        let result = (|| -> std::result::Result<(), (BackendError, &'static str)> {
+            backend
+                .open_session(token.slot_id)
+                .map_err(|e| (e, "PIN initialization"))?;
+            let inner = (|| {
+                backend
+                    .login(UserKind::So, so_pin)
+                    .map_err(|e| (e, "SO login"))?;
+                let set = backend
+                    .init_pin(user_pin)
+                    .map_err(|e| (e, "PIN initialization"));
+                // closing the session ends the SO login anyway
+                let _ = backend.logout();
+                set
+            })();
+            let _ = backend.close_session(); // best-effort cleanup
+            inner
+        })();
+        match result {
+            Ok(()) => {
+                tracing::info!(
+                    target: "r2::pkcs11",
+                    "{}: initialized the user PIN of token '{}' (slot {})",
+                    self.name,
+                    token.label,
+                    token.slot_id
+                );
+                Ok(())
+            }
+            Err((err, context)) => {
+                let mut error = self.translate_for(err, context, Some(&token.label));
+                if context == "SO login" {
+                    match error.ckr().map(|(code, _)| code) {
+                        Some(rv::CKR_PIN_INCORRECT) => {
+                            error.message = error.message.replacen("wrong PIN", "wrong SO PIN", 1);
+                            error.hint = Some("re-enter the SO PIN".to_owned());
+                        }
+                        Some(rv::CKR_PIN_LOCKED) => {
+                            error.message =
+                                "SO PIN locked — too many bad SO PINs (CKR_PIN_LOCKED)".to_owned();
+                            error.hint =
+                                Some("only re-initializing the token clears it".to_owned());
+                        }
+                        _ => {}
+                    }
+                } else if matches!(
+                    error.ckr().map(|(code, _)| code),
+                    Some(rv::CKR_PIN_LEN_RANGE | rv::CKR_PIN_INVALID)
+                ) {
+                    error.hint = Some("the token rejects this user PIN; try another".to_owned());
+                }
+                Err(error)
+            }
+        }
+    }
+
     /// FakeBackend constructor for r2-pkcs11's own tests (§4.10.4).
     #[cfg(test)]
     pub(crate) fn with_backend(
@@ -709,6 +783,15 @@ impl r2_provider::TokenInit for Pkcs11Provider {
         user_pin: &SecretString,
     ) -> Result<()> {
         Pkcs11Provider::init_token(self, slot, label, so_pin, user_pin)
+    }
+
+    fn init_pin(
+        &self,
+        token: &TokenInfo,
+        so_pin: &SecretString,
+        user_pin: &SecretString,
+    ) -> Result<()> {
+        Pkcs11Provider::init_pin(self, token, so_pin, user_pin)
     }
 
     /// §5.13 step 2: set `key=value` at the single audited set_var site, then shut down

@@ -161,7 +161,10 @@ impl FakeProvider {
     /// else Provider "no free slot {slot}") and replaces it with TokenInfo{slot_id: slot,
     /// label, manufacturer: "SoftHSM project", model: "SoftHSM v2", serial: 16 lower-case hex
     /// digits of a counter}; set_env_and_reset(key, value) records the call and runs
-    /// shutdown() — it never touches the real environment.
+    /// shutdown() — it never touches the real environment; init_pin(token, …) records
+    /// ["init_pin", slot, label, "***", "***"] and needs a logged-out fake (AlreadyLoggedIn
+    /// "already logged in", hint "logout first") and an initialized token (label or serial
+    /// non-empty) at `token.slot_id` (else Provider "no initialized token in slot {n}").
     pub fn with_tokens(self, tokens: Vec<TokenInfo>) -> Self {
         self.state.borrow_mut().tokens = Some(tokens);
         self
@@ -1238,6 +1241,36 @@ impl FakeProvider {
         Ok(())
     }
 
+    fn base_init_pin(&self, token: &TokenInfo) -> Result<()> {
+        self.record(
+            "init_pin",
+            vec![
+                token.slot_id.to_string(),
+                token.label.clone(),
+                "***".to_owned(),
+                "***".to_owned(),
+            ],
+        );
+        let state = self.state.borrow();
+        if state.auth == AuthState::LoggedIn {
+            return Err(
+                ConsoleError::already_logged_in("already logged in").with_hint("logout first")
+            );
+        }
+        let present = state.tokens.as_ref().is_some_and(|tokens| {
+            tokens
+                .iter()
+                .any(|t| t.slot_id == token.slot_id && !(t.label.is_empty() && t.serial.is_empty()))
+        });
+        if !present {
+            return Err(ConsoleError::provider(format!(
+                "no initialized token in slot {}",
+                token.slot_id
+            )));
+        }
+        Ok(())
+    }
+
     fn base_set_env_and_reset(&self, key: &str, value: &str) -> Result<()> {
         self.record("set_env_and_reset", vec![key.to_owned(), value.to_owned()]);
         // Through the hooked surface (a hook overriding shutdown sees this one).
@@ -1568,6 +1601,18 @@ impl TokenInit for FakeProvider {
             self.base_set_env_and_reset(key, value)
         )
     }
+    fn init_pin(
+        &self,
+        token: &TokenInfo,
+        so_pin: &SecretString,
+        user_pin: &SecretString,
+    ) -> Result<()> {
+        dispatch!(
+            self,
+            init_pin(token, so_pin, user_pin),
+            self.base_init_pin(token)
+        )
+    }
 }
 
 /// The un-hooked view handed to hooks as `next` (c2 `super().method(...)`).
@@ -1710,6 +1755,14 @@ impl TokenInit for Unhooked<'_> {
     }
     fn set_env_and_reset(&self, key: &str, value: &str) -> Result<()> {
         self.0.base_set_env_and_reset(key, value)
+    }
+    fn init_pin(
+        &self,
+        token: &TokenInfo,
+        _so_pin: &SecretString,
+        _user_pin: &SecretString,
+    ) -> Result<()> {
+        self.0.base_init_pin(token)
     }
 }
 
@@ -1884,6 +1937,15 @@ pub trait FakeHooks {
         None
     }
     fn set_env_and_reset(&self, next: &dyn Provider, key: &str, value: &str) -> Option<Result<()>> {
+        None
+    }
+    fn init_pin(
+        &self,
+        next: &dyn Provider,
+        token: &TokenInfo,
+        so_pin: &SecretString,
+        user_pin: &SecretString,
+    ) -> Option<Result<()>> {
         None
     }
 }

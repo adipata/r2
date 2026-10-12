@@ -249,6 +249,33 @@ fn test_key_edit_defaults_to_unsupported() {
     assert!(MinimalProvider.as_token_init().is_none());
 }
 
+/// A TokenInit that only implements the required methods.
+struct InitOnly;
+impl TokenInit for InitOnly {
+    fn init_token(&self, _: u64, _: &str, _: &SecretString, _: &SecretString) -> Result<()> {
+        Ok(())
+    }
+    fn set_env_and_reset(&self, _: &str, _: &str) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn token_init_pin_defaults_to_unsupported() {
+    // r2-only (§5.18): init_pin has a refusing default.
+    let token = TokenInfo {
+        slot_id: 0,
+        label: "t".to_owned(),
+        manufacturer: String::new(),
+        model: String::new(),
+        serial: "S".to_owned(),
+    };
+    let pin = SecretString::from("1".to_owned());
+    let err = err_kind(InitOnly.init_pin(&token, &pin, &pin));
+    assert_eq!(err.kind, ErrorKind::UnsupportedOperation);
+    assert_eq!(err.message, "PIN initialization is not supported");
+}
+
 #[test]
 fn test_generate_random_defaults_to_unsupported() {
     // r2-only (§5.17): a provider without an RNG refuses, naming itself.

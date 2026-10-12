@@ -21,7 +21,7 @@ use r2_core::error::ErrorKind;
 use r2_core::keys::{Curve, KeyAlgorithm, KeyClass, KeyMaterial};
 use r2_core::template::{AttrKind, AttrValue, KeyTemplate, TemplateAttr};
 use r2_pkcs11::Pkcs11Provider;
-use r2_provider::{AuthState, GenerateRequest, KeySelector, Provider, TokenInfo};
+use r2_provider::{AuthState, GenerateRequest, KeySelector, Provider, TokenInfo, TokenInit};
 use r2_testkit::softhsm::{SofthsmToken, softhsm_token, unique_label};
 use secrecy::SecretString;
 
@@ -491,6 +491,54 @@ fn softhsm_init_token_label_round_trips_exactly() {
     assert!(!matches[0].label.contains('\0'));
     provider.login(&matches[0], &pin("5678"), false).unwrap(); // C_InitPIN took effect
     assert_eq!(provider.status().auth, AuthState::LoggedIn);
+    provider.shutdown().unwrap();
+}
+
+// ---- init_pin (§5.18, §11 D35) ----
+
+#[test]
+fn softhsm_init_pin_resets_the_user_pin_and_keeps_the_objects() {
+    let _lock = r2_testkit::global_state_lock();
+    // a token of its own, so the shared fixture token keeps its PIN
+    let token = softhsm_token();
+    let provider = make_provider(token, "softhsm-initpin");
+    let free = provider
+        .list_tokens()
+        .unwrap()
+        .into_iter()
+        .find(|t| t.label.is_empty())
+        .unwrap();
+    let label = format!("R2PIN-{}", &unique_label().as_str()[7..15]);
+    provider
+        .init_token(free.slot_id, &label, &pin("8765"), &pin("5678"))
+        .unwrap();
+    let fresh = provider
+        .list_tokens()
+        .unwrap()
+        .into_iter()
+        .find(|t| t.label == label)
+        .unwrap();
+    provider.login(&fresh, &pin("5678"), false).unwrap();
+    let material = KeyMaterial::new(KeyAlgorithm::Aes, KeyClass::Secret, vec![7; 16]);
+    // a token object (on this test's own token) — it must outlive the sessions
+    let persistent = KeyTemplate::new(vec![boolean("CKA_TOKEN", true)]);
+    provider
+        .import_key(&material, "survivor", Some(&persistent), None)
+        .unwrap();
+    provider.logout().unwrap();
+
+    // wrong SO PIN: named as such, the user PIN is unchanged
+    let err = TokenInit::init_pin(&provider, &fresh, &pin("0000"), &pin("1111")).unwrap_err();
+    assert_eq!(
+        err.message,
+        format!("wrong SO PIN for token '{label}' (CKR_PIN_INCORRECT)")
+    );
+    TokenInit::init_pin(&provider, &fresh, &pin("8765"), &pin("4444")).unwrap();
+    assert_eq!(provider.status().auth, AuthState::LoggedOut);
+    let err = provider.login(&fresh, &pin("5678"), false).unwrap_err();
+    assert_eq!(err.ckr().map(|(_, name)| name), Some("CKR_PIN_INCORRECT"));
+    provider.login(&fresh, &pin("4444"), false).unwrap();
+    provider.find_key(&KeySelector::label("survivor")).unwrap();
     provider.shutdown().unwrap();
 }
 

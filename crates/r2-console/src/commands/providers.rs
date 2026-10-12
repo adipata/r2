@@ -1,5 +1,6 @@
 // `providers` / `slots` / `login` / `logout` (spec §5.1/§5.2, §5.13 trigger; owner R8) —
-// port of c2 `console/commands/providers_cmd.py`.
+// port of c2 `console/commands/providers_cmd.py` — and `init-pin` (§5.18, §11 D35; an r2
+// addition).
 //
 // Commands return errors, never print them — the REPL renders (§4.2). The `providers`
 // table never loads a PKCS#11 library (§6 startup resilience): availability is judged by a
@@ -11,7 +12,7 @@ use r2_core::io::{Renderable, table};
 use r2_core::text::{py_int, py_repr};
 use r2_pkcs11::softhsm::find_softhsm_module;
 use r2_provider::{AuthState, Provider, ProviderStatus, TokenInfo};
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 
 use crate::cmdutil::{completed_args, positional, reject_named};
 use crate::commands::Command;
@@ -28,6 +29,7 @@ pub fn commands() -> Vec<Box<dyn Command>> {
         Box::new(SlotsCommand),
         Box::new(LoginCommand),
         Box::new(LogoutCommand),
+        Box::new(InitPinCommand),
     ]
 }
 
@@ -229,7 +231,7 @@ impl Command for LoginCommand {
         }
         let token = match token {
             Some(token) => token,
-            None => select_token(ctx, provider.as_ref(), args)?,
+            None => select_token(ctx, provider.as_ref(), args, LOGIN_USAGE)?,
         };
         let keep_pin = args.flag("keep-pin");
         let given_pin = args.opt("pin");
@@ -306,6 +308,7 @@ fn select_token(
     ctx: &AppContext,
     provider: &dyn Provider,
     args: &BoundArgs,
+    usage: &str,
 ) -> r2_core::Result<TokenInfo> {
     let tokens = provider.list_tokens()?;
     if tokens.is_empty() {
@@ -322,7 +325,7 @@ fn select_token(
     if label_arg.is_some() && slot_opt.is_some() {
         return Err(
             ConsoleError::generic("give either <token-label> or --slot, not both")
-                .with_hint(format!("usage: {LOGIN_USAGE}")),
+                .with_hint(format!("usage: {usage}")),
         );
     }
     if let Some(label) = label_arg {
@@ -491,6 +494,145 @@ impl Command for LogoutCommand {
         }
         Vec::new()
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// init-pin
+// ---------------------------------------------------------------------------------------
+
+const INIT_PIN_USAGE: &str =
+    "init-pin <provider> [<token-label> | --slot <n>] [--so-pin <pin>] [--new-pin <pin>]";
+
+/// The `--options` `init-pin` takes (all take a value).
+const INIT_PIN_OPTIONS: [&str; 3] = ["slot", "so-pin", "new-pin"];
+
+/// Attempts at the hidden + confirmed new-PIN prompt.
+const NEW_PIN_ATTEMPTS: usize = 3;
+
+/// `init-pin` (§5.18): log in as the Security Officer and set or reset the user PIN of a
+/// token with C_InitPIN — `pkcs11-tool --login --login-type so --init-pin`. The token's
+/// objects are untouched (this is not C_InitToken).
+struct InitPinCommand;
+
+impl Command for InitPinCommand {
+    fn name(&self) -> &'static str {
+        "init-pin"
+    }
+    fn summary(&self) -> &'static str {
+        "Set or reset a token's user PIN as the Security Officer"
+    }
+    fn usage(&self) -> &'static str {
+        INIT_PIN_USAGE
+    }
+    fn run(&self, ctx: &AppContext, args: &BoundArgs) -> r2_core::Result<Flow> {
+        reject_named(args, self.usage(), NOUN)?;
+        if let Some(name) = args
+            .options
+            .keys()
+            .find(|name| !INIT_PIN_OPTIONS.contains(&name.as_str()))
+        {
+            return Err(ConsoleError::generic(format!("unknown option --{name}"))
+                .with_hint(format!("usage: {INIT_PIN_USAGE}")));
+        }
+        if args.positionals.len() > 2 {
+            return Err(ConsoleError::generic("too many arguments")
+                .with_hint(format!("usage: {INIT_PIN_USAGE}")));
+        }
+        let provider = ctx
+            .providers
+            .get(positional(args, 0, "provider", self.usage())?)?;
+        let Some(init) = provider.as_token_init() else {
+            return Err(ConsoleError::unsupported(format!(
+                "provider '{}' does not support PIN initialization",
+                provider.name()
+            )));
+        };
+        if provider.status().auth == AuthState::LoggedIn {
+            // checked before any prompt; the provider refuses it again
+            return Err(
+                ConsoleError::already_logged_in("already logged in").with_hint("logout first")
+            );
+        }
+        let token = select_token(ctx, provider.as_ref(), args, INIT_PIN_USAGE)?;
+        let given_so_pin = args.opt("so-pin");
+        let prompted = given_so_pin.is_none();
+        let mut so_pin = match given_so_pin {
+            Some(pin) => SecretString::from(pin.to_owned()),
+            None => prompt_so_pin(ctx, &token)?,
+        };
+        let user_pin = match args.opt("new-pin") {
+            Some("") => {
+                return Err(ConsoleError::param(
+                    "the new user PIN must not be empty",
+                    "new-pin",
+                ));
+            }
+            Some(pin) => SecretString::from(pin.to_owned()),
+            None => prompt_new_pin(ctx, &token)?,
+        };
+        loop {
+            match init.init_pin(&token, &so_pin, &user_pin) {
+                Ok(()) => break,
+                // wrong SO PIN → re-prompt (interactive SO PINs only), like `login`
+                Err(err)
+                    if prompted
+                        && err
+                            .ckr()
+                            .is_some_and(|(_, name)| name == "CKR_PIN_INCORRECT") =>
+                {
+                    ctx.io.print_error(&err);
+                    so_pin = prompt_so_pin(ctx, &token)?;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        ctx.io.print(Renderable::Text(format!(
+            "user PIN set on '{}' (slot {}) on {}",
+            token.label,
+            token.slot_id,
+            provider.name()
+        )));
+        Ok(Flow::Continue)
+    }
+    fn complete(&self, ctx: &AppContext, tokens: &[String], cursor_token: &str) -> Vec<String> {
+        if completed_args(tokens, cursor_token) == 0 {
+            return complete_provider_names(ctx, cursor_token);
+        }
+        ["--slot", "--so-pin", "--new-pin"]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect()
+    }
+}
+
+fn prompt_so_pin(ctx: &AppContext, token: &TokenInfo) -> r2_core::Result<SecretString> {
+    ctx.io
+        .prompt_secret(&format!("SO PIN for token '{}'", token.label))
+}
+
+/// Hidden + confirmed new user PIN; never echoed or logged. The token judges the length.
+fn prompt_new_pin(ctx: &AppContext, token: &TokenInfo) -> r2_core::Result<SecretString> {
+    for _ in 0..NEW_PIN_ATTEMPTS {
+        let pin = ctx
+            .io
+            .prompt_secret(&format!("New user PIN for token '{}'", token.label))?;
+        if pin.expose_secret().is_empty() {
+            ctx.io.print(Renderable::Text(
+                "the new user PIN must not be empty — try again".to_owned(),
+            ));
+            continue;
+        }
+        let repeat = ctx.io.prompt_secret("Repeat the new user PIN")?;
+        if repeat.expose_secret() == pin.expose_secret() {
+            return Ok(pin);
+        }
+        ctx.io.print(Renderable::Text(
+            "PIN entries do not match — try again".to_owned(),
+        ));
+    }
+    Err(ConsoleError::user_abort(format!(
+        "new user PIN not confirmed after {NEW_PIN_ATTEMPTS} attempts"
+    )))
 }
 
 /// Test-only replacement of the §5.13 wizard API (c2's tests stubbed `c2.console.wizard`
