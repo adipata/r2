@@ -196,8 +196,11 @@ impl Pkcs11Provider {
             }
             None => None,
         };
-        self.op(&format!("unwrap with {}", mech.mechanism), || {
-            self.ensure_identity_free(&[result_class], &label, resolved_id.as_deref())?;
+        let context = format!("unwrap with {}", mech.mechanism);
+        self.op(&context, || {
+            self.ensure_identity_free(&[result_class], &label, resolved_id.as_deref())
+        })?;
+        self.op_once(&context, || {
             let wrap_handle = self.find_handle(wrapping_key)?;
             let first = attrs_with_len.as_deref().unwrap_or(&attrs);
             let built = self.wrap_mechanism(mech)?;

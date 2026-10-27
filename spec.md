@@ -6462,7 +6462,13 @@ Auto-recovery: session ops are wrapped; on `CKR_SESSION_HANDLE_INVALID` /
 serial) is present **and** the operator logged in with `--keep-pin` (the `keep_pin = true`
 arg of §4.5 `login()` — PIN held in provider memory only as a `SecretString`, never
 persisted, zeroized on drop), it reopens the session, re-logs-in and retries the operation
-**once**. Without `--keep-pin` (the default) there is no stored PIN and no mid-operation
+**once**. Calls that create a token object (key generation, import, unwrap) are the
+exception: the token may have committed the object before reporting the lost session, so
+they are never retried. Their identity guard runs (and recovers) on its own first; a lost
+session during the creating call itself is recovered as above but answered with `Provider`
+`session lost during <context> (session recovered)` / ``check `keys <provider>` before
+retrying: the token may have created it anyway`` (or, when recovery is impossible, the
+`AuthRequired` error below with the hint ``run `login <provider>`, then check …``). Without `--keep-pin` (the default) there is no stored PIN and no mid-operation
 prompting (providers have no IO, §3.1): the provider drops to `logged_out` and raises
 `AuthRequired("session lost — login again")`. Any second failure likewise drops to
 `logged_out` with the friendly message. Dropping the stale `Session` may make cryptoki log a

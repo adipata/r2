@@ -135,6 +135,9 @@ struct State {
     reject_unwrap_attr: Option<(u64, u64)>,
     /// The attribute types of every `unwrap_key` template, in call order.
     unwrap_templates: Vec<Vec<u64>>,
+    /// The next call of this method creates its object(s), then invalidates the session
+    /// and answers this CKR (the token committed, then reported a lost session).
+    commit_then_fail: Option<(&'static str, u64)>,
 }
 
 /// The methods whose token call starts with an operation Init (or C_FindObjectsInit) and so
@@ -406,6 +409,11 @@ impl FakeBackend {
     pub(crate) fn reject_unwrap_with(&self, attr: u64, rv: u64) {
         self.state.borrow_mut().reject_unwrap_attr = Some((attr, rv));
     }
+    /// The next `method` call creates its object(s), then the session is invalidated and
+    /// the call answers `rv` (a slow keygen the token finished after dropping the session).
+    pub(crate) fn commit_then_fail(&self, method: &'static str, rv: u64) {
+        self.state.borrow_mut().commit_then_fail = Some((method, rv));
+    }
     /// The attribute types of every `unwrap_key` template, in call order.
     pub(crate) fn unwrap_templates(&self) -> Vec<Vec<u64>> {
         self.state.borrow().unwrap_templates.clone()
@@ -425,6 +433,22 @@ impl FakeBackend {
             return Err(fail(code, method));
         }
         Ok(())
+    }
+
+    /// Hand back a creating call's result, unless [`commit_then_fail`](Self::commit_then_fail)
+    /// targets `method`: then the session is invalidated and the call fails anyway.
+    fn committed<T>(&self, method: &'static str, value: T) -> BResult<T> {
+        let mut state = self.state.borrow_mut();
+        match state.commit_then_fail {
+            Some((target, code)) if target == method => {
+                state.commit_then_fail = None;
+                if let Some(session) = state.session.as_mut() {
+                    session.invalidated = true;
+                }
+                Err(fail(code, method))
+            }
+            _ => Ok(value),
+        }
     }
 
     /// c2 `_check`: the session must be live (else CKR_SESSION_HANDLE_INVALID) and, for
@@ -921,7 +945,8 @@ impl Backend for FakeBackend {
                 .entry(w(sys::CKA_KEY_GEN_MECHANISM))
                 .or_insert_with(|| ul(w(sys::CK_UNAVAILABLE_INFORMATION)));
         }
-        Ok(self.store(slot, attrs, secret))
+        let handle = self.store(slot, attrs, secret);
+        self.committed("create_object", handle)
     }
 
     fn destroy_object(&self, object: u64) -> BResult<()> {
@@ -948,7 +973,8 @@ impl Backend for FakeBackend {
         let value = keystream(format!("genkey|{counter}").as_bytes(), b"value", length);
         attrs.insert(w(sys::CKA_VALUE), value.clone());
         attrs.insert(w(sys::CKA_LOCAL), vec![1]);
-        Ok(self.store(slot, attrs, value))
+        let handle = self.store(slot, attrs, value);
+        self.committed("generate_key", handle)
     }
 
     fn generate_key_pair(
@@ -990,7 +1016,7 @@ impl Backend for FakeBackend {
         );
         let public_handle = self.store(slot, pub_attrs, secret.clone());
         let private_handle = self.store(slot, priv_attrs, secret);
-        Ok((public_handle, private_handle))
+        self.committed("generate_key_pair", (public_handle, private_handle))
     }
 
     fn encrypt(&self, mech: &MechSpec, key: u64, data: &[u8]) -> BResult<Vec<u8>> {
@@ -1096,7 +1122,8 @@ impl Backend for FakeBackend {
         let value = xor(wrapped, &stream);
         let mut attrs = Self::attr_map(template);
         attrs.insert(w(sys::CKA_VALUE), value.clone());
-        Ok(self.store(slot, attrs, value))
+        let handle = self.store(slot, attrs, value);
+        self.committed("unwrap_key", handle)
     }
 
     fn derive_key(&self, mech: &MechSpec, base_key: u64, template: &[RawAttr]) -> BResult<u64> {
