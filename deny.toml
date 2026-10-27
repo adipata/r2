@@ -17,7 +17,11 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+ignore = [
+    # unsafe-libyaml (via serde_yaml_ng → r2-config) is unmaintained and has no safe
+    # upgrade. Acknowledged until r2-config moves to a maintained YAML parser.
+    { id = "RUSTSEC-2024-0449", reason = "unmaintained unsafe-libyaml via serde_yaml_ng; no safe upgrade" },
+]
 
 [licenses]
 version = 2
