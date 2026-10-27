@@ -408,6 +408,50 @@ impl Pkcs11Provider {
         result
     }
 
+    /// [`op`](Self::op) for a call that creates a token object (generate, import, unwrap):
+    /// on CKR_SESSION_HANDLE_INVALID / CKR_DEVICE_REMOVED the session is still recovered,
+    /// but `f` is never run again. The token may have committed the object before it
+    /// reported the lost session, so a retry could create a second one; the operator is
+    /// told to check instead. Run the identity guard through `op` first, so a session that
+    /// dropped while idle is still recovered transparently.
+    pub(crate) fn op_once<T>(&self, context: &str, f: impl FnOnce() -> OResult<T>) -> Result<T> {
+        let result = self.op_once_inner(context, f);
+        crate::mechanisms::clear_openssl_errors();
+        result
+    }
+
+    fn op_once_inner<T>(&self, context: &str, f: impl FnOnce() -> OResult<T>) -> Result<T> {
+        self.require_session()?;
+        match f() {
+            Ok(value) => Ok(value),
+            Err(OpError::Console(err)) => Err(err),
+            Err(OpError::Backend(err)) if !is_recoverable(&err) => {
+                Err(self.translate(err, context))
+            }
+            Err(OpError::Backend(_)) => {
+                tracing::info!(
+                    target: "r2::pkcs11",
+                    "{}: session dropped during {} — not retrying (the object may exist)",
+                    self.name,
+                    context
+                );
+                let check = format!(
+                    "check `keys {}` before retrying: the token may have created it anyway",
+                    self.name
+                );
+                match self.recover_session() {
+                    Ok(()) => Err(ConsoleError::provider(format!(
+                        "session lost during {context} (session recovered)"
+                    ))
+                    .with_hint(check)),
+                    Err(err) => {
+                        Err(err.with_hint(format!("run `login {}`, then {check}", self.name)))
+                    }
+                }
+            }
+        }
+    }
+
     fn op_inner<T>(&self, context: &str, f: impl Fn() -> OResult<T>) -> Result<T> {
         self.require_session()?;
         match f() {

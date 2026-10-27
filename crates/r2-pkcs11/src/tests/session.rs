@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use r2_core::error::ErrorKind;
 use r2_core::keys::{KeyAlgorithm, KeyClass, KeyMaterial};
-use r2_provider::{AuthState, KeySelector, Provider, TokenInit};
+use r2_provider::{AuthState, GenerateRequest, KeySelector, Provider, TokenInit};
 
 use super::{USER_PIN, config, logged_in, pin, provider_over, token_at};
 use crate::Pkcs11Provider;
@@ -314,6 +314,101 @@ fn device_removed_is_recoverable_too() {
     backend.fail_next("find_objects", rv::CKR_DEVICE_REMOVED);
     assert!(provider.list_keys().unwrap().is_empty());
     assert_eq!(backend.sessions_opened(), 2);
+}
+
+// ---- creating calls are never retried after a lost session ----
+
+fn rsa_request(label: &str) -> GenerateRequest {
+    let mut request = GenerateRequest::new(KeyAlgorithm::Rsa, label);
+    request.size_bits = Some(2048);
+    request
+}
+
+fn count_calls(backend: &FakeBackend, method: &str) -> usize {
+    backend.calls().iter().filter(|c| **c == method).count()
+}
+
+#[test]
+fn keypair_generation_is_not_retried_when_the_session_drops_mid_call() {
+    let (backend, provider) = new_provider();
+    provider
+        .login(&token_at(&provider, 0), &pin(USER_PIN), true)
+        .unwrap();
+    // the token created the pair, then reported the session gone (slow RSA-8192 keygen)
+    backend.commit_then_fail("generate_key_pair", rv::CKR_SESSION_HANDLE_INVALID);
+    let err = provider.generate_key(&rsa_request("once")).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Provider);
+    assert_eq!(
+        err.message,
+        "session lost during keypair generation (session recovered)"
+    );
+    assert_eq!(
+        err.hint.as_deref(),
+        Some("check `keys hsm` before retrying: the token may have created it anyway")
+    );
+    assert_eq!(count_calls(&backend, "generate_key_pair"), 1);
+    assert_eq!(backend.objects().len(), 2); // one pair, not two
+    assert_eq!(provider.status().auth, AuthState::LoggedIn);
+    assert_eq!(backend.sessions_opened(), 2);
+}
+
+#[test]
+fn keypair_generation_still_recovers_a_session_that_dropped_while_idle() {
+    let (backend, provider) = new_provider();
+    provider
+        .login(&token_at(&provider, 0), &pin(USER_PIN), true)
+        .unwrap();
+    backend.invalidate_session(); // dropped before the command: the guard recovers it
+    let info = provider.generate_key(&rsa_request("idle")).unwrap();
+    assert_eq!(info.key_ref.label, "idle");
+    assert_eq!(count_calls(&backend, "generate_key_pair"), 1);
+    assert_eq!(backend.objects().len(), 2);
+}
+
+#[test]
+fn lost_session_during_generation_without_keep_pin_asks_to_check_after_login() {
+    let (backend, provider) = logged_in();
+    backend.commit_then_fail("generate_key_pair", rv::CKR_DEVICE_REMOVED);
+    let err = provider.generate_key(&rsa_request("nokeep")).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::AuthRequired);
+    assert_eq!(err.message, "session lost — login again");
+    assert_eq!(
+        err.hint.as_deref(),
+        Some(
+            "run `login hsm`, then check `keys hsm` before retrying: the token may have \
+             created it anyway"
+        )
+    );
+    assert_eq!(count_calls(&backend, "generate_key_pair"), 1);
+    assert_eq!(provider.status().auth, AuthState::LoggedOut);
+}
+
+#[test]
+fn secret_generation_and_import_are_not_retried_either() {
+    let (backend, provider) = new_provider();
+    provider
+        .login(&token_at(&provider, 0), &pin(USER_PIN), true)
+        .unwrap();
+    let mut request = GenerateRequest::new(KeyAlgorithm::Aes, "aes-once");
+    request.size_bits = Some(256);
+    backend.commit_then_fail("generate_key", rv::CKR_SESSION_HANDLE_INVALID);
+    let err = provider.generate_key(&request).unwrap_err();
+    assert_eq!(
+        err.message,
+        "session lost during AES key generation (session recovered)"
+    );
+    assert_eq!(count_calls(&backend, "generate_key"), 1);
+
+    backend.commit_then_fail("create_object", rv::CKR_SESSION_HANDLE_INVALID);
+    let err = provider
+        .import_key(&aes(), "imp-once", None, None)
+        .unwrap_err();
+    assert_eq!(
+        err.message,
+        "session lost during object creation (session recovered)"
+    );
+    assert_eq!(count_calls(&backend, "create_object"), 1);
+    assert_eq!(backend.objects().len(), 2); // one generated, one imported
 }
 
 // ---- TestShutdown ----

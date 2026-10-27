@@ -937,7 +937,9 @@ impl Pkcs11Provider {
             attrs.len()
         );
         self.op("object creation", || {
-            self.ensure_identity_free(&[material.key_class], &label, resolved_id.as_deref())?;
+            self.ensure_identity_free(&[material.key_class], &label, resolved_id.as_deref())
+        })?;
+        self.op_once("object creation", || {
             let handle = self.backend().create_object(&attrs)?;
             self.key_info(handle, material.key_class)?.ok_or_else(|| {
                 OpError::Console(ConsoleError::key_not_found(format!(
@@ -1006,8 +1008,11 @@ impl Pkcs11Provider {
                 size_bits,
                 label
             );
-            return self.op(&format!("{what} key generation"), || {
-                self.ensure_identity_free(&[KeyClass::Secret], &label, resolved_id.as_deref())?;
+            let context = format!("{what} key generation");
+            self.op(&context, || {
+                self.ensure_identity_free(&[KeyClass::Secret], &label, resolved_id.as_deref())
+            })?;
+            return self.op_once(&context, || {
                 let handle = self
                     .backend()
                     .generate_key(&MechSpec::Plain { ckm: keygen }, &attrs)?;
@@ -1093,13 +1098,15 @@ impl Pkcs11Provider {
             request.size_bits,
             request.curve.as_ref().map(Curve::as_str)
         );
+        // both halves checked up front — a collision never leaves a half-created pair
         self.op("keypair generation", || {
-            // both halves checked up front — a collision never leaves a half-created pair
             self.ensure_identity_free(
                 &[KeyClass::Public, KeyClass::Private],
                 &label,
                 resolved_id.as_deref(),
-            )?;
+            )
+        })?;
+        self.op_once("keypair generation", || {
             let (_public, private) = self.backend().generate_key_pair(
                 &MechSpec::Plain { ckm: gen_ckm },
                 &public_attrs,
