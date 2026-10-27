@@ -468,6 +468,8 @@ fn test_history_filters_pin_and_password_lines() {
     assert!(!stored.contains("secret"));
     assert!(stored.contains("keys mem"));
     assert!(is_secret_line("x --pin"));
+    assert!(is_secret_line("init-pin hsm --so-pin 1"));
+    assert!(is_secret_line("init-pin hsm --new-pin 1"));
     assert!(is_secret_line("x --password=y"));
     assert!(is_secret_line("load mem aes 00112233")); // §11 D8 option B
 }

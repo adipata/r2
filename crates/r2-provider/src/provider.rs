@@ -237,4 +237,22 @@ pub trait TokenInit {
     /// Provider "'{name}' shares its PKCS#11 module with another provider" (hint "restart
     /// r2 after the setup, or remove the other provider entry"); nothing is changed then.
     fn set_env_and_reset(&self, key: &str, value: &str) -> Result<()>;
+    /// Set or reset the user PIN of an initialized token (`init-pin`, §5.18, §11 D35; the
+    /// `pkcs11-tool --login --login-type so --init-pin` equivalent): on an RW session on
+    /// `token.slot_id`, login(SO, so_pin) + C_InitPIN(user_pin) + logout. The token's
+    /// objects are untouched (no C_InitToken). Refused while the provider is logged in
+    /// (AlreadyLoggedIn "already logged in", hint "logout first"); a session the provider
+    /// held is closed (it is logged out already). Default: UnsupportedOperation "PIN
+    /// initialization is not supported".
+    fn init_pin(
+        &self,
+        token: &TokenInfo,
+        so_pin: &SecretString,
+        user_pin: &SecretString,
+    ) -> Result<()> {
+        let _ = (token, so_pin, user_pin);
+        Err(ConsoleError::unsupported(
+            "PIN initialization is not supported",
+        ))
+    }
 }

@@ -2388,6 +2388,13 @@ pub trait TokenInit {
     /// Provider "'{name}' shares its PKCS#11 module with another provider" (hint "restart
     /// r2 after the setup, or remove the other provider entry"); nothing is changed then.
     fn set_env_and_reset(&self, key: &str, value: &str) -> Result<()>;
+    /// `init-pin` (§5.18, §11 D35): set or reset the user PIN of the initialized token
+    /// `token` — on an RW session on `token.slot_id`, login(SO, so_pin) + C_InitPIN(user_pin)
+    /// + logout, then the session is closed. Nothing else on the token changes (no
+    /// C_InitToken). Refused while the provider is logged in (AlreadyLoggedIn "already
+    /// logged in", hint "logout first"); a session the provider held (logged out) is closed
+    /// first. Default: UnsupportedOperation "PIN initialization is not supported".
+    fn init_pin(&self, token: &TokenInfo, so_pin: &SecretString, user_pin: &SecretString) -> Result<()> { .. }
 }
 ```
 
@@ -2557,6 +2564,8 @@ impl Pkcs11Provider {
     ) -> Self { .. }
     /// = TokenInit::init_token (kept inherent for parity with c2's surface).
     pub fn init_token(&self, slot: u64, label: &str, so_pin: &secrecy::SecretString, user_pin: &secrecy::SecretString) -> r2_core::Result<()> { .. }
+    /// = TokenInit::init_pin (§5.18, §11 D35).
+    pub fn init_pin(&self, token: &r2_provider::TokenInfo, so_pin: &secrecy::SecretString, user_pin: &secrecy::SecretString) -> r2_core::Result<()> { .. }
     /// FakeBackend constructor for r2-pkcs11's own tests (§4.10.4).
     #[cfg(test)]
     pub(crate) fn with_backend(
@@ -4547,7 +4556,7 @@ R0 stub of every command module: `commands()` returns `vec![]` (§4.1.1), so dis
 |---|---|
 | help (R7) | help |
 | misc (R7) | exit, quit, clear, config |
-| providers (R8) | providers, slots, login, logout |
+| providers (R8) | providers, slots, login, logout, init-pin (§5.18, §11 D35) |
 | keys (R8) | keys, key, generate, load, export, csr, delete |
 | crypto (R9) | encrypt, decrypt, sign, verify, derive, ops, random (§5.17, §11 D29) |
 | copy (R10) | copy |
@@ -5569,7 +5578,11 @@ impl FakeProvider {
     /// else Provider "no free slot {slot}") and replaces it with TokenInfo{slot_id: slot,
     /// label, manufacturer: "SoftHSM project", model: "SoftHSM v2", serial: 16 lower-case hex
     /// digits of a counter}; set_env_and_reset(key, value) records the call and runs
-    /// shutdown() — it never touches the real environment.
+    /// shutdown() — it never touches the real environment; init_pin(token, …) (§11 D35)
+    /// records ["init_pin", slot, label, "***", "***"] and needs a logged-out fake
+    /// (AlreadyLoggedIn "already logged in", hint "logout first") and an initialized token
+    /// (label or serial non-empty) at `token.slot_id` (else Provider "no initialized token
+    /// in slot {n}").
     pub fn with_tokens(self, tokens: Vec<TokenInfo>) -> Self { .. }
     /// Builder: install fault-injection / observation hooks (replaces c2's "subclass
     /// FakeProvider in your own test file").
@@ -5624,6 +5637,7 @@ pub trait FakeHooks {
     fn read_full_template(&self, next: &dyn Provider, key: &KeyInfo) -> Option<Result<KeyTemplate>> { None }
     fn init_token(&self, next: &dyn Provider, slot: u64, label: &str, so_pin: &SecretString, user_pin: &SecretString) -> Option<Result<()>> { None }
     fn set_env_and_reset(&self, next: &dyn Provider, key: &str, value: &str) -> Option<Result<()>> { None }
+    fn init_pin(&self, next: &dyn Provider, token: &TokenInfo, so_pin: &SecretString, user_pin: &SecretString) -> Option<Result<()>> { None }
 }
 ```
 
@@ -6165,6 +6179,8 @@ slots <provider>                  # tokens of a PKCS#11 provider
 login <provider> [<token-label> | --slot <n>] [--pin <pin>] [--keep-pin]
                                   # PIN prompted hidden if omitted; --keep-pin: §5.2
 logout <provider>
+init-pin <provider> [<token-label> | --slot <n>] [--so-pin <pin>] [--new-pin <pin>]
+                                  # SO login + C_InitPIN: set/reset the user PIN (§5.18, D35)
 
 keys [<provider>] [<filter>]      # table: ref, class (secret/private/public/cert/data), algorithm
                                   # (incl. generic, `-` for data, `other` for unmodelled types),
@@ -7412,6 +7428,56 @@ Completion: provider names for the first argument, filesystem paths after `--out
 nothing after `--outformat`, otherwise `--out`/`--outformat`. Because `random` is a
 command name, it is also a difflib candidate for unknown commands and `help <name>`
 (§11 D29).
+
+### 5.18 User PIN initialization (r2 addition, §11 D35)
+
+```
+init-pin <provider> [<token-label> | --slot <n>] [--so-pin <pin>] [--new-pin <pin>]
+```
+
+The equivalent of `pkcs11-tool --module <lib> --slot <n> --login --login-type so
+--init-pin`: log in to a token as the Security Officer and set (or reset, e.g. after the
+user PIN locked) its user PIN with `C_InitPIN`. The token's objects and its SO PIN are
+untouched; this is not `C_InitToken` (which only the §5.13 wizard calls). The command
+lives in `commands/providers.rs` (summary "Set or reset a token's user PIN as the Security
+Officer") and calls `TokenInit::init_pin` (§4.5.2), so it works on every provider whose
+`as_token_init()` is Some (Pkcs11Provider; FakeProvider with `.with_tokens(..)`).
+
+Run order (each step's error ends the command): a `name=value` token → the `providers`
+commands' reject_named error; an `--option` other than `--slot`, `--so-pin`, `--new-pin`
+→ Generic `unknown option --<name>`, more than two positionals → Generic `too many
+arguments` (both with hint `usage: <usage>`); the provider (missing/unknown as for
+`login`); no TokenInit → UnsupportedOperation `provider '<name>' does not support PIN
+initialization`; a logged-in provider → AlreadyLoggedIn `already logged in` (hint `logout
+first`) before any prompt — the SO session would replace the provider's session (§5.2,
+one session per provider) and SO and user logins exclude each other token-wide; then the
+token, selected exactly like `login` (§5.2: label positional, `--slot`, config default,
+the only token, else a `select` prompt; the usage in its hints is this command's).
+
+PINs: `--so-pin` or the hidden prompt `SO PIN for token '<label>'`; then `--new-pin` or
+the hidden prompt `New user PIN for token '<label>'` confirmed by `Repeat the new user
+PIN` (an empty entry prints `the new user PIN must not be empty — try again`, a mismatch
+`PIN entries do not match — try again`; after 3 unconfirmed attempts UserAbort `new user
+PIN not confirmed after 3 attempts`). An empty `--new-pin` → Param `the new user PIN must
+not be empty` (param `new-pin`). r2 imposes no length rule: the token judges the PIN.
+
+PKCS#11 sequence (`Pkcs11Provider::init_pin`): any session the provider holds is closed,
+then `C_OpenSession` (RW) on the token's slot, `C_Login(CKU_SO)`, `C_InitPIN`,
+`C_Logout` (best effort), `C_CloseSession`; the provider stays logged out. CKRs go
+through the §5.2 choke point with context `SO login` (the login) or `PIN initialization`
+(open, C_InitPIN), with three refinements: CKR_PIN_INCORRECT at the SO login → `wrong SO
+PIN for token '<label>' (CKR_PIN_INCORRECT)`, hint `re-enter the SO PIN` — re-prompted
+like `login` when the SO PIN was prompted (the error panel, then only the SO PIN prompt
+again; a `--so-pin` value is not retried); CKR_PIN_LOCKED at the SO login → `SO PIN locked
+— too many bad SO PINs (CKR_PIN_LOCKED)`, hint `only re-initializing the token clears it`;
+CKR_PIN_LEN_RANGE / CKR_PIN_INVALID from C_InitPIN keep the generic message (`PKCS#11 PIN
+initialization failed (<CKR>)`) with hint `the token rejects this user PIN; try another`.
+
+Success prints `user PIN set on '<label>' (slot <n>) on <provider>` and logs the same at
+INFO (`<provider>: initialized the user PIN of token '<label>' (slot <n>)`); PINs are
+never printed or logged, and lines with `--so-pin`/`--new-pin` stay out of the history
+like `--pin` (§5.1). Completion: provider names for the first argument, otherwise
+`--slot`, `--so-pin`, `--new-pin`.
 
 ## 6. Non-functional requirements
 
@@ -8964,6 +9030,28 @@ one OpenSSL's `X509` decoder accepts). Verified by R6 x509build tests
   crossterm key mapping); the unchanged `tests::template_editor::*` and every piped e2e
   and parity session (line checklist); terminal checklist item 13 with
   `parity/harness/pty_template_panel_check.py` (the real binary on SoftHSM).
+
+**D35 — init-pin: set or reset a token's user PIN as the SO (r2 addition; user decision 2026-10-12).**
+- *Description*: c2@408d6f2 could only run `C_InitPIN` inside the SoftHSM wizard's
+  `init_token`. r2 adds `init-pin <provider> [<token-label> | --slot <n>] [--so-pin <pin>]
+  [--new-pin <pin>]` (§5.18), the `pkcs11-tool --login --login-type so --init-pin`
+  equivalent: SO login + `C_InitPIN` + logout on a session of its own, token objects
+  untouched. `TokenInit` gains `init_pin` (default UnsupportedOperation "PIN
+  initialization is not supported"), `Pkcs11Provider` the inherent `init_pin`, `FakeHooks`
+  an `init_pin` hook (default None) and FakeProvider the behavior of §4.10.2; r2-pkcs11's
+  `ckr::rv` names CKR_PIN_INVALID and CKR_PIN_LEN_RANGE. The history filter also drops
+  lines containing `--so-pin` or `--new-pin`. `init-pin` appears in `help` and completion
+  and, being a command name, is a difflib candidate. Every other command and output is
+  unchanged.
+- *Reason*: operators need to reset a locked or forgotten user PIN (or set the first
+  one on a token initialized elsewhere) without leaving the console for `pkcs11-tool`.
+- *Verified by*: r2-provider `provider_base::token_init_pin_defaults_to_unsupported`,
+  `fake_provider::init_pin_needs_a_logged_out_fake_and_an_initialized_token`; r2-pkcs11
+  `tests::session::{init_pin_resets_the_user_pin_and_keeps_the_objects,
+  init_pin_wrong_so_pin_names_the_so_pin, init_pin_locked_so_pin_is_reported_as_such,
+  init_pin_rejected_new_pin_gets_a_hint, init_pin_refuses_a_logged_in_provider}` and
+  `softhsm_provider::softhsm_init_pin_resets_the_user_pin_and_keeps_the_objects`;
+  r2-console `tests::init_pin_cmd::*` and `tests::io::test_history_filters_pin_and_password_lines`.
 
 **Resolved without deviation** (recorded so they are not mistaken for gaps):
 

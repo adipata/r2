@@ -11,13 +11,19 @@ use reedline::{
 pub(crate) const HISTORY_CAPACITY: usize = 1000;
 
 /// Lines never stored in the history (on disk or in the session list):
-/// - c2's rule: the line contains "--pin" or "--password";
+/// - c2's rule: the line contains "--pin" or "--password" (r2 adds `init-pin`'s
+///   "--so-pin" and "--new-pin", §5.18);
 /// - §11 D8 (option B, adopted): lines carrying inline key material — anything containing
 ///   `-----BEGIN`, any quoted token spanning several physical lines (a pasted PEM/base64
 ///   block), and a `load` command with an inline data positional
 ///   (`load <provider> <hint> <data>`, plaintext or a `--kek` blob). `load --file …` stays.
 pub fn is_secret_line(line: &str) -> bool {
-    if line.contains("--pin") || line.contains("--password") || line.contains("-----BEGIN") {
+    if line.contains("--pin")
+        || line.contains("--so-pin")
+        || line.contains("--new-pin")
+        || line.contains("--password")
+        || line.contains("-----BEGIN")
+    {
         return true;
     }
     let Ok(tokens) = crate::parser::tokenize(line) else {

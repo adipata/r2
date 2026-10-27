@@ -79,6 +79,13 @@ r2> key template softhsm:mykey mykey.yaml         # dump the object's attribute 
 r2> logout softhsm
 ```
 
+A locked or forgotten user PIN can be reset by the token's Security Officer, without
+touching the keys on it (the `pkcs11-tool --login --login-type so --init-pin` equivalent):
+
+```text
+r2> init-pin prodhsm --slot 16     # prompts for the SO PIN, then the new user PIN twice
+```
+
 Keys on PKCS#11 tokens go through a checklist template editor before creation — defaults
 are conservative (sensitive, non-extractable); flip rows deliberately. On a terminal it is
 an inline panel: ↑/↓ move, Space toggles a checkbox or edits a value (hex for bytes such as

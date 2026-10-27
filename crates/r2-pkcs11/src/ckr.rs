@@ -22,6 +22,8 @@ pub(crate) mod rv {
         CKR_OK,
         CKR_PIN_INCORRECT,
         CKR_PIN_LOCKED,
+        CKR_PIN_INVALID,
+        CKR_PIN_LEN_RANGE,
         CKR_USER_ALREADY_LOGGED_IN,
         CKR_USER_NOT_LOGGED_IN,
         CKR_SESSION_HANDLE_INVALID,
