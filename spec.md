@@ -6187,6 +6187,8 @@ keys [<provider>] [<filter>]      # table: ref, class (secret/private/public/cer
                                   # size/curve, exportable — every object the provider lists
                                   # <filter>: case-insensitive substring of the displayed ref;
                                   # a lone arg that isn't a provider name filters all browsable providers
+                                  # under the table: `found N keys (mem: 1, hsm: 2)` — one count per
+                                  # listed provider, after filtering; `found N keys in hsm` for one provider
 key info <provider>:<label>[#<id-hex>][:<class>]
                                   # every <provider>:<label> ref in this grammar accepts the full
                                   # §4.3 form [#<id-hex>][:<class>][@<handle>]; `keys` and ref
