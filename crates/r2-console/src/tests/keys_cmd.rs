@@ -109,6 +109,65 @@ fn test_keys_single_provider() {
 }
 
 #[test]
+fn keys_counts_found_keys_per_provider() {
+    let p = make_pair(&[]);
+    p.mem
+        .import_key(&aes_material(), "aeskey", None, None)
+        .unwrap();
+    p.hsm
+        .import_key(&aes_material(), "one", None, None)
+        .unwrap();
+    p.hsm
+        .import_key(&cert_material(), "two", None, None)
+        .unwrap();
+    run_line(&p.ctx, "keys").unwrap();
+    let summary = p.io.output().last().unwrap().clone();
+    assert!(summary.starts_with("found 3 keys ("), "{summary}");
+    assert!(
+        summary.contains("mem: 1") && summary.contains("hsm: 2"),
+        "{summary}"
+    );
+}
+
+#[test]
+fn keys_counts_single_provider_and_filtered_keys() {
+    let p = make_pair(&[]);
+    p.hsm
+        .import_key(&aes_material(), "app-config", None, Some(&filter_id()))
+        .unwrap();
+    p.hsm
+        .import_key(&aes_material(), "other", None, None)
+        .unwrap();
+    run_line(&p.ctx, "keys hsm").unwrap();
+    assert_eq!(p.io.output().last().unwrap(), "found 2 keys in hsm");
+    run_line(&p.ctx, "keys hsm 7aa59ce").unwrap();
+    assert_eq!(p.io.output().last().unwrap(), "found 1 key in hsm");
+}
+
+#[test]
+fn keys_count_shows_zero_for_listed_provider_and_precedes_logged_out_note() {
+    let p = make_pair(&[]);
+    p.hsm
+        .import_key(&aes_material(), "hsmkey", None, None)
+        .unwrap();
+    run_line(&p.ctx, "keys").unwrap();
+    let summary = p.io.output().last().unwrap().clone();
+    assert!(
+        summary.contains("mem: 0") && summary.contains("hsm: 1"),
+        "{summary}"
+    );
+
+    let p = make_pair(&[]);
+    p.mem
+        .import_key(&aes_material(), "aeskey", None, None)
+        .unwrap();
+    p.hsm.logout().unwrap();
+    run_line(&p.ctx, "keys").unwrap();
+    let output = p.io.output();
+    assert_eq!(output[output.len() - 2], "found 1 key (mem: 1)");
+}
+
+#[test]
 fn test_keys_explicit_provider_logged_out_raises() {
     let p = make_pair(&[]);
     p.hsm.logout().unwrap();

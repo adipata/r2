@@ -158,8 +158,11 @@ impl Command for KeysCommand {
 
         let mut infos: Vec<KeyInfo> = Vec::new();
         let mut skipped: Vec<String> = Vec::new();
+        // The providers actually listed, in listing order, for the per-provider counts.
+        let mut listed: Vec<String> = Vec::new();
         if let Some(name) = provider_name {
             infos = ctx.providers.get(name)?.list_keys()?;
+            listed.push(name.to_owned());
         } else {
             for provider in ctx.providers.all() {
                 if provider.status().auth == AuthState::LoggedOut {
@@ -167,6 +170,7 @@ impl Command for KeysCommand {
                     continue;
                 }
                 infos.extend(provider.list_keys()?);
+                listed.push(provider.name().to_owned());
             }
         }
         // display_refs suffixes colliding refs with :<class>/@<handle> (§4.3), so every
@@ -177,12 +181,24 @@ impl Command for KeysCommand {
             let needle = filter.to_lowercase();
             pairs.retain(|(text, _)| text.to_lowercase().contains(&needle));
         }
+        let counts: Vec<(&str, usize)> = listed
+            .iter()
+            .map(|name| {
+                let count = pairs
+                    .iter()
+                    .filter(|(_, info)| info.key_ref.provider == *name)
+                    .count();
+                (name.as_str(), count)
+            })
+            .collect();
         let rows: Vec<Vec<String>> = pairs
             .into_iter()
             .map(|(text, info)| key_row(text, info))
             .collect();
         if !rows.is_empty() {
+            let total = rows.len();
             ctx.io.print(table(Some("keys"), &KEY_TABLE_COLUMNS, rows));
+            text(ctx, count_summary(total, &counts, provider_name.is_some()));
         } else if let Some(filter) = ref_filter {
             text(ctx, format!("no keys match '{filter}'"));
         } else {
@@ -201,6 +217,19 @@ impl Command for KeysCommand {
             return complete_provider_names(ctx, cursor_token);
         }
         Vec::new()
+    }
+}
+
+/// The line under the `keys` table: the total, then one count per listed provider
+/// (`found 3 keys (mem: 1, hsm: 2)`), or `found 1 key in hsm` for a single provider.
+fn count_summary(total: usize, counts: &[(&str, usize)], single: bool) -> String {
+    let noun = |n: usize| if n == 1 { "key" } else { "keys" };
+    match counts {
+        [(name, _)] if single => format!("found {total} {} in {name}", noun(total)),
+        _ => {
+            let per: Vec<String> = counts.iter().map(|(n, c)| format!("{n}: {c}")).collect();
+            format!("found {total} {} ({})", noun(total), per.join(", "))
+        }
     }
 }
 
