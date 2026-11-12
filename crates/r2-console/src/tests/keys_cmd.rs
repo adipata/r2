@@ -1356,6 +1356,141 @@ fn test_delete_unqualified_keypair_still_takes_private_half() {
     assert_eq!(classes, [KeyClass::Public]);
 }
 
+/// Two RSA pairs sharing one label under different ids: `mem:N/A` matches four objects.
+fn two_pairs(p: &Pair) {
+    for id in [[0x01u8], [0x02u8]] {
+        let mut request = GenerateRequest::new(KeyAlgorithm::Rsa, "N/A");
+        request.size_bits = Some(2048);
+        request.key_id = Some(id.to_vec());
+        p.mem.generate_key(&request).unwrap();
+    }
+}
+
+#[test]
+fn test_delete_ambiguous_lists_matches_and_deletes_all_when_confirmed() {
+    let p = make_pair(&["y"]);
+    two_pairs(&p);
+    generate(p.mem.as_ref(), KeyAlgorithm::Rsa, "other");
+    run_line(&p.ctx, "delete mem:N/A").unwrap();
+    assert_eq!(
+        p.io.prompts(),
+        ["'N/A' matches 4 objects on mem: delete all 4?"]
+    );
+    let left: Vec<String> = p
+        .mem
+        .list_keys()
+        .unwrap()
+        .iter()
+        .map(|k| k.key_ref.label.clone())
+        .collect();
+    assert_eq!(left, ["other", "other"]);
+    let output = p.io.output();
+    for shown in [
+        "mem:N/A#01:priv",
+        "mem:N/A#01:pub",
+        "mem:N/A#02:priv",
+        "mem:N/A#02:pub",
+    ] {
+        assert!(
+            output.iter().any(|line| line.contains(shown)),
+            "{shown} listed: {output:?}"
+        );
+        assert!(output.contains(&format!("deleted {shown}")), "{output:?}");
+    }
+    assert_eq!(output.last().unwrap(), "deleted 4 objects");
+}
+
+#[test]
+fn test_delete_ambiguous_declined_keeps_everything() {
+    let p = make_pair(&["n"]);
+    two_pairs(&p);
+    run_line(&p.ctx, "delete mem:N/A").unwrap();
+    assert_eq!(p.mem.list_keys().unwrap().len(), 4);
+    assert!(p.io.output().contains(&"delete cancelled".to_owned()));
+}
+
+#[test]
+fn test_delete_ambiguous_class_filter_deletes_only_that_class() {
+    let p = make_pair(&["y"]);
+    two_pairs(&p);
+    run_line(&p.ctx, "delete mem:N/A:pub").unwrap();
+    let classes: Vec<KeyClass> = p
+        .mem
+        .list_keys()
+        .unwrap()
+        .iter()
+        .map(|k| k.key_class)
+        .collect();
+    assert_eq!(classes, [KeyClass::Private, KeyClass::Private]);
+}
+
+#[test]
+fn test_delete_ambiguous_same_identity_duplicates() {
+    let p = make_pair(&["y"]);
+    p.mem
+        .import_key(&aes_material(), "dup", None, None)
+        .unwrap();
+    p.mem
+        .store_key_unchecked(&aes_material(), "dup", None, None);
+    run_line(&p.ctx, "delete mem:dup").unwrap();
+    assert!(p.mem.list_keys().unwrap().is_empty());
+    assert_eq!(
+        p.io.prompts(),
+        ["'dup' matches 2 objects on mem: delete all 2?"]
+    );
+}
+
+#[test]
+fn test_delete_ambiguous_without_confirmation_when_disabled() {
+    let config = make_config(Some("ui:\n  confirm_delete: false\n"));
+    let p = make_pair_with(&[], Some(config), SpyEditor::new()); // a confirm() would panic
+    two_pairs(&p);
+    run_line(&p.ctx, "delete mem:N/A").unwrap();
+    assert!(p.mem.list_keys().unwrap().is_empty());
+}
+
+/// Refuses to delete public keys (a CKA_DESTROYABLE=false stand-in).
+struct KeepPublic;
+
+impl r2_testkit::FakeHooks for KeepPublic {
+    fn delete_key(
+        &self,
+        _next: &dyn Provider,
+        key: &r2_core::keys::KeyInfo,
+    ) -> Option<r2_core::Result<()>> {
+        (key.key_class == KeyClass::Public).then(|| {
+            Err(r2_core::error::ConsoleError::generic(
+                "object is not destroyable",
+            ))
+        })
+    }
+}
+
+#[test]
+fn test_delete_ambiguous_partial_failure_reports_progress() {
+    let io = Rc::new(r2_testkit::ScriptedIo::new(["y"]));
+    let mem = Rc::new(r2_testkit::FakeProvider::new("mem").with_hooks(Rc::new(KeepPublic)));
+    let ctx = ctx_with(&io, registry_of(&[Rc::clone(&mem)]), None);
+    let p = Pair {
+        ctx,
+        io,
+        mem,
+        hsm: Rc::new(r2_testkit::FakeProvider::new("hsm")),
+        editor: Rc::new(SpyEditor::new()),
+    };
+    two_pairs(&p);
+    let err = run_line(&p.ctx, "delete mem:N/A").unwrap_err();
+    assert_eq!(
+        err.message,
+        "object is not destroyable (deleted 1 of 4 before this failure)"
+    );
+    assert!(
+        p.io.output()
+            .contains(&"deleted mem:N/A#01:priv".to_owned())
+    );
+    assert_eq!(p.mem.list_keys().unwrap().len(), 3);
+}
+
 // ---------------------------------------------------------------------------------------
 // completion
 // ---------------------------------------------------------------------------------------
@@ -1926,7 +2061,6 @@ fn ambiguous_refs_carry_their_candidates() {
         .store_key_unchecked(&aes_material(), "dup", None, None);
     for line in [
         "key info mem:dup",
-        "delete mem:dup",
         "export mem:dup x.bin",
         "csr mem:dup x.csr",
     ] {

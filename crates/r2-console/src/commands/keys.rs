@@ -12,7 +12,7 @@ use std::collections::{BTreeSet, HashMap};
 use r2_core::codec::decode_data;
 use r2_core::error::ConsoleError;
 use r2_core::io::{Renderable, busy_with, table};
-use r2_core::keys::{Curve, KeyAlgorithm, KeyClass, KeyInfo, display_refs};
+use r2_core::keys::{Curve, KeyAlgorithm, KeyClass, KeyInfo, display_refs, parse_ref};
 use r2_core::params::{ParamKind, ParamSpec, ParamStruct, ParamValue, Verb};
 use r2_core::runtime::{
     check_interrupt, format_elapsed, take_operation_time, timed, timing_suffix,
@@ -21,7 +21,8 @@ use r2_core::template::{AttrKind, AttrValue, KeyTemplate, TemplateAttr};
 use r2_core::text::{py_fromhex, py_path, py_repr, py_strip};
 use r2_core::x509info::certificate_details;
 use r2_ops::{OperationSpec, ParamResolver};
-use r2_provider::{AttrEditOutcome, AuthState, GenerateRequest, Provider};
+use r2_provider::lookup::matches_selector;
+use r2_provider::{AttrEditOutcome, AuthState, GenerateRequest, KeySelector, Provider};
 use r2_services::templatefile::{EditorSeeding, build_seed};
 use r2_services::{certops, keyexport, keyload};
 use secrecy::{ExposeSecret, SecretString};
@@ -1247,7 +1248,13 @@ impl Command for DeleteCommand {
     fn run(&self, ctx: &AppContext, args: &BoundArgs) -> r2_core::Result<Flow> {
         reject_named(args, self.usage(), NOUN)?;
         let reference = positional(args, 0, "provider:label", self.usage())?;
-        let (provider, key) = ctx.providers.resolve_ref(reference)?;
+        let (provider, key) = match ctx.providers.resolve_ref(reference) {
+            Ok(found) => found,
+            Err(err) if err.candidates().is_some() => {
+                return delete_all_matches(ctx, reference, err);
+            }
+            Err(err) => return Err(err),
+        };
         if ctx.cfg().ui.confirm_delete
             && !ctx.io.confirm(
                 &format!(
@@ -1271,4 +1278,59 @@ impl Command for DeleteCommand {
         }
         Vec::new()
     }
+}
+
+/// `delete` on a ref that matches several objects: list them, confirm once (per
+/// ui.confirm_delete) and delete them all. `ambiguous` is the resolve error, returned as is
+/// when the matches can no longer be listed (so the reply never gets worse than before).
+fn delete_all_matches(
+    ctx: &AppContext,
+    reference: &str,
+    ambiguous: ConsoleError,
+) -> r2_core::Result<Flow> {
+    let parsed = parse_ref(reference)?;
+    let provider = ctx.providers.get(&parsed.provider)?;
+    let selector = KeySelector::from(&parsed);
+    let matches: Vec<KeyInfo> = provider
+        .list_keys()?
+        .into_iter()
+        .filter(|info| matches_selector(info, &selector))
+        .collect();
+    if matches.len() < 2 {
+        return Err(ambiguous); // changed underneath us: keep the precise error
+    }
+    let total = matches.len();
+    let shown = display_refs(&matches);
+    let rows: Vec<Vec<String>> = shown
+        .iter()
+        .zip(matches.iter())
+        .map(|(text, info)| key_row(text.clone(), info))
+        .collect();
+    ctx.io
+        .print(table(Some("matches"), &KEY_TABLE_COLUMNS, rows));
+    if ctx.cfg().ui.confirm_delete
+        && !ctx.io.confirm(
+            &format!(
+                "'{}' matches {total} objects on {}: delete all {total}?",
+                selector.label,
+                provider.name()
+            ),
+            false,
+        )?
+    {
+        text(ctx, "delete cancelled".to_owned());
+        return Ok(Flow::Continue);
+    }
+    for (done, (key, text_ref)) in matches.iter().zip(&shown).enumerate() {
+        if let Err(mut err) = check_interrupt().and_then(|()| provider.delete_key(key)) {
+            err.message = format!(
+                "{} (deleted {done} of {total} before this failure)",
+                err.message
+            );
+            return Err(err);
+        }
+        text(ctx, format!("deleted {text_ref}"));
+    }
+    text(ctx, format!("deleted {total} objects"));
+    Ok(Flow::Continue)
 }
