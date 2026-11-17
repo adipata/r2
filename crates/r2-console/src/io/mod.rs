@@ -141,6 +141,7 @@ pub fn open_console_io(config: &AppConfig) -> Rc<dyn ConsoleIo> {
 
 pub mod assist;
 pub mod history;
+pub(crate) mod indicator;
 pub mod line;
 pub mod plain;
 pub mod session;

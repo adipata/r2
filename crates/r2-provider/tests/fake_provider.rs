@@ -1010,3 +1010,46 @@ fn rename_guard_texts_and_certificate_exemption() {
         .unwrap();
     assert_eq!(renamed.key.key_ref.label, "c1");
 }
+
+// ---- r2 addition: the fake's key cache follows its own changes (§5.19) ----
+
+#[test]
+fn fake_key_cache_is_patched_by_unwrap_and_update_key() {
+    use r2_provider::cache::{KeyLoadJob, LoadSink};
+
+    let fake = FakeProvider::new("hsm")
+        .with_type_name("pkcs11")
+        .with_key_cache();
+    let kek = fake.import_key(&aes(), "kek", None, None).unwrap();
+    let cache = fake.key_cache().unwrap();
+    let job: KeyLoadJob = fake.key_load_job().unwrap();
+    let shared = cache.begin("hsm").unwrap();
+    let result = job.run(&LoadSink::new(&shared));
+    shared.finish(result);
+    let labels = || {
+        let mut labels: Vec<String> = cache
+            .view()
+            .keys
+            .into_iter()
+            .map(|k| k.key_ref.label)
+            .collect();
+        labels.sort();
+        labels
+    };
+    assert_eq!(labels(), ["kek"]);
+    let blob = fake
+        .wrap_key(&kek, &mech("AES-KEY-WRAP"), &kek, &WrapOptions::default())
+        .unwrap();
+    let request = UnwrapRequest::new(KeyAlgorithm::Generic, KeyClass::Secret, "u");
+    let unwrapped = fake
+        .unwrap_key(&kek, &mech("AES-KEY-WRAP"), &blob, &request)
+        .unwrap();
+    assert_eq!(labels(), ["kek", "u"]);
+    let rename = KeyTemplate::new(vec![TemplateAttr::new(
+        "CKA_LABEL",
+        AttrKind::Str,
+        AttrValue::Str("renamed".into()),
+    )]);
+    fake.update_key(&unwrapped, &rename).unwrap();
+    assert_eq!(labels(), ["kek", "renamed"]);
+}

@@ -1,5 +1,6 @@
 // r2-provider crate root (spec §4.5, owner R3).
 #![forbid(unsafe_code)]
+pub mod cache;
 pub mod lookup;
 pub mod mechanism;
 pub mod provider;

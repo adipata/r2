@@ -106,6 +106,49 @@ pub struct KeyEditResult {
     pub outcomes: Vec<AttrEditOutcome>,
 }
 
+/// A targeted object search (`Provider::find_objects`): every set field must match; None
+/// fields match anything. `key_id` matches the KeyInfo's CKA_ID exactly (so objects
+/// without one, such as data objects, never match an id query).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ObjectQuery {
+    pub label: Option<String>,
+    pub key_id: Option<Vec<u8>>,
+    pub key_class: Option<KeyClass>,
+}
+impl ObjectQuery {
+    /// Objects labelled `label`.
+    pub fn label(label: impl Into<String>) -> Self {
+        Self {
+            label: Some(label.into()),
+            ..Self::default()
+        }
+    }
+    /// Objects whose CKA_ID is `key_id`.
+    pub fn id(key_id: impl Into<Vec<u8>>) -> Self {
+        Self {
+            key_id: Some(key_id.into()),
+            ..Self::default()
+        }
+    }
+    pub fn with_id(self, key_id: Option<Vec<u8>>) -> Self {
+        Self { key_id, ..self }
+    }
+    pub fn with_class(self, key_class: Option<KeyClass>) -> Self {
+        Self { key_class, ..self }
+    }
+    /// The default implementation's filter.
+    pub fn matches(&self, info: &KeyInfo) -> bool {
+        self.label
+            .as_ref()
+            .is_none_or(|label| &info.key_ref.label == label)
+            && self
+                .key_id
+                .as_ref()
+                .is_none_or(|id| info.key_ref.key_id.as_ref() == Some(id))
+            && self.key_class.is_none_or(|class| info.key_class == class)
+    }
+}
+
 /// The §4.3 ref selectors as find_key filters (c2 `find_key(label, key_id, key_class, handle)`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KeySelector {

@@ -25,7 +25,7 @@ use std::rc::Rc;
 use r2_core::datainput::{DataInput, DataOutput, InFormat, OutFormat};
 use r2_core::error::{ConsoleError, ErrorKind};
 use r2_core::io::{Renderable, Span, Tone, busy_with, hex_timed, table};
-use r2_core::keys::{Curve, KeyAlgorithm, KeyClass, KeyInfo, KeyRef, parse_ref};
+use r2_core::keys::{Curve, KeyAlgorithm, KeyClass, KeyInfo, KeyRef, display_refs, parse_ref};
 use r2_core::params::{ParamKind, ParamSpec, ParamStruct, ParamValue, Params, Verb};
 use r2_core::runtime::{check_interrupt, take_operation_time, timed, timing_suffix};
 use r2_core::text::{py_path, py_repr};
@@ -81,18 +81,42 @@ pub(crate) fn public_half_for_verify(
     if key.key_class != KeyClass::Private {
         return Ok(key);
     }
-    let candidates: Vec<KeyInfo> = provider
-        .list_keys()?
-        .into_iter()
-        .filter(|info| {
-            info.key_ref.label == key.key_ref.label
-                && matches!(info.key_class, KeyClass::Public | KeyClass::Certificate)
-                && (key.key_ref.key_id.is_none() || info.key_ref.key_id == key.key_ref.key_id)
-        })
-        .collect();
+    let candidates: Vec<KeyInfo> = r2_provider::lookup::find_related(
+        provider,
+        &r2_provider::ObjectQuery::label(key.key_ref.label.clone()),
+        &key,
+    )?
+    .into_iter()
+    .filter(|info| {
+        info.key_ref.label == key.key_ref.label
+            && matches!(info.key_class, KeyClass::Public | KeyClass::Certificate)
+            && (key.key_ref.key_id.is_none() || info.key_ref.key_id == key.key_ref.key_id)
+    })
+    .collect();
     for wanted in [KeyClass::Public, KeyClass::Certificate] {
-        if let Some(info) = candidates.iter().find(|info| info.key_class == wanted) {
-            return Ok(info.clone());
+        let found: Vec<&KeyInfo> = candidates
+            .iter()
+            .filter(|info| info.key_class == wanted)
+            .collect();
+        match found.as_slice() {
+            [] => continue,
+            [only] => return Ok((*only).clone()),
+            several => {
+                // two public halves (or certificates) fit: never guess which one verifies
+                let owned: Vec<KeyInfo> = several.iter().map(|info| (*info).clone()).collect();
+                return Err(ConsoleError::ambiguous_key(
+                    format!(
+                        "'{}' has {} {} objects to verify with on {}: {}",
+                        key.key_ref.label,
+                        owned.len(),
+                        wanted.as_str(),
+                        provider.name(),
+                        display_refs(&owned).join(", ")
+                    ),
+                    owned.iter().map(|info| info.key_ref.clone()).collect(),
+                )
+                .with_hint("name the one to verify with: label#id, :pub/:cert, or @handle"));
+            }
         }
     }
     Ok(key)

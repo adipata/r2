@@ -31,7 +31,7 @@ pub fn find_certificate(
 ) -> r2_core::Result<Option<KeyInfo>> {
     let mut same_id: Option<KeyInfo> = None;
     let mut same_label: Option<KeyInfo> = None;
-    for info in provider.list_keys()? {
+    for info in r2_provider::lookup::family_candidates(provider, key, &[KeyClass::Certificate])? {
         if info.key_class != KeyClass::Certificate {
             continue;
         }

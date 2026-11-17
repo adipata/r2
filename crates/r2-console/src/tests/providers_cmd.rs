@@ -731,7 +731,7 @@ fn provider_commands_complete_provider_names_then_options() {
     assert_eq!(complete("login", &["login"], ""), ["mem", "hsm"]);
     assert_eq!(
         complete("login", &["login", "hsm"], ""),
-        ["--slot", "--pin", "--keep-pin"]
+        ["--slot", "--pin", "--keep-pin", "--no-cache"]
     );
     assert_eq!(complete("logout", &["logout", "m"], "m"), ["mem"]);
     assert!(complete("logout", &["logout", "hsm"], "").is_empty());

@@ -75,6 +75,12 @@ pub trait ConsoleIo {
         let _ = message;
         f();
     }
+    /// True when this IO shows live progress on a terminal (TerminalIo with a spinner-capable
+    /// stderr) — the key cache (§5.19) then shows partial results and progress; otherwise
+    /// (PlainIo, ScriptedIo, piped input) callers produce deterministic output. Default false.
+    fn live_progress(&self) -> bool {
+        false
+    }
     /// Hand `f` the keyboard and the screen rows below the output so far (provisional r2
     /// addition, §11 D34; c2 never had one). TerminalIo on a working terminal with styled
     /// output calls `f` exactly once with a `KeySession`, erases the last frame when `f`

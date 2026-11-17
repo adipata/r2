@@ -1,5 +1,6 @@
 // r2-console (owner R7): REPL, terminal I/O, parser, completer, command framework.
 #![forbid(unsafe_code)]
+pub(crate) mod cache;
 pub mod cmdutil;
 pub mod commands;
 pub mod completer;

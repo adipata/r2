@@ -7,6 +7,8 @@ use zeroize::Zeroizing;
 /// native-endian CK_ULONG; STR = UTF-8; BYTES verbatim. Zeroizing: templates carry key
 /// material on import/unwrap (D3).
 pub(crate) type RawAttr = (u64, Zeroizing<Vec<u8>>);
+/// One read per requested attribute (None = refused or absent), as `get_attrs` returns them.
+pub(crate) type AttrReads = Vec<Option<Zeroizing<Vec<u8>>>>;
 
 /// The size-pass CKRs a one-attribute read reports as "no value" (`Ok(None)`) instead of
 /// an error — PyKCS11 `getAttributeValue`/`getAttributeValue_fragmented` parity, which c2's
@@ -140,6 +142,21 @@ pub(crate) trait Backend {
     fn find_objects(&self, template: &[RawAttr]) -> BResult<Vec<u64>>;
     /// One attribute per call; None = sensitive, type-invalid, arguments-bad or unavailable.
     fn get_attr(&self, object: u64, attribute: u64) -> BResult<Option<Zeroizing<Vec<u8>>>>;
+    /// Several attributes of one object in one C_GetAttributeValue (RawFns::get_attrs: one
+    /// attribute at a time when the token refuses the batch); per entry the `get_attr`
+    /// semantics.
+    fn get_attrs(&self, object: u64, attributes: &[u64]) -> BResult<AttrReads>;
+    /// The key cache loader's session factory for the token in `slot` (spec §5.19): a
+    /// `Send` closure run ON the loader thread, which opens a read-only session of its own
+    /// there (the token's login applies to it). The module must be initialized.
+    fn loader(&self, slot: u64) -> BResult<LoaderFactory>;
+    /// Wait up to `timeout` until no key cache loader of this backend is alive (their
+    /// stop was requested before). True when none is left. Never holds the call lock,
+    /// so a loader can finish its current call and close its session (spec §5.19).
+    fn wait_for_loaders(&self, timeout: std::time::Duration) -> bool {
+        let _ = timeout;
+        true
+    }
     /// One C_SetAttributeValue call (all-or-nothing).
     fn set_attrs(&self, object: u64, template: &[RawAttr]) -> BResult<()>;
     fn create_object(&self, template: &[RawAttr]) -> BResult<u64>;
@@ -173,6 +190,18 @@ pub(crate) trait Backend {
     /// (§5.17). Never C_SeedRandom.
     fn generate_random(&self, len: usize) -> BResult<Zeroizing<Vec<u8>>>;
 }
+
+/// The cache loader's own session (loader thread only): object search and batched
+/// attribute reads. Dropping it closes the session.
+pub(crate) trait LoaderSession {
+    /// A whole search; `cancelled` is checked between batches (it then ends early).
+    fn find_objects(&self, template: &[RawAttr], cancelled: &dyn Fn() -> bool)
+    -> BResult<Vec<u64>>;
+    fn get_attrs(&self, object: u64, attributes: &[u64]) -> BResult<AttrReads>;
+}
+
+/// See [`Backend::loader`].
+pub(crate) type LoaderFactory = Box<dyn FnOnce() -> BResult<Box<dyn LoaderSession>> + Send>;
 
 pub(crate) mod cryptoki;
 #[cfg(test)]

@@ -21,6 +21,9 @@ ignore = [
     # unsafe-libyaml (via serde_yaml_ng → r2-config) is unmaintained and has no safe
     # upgrade. Acknowledged until r2-config moves to a maintained YAML parser.
     { id = "RUSTSEC-2024-0449", reason = "unmaintained unsafe-libyaml via serde_yaml_ng; no safe upgrade" },
+    # chrono (via reedline → r2-console) is unmaintained and has no patched version.
+    # Acknowledged until reedline drops it.
+    { id = "RUSTSEC-2026-0543", reason = "unmaintained chrono via reedline; no patched version" },
 ]
 
 [licenses]

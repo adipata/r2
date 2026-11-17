@@ -104,3 +104,8 @@ templates:
   custom_attributes: {}
 
 custom_mechanisms: []      # entry schema: spec §4.8 / example §5.14
+
+# r2 addition (spec §5.19): the key cache `keys` and Tab completion read on big HSMs.
+cache:
+  on_login: true           # load a PKCS#11 provider's key cache in the background at `login`
+                           # (per HSM: providers.pkcs11[].cache_on_login; per login: --no-cache)

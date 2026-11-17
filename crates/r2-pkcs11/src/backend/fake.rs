@@ -13,7 +13,10 @@ use cryptoki_sys as sys;
 use secrecy::{ExposeSecret, SecretString};
 use zeroize::Zeroizing;
 
-use super::{BResult, Backend, BackendError, Ckr, MechSpec, RawAttr, RawTokenInfo, UserKind};
+use super::{
+    AttrReads, BResult, Backend, BackendError, Ckr, LoaderFactory, LoaderSession, MechSpec,
+    RawAttr, RawTokenInfo, UserKind,
+};
 use crate::attributes::{decode_ulong, ulong_bytes};
 use crate::ckr::rv;
 
@@ -652,6 +655,55 @@ impl FakeBackend {
     }
 }
 
+/// The fake cache loader session: reads the snapshot `FakeBackend::loader` took.
+struct FakeLoader {
+    objects: BTreeMap<u64, BTreeMap<u64, Vec<u8>>>,
+    refused: BTreeMap<(u64, u64), u64>,
+}
+
+impl LoaderSession for FakeLoader {
+    fn find_objects(
+        &self,
+        template: &[RawAttr],
+        _cancelled: &dyn Fn() -> bool,
+    ) -> BResult<Vec<u64>> {
+        Ok(self
+            .objects
+            .iter()
+            .filter(|(_, attrs)| {
+                template.iter().all(|(t, v)| {
+                    attrs
+                        .get(t)
+                        .is_some_and(|stored| stored.as_slice() == v.as_slice())
+                })
+            })
+            .map(|(h, _)| *h)
+            .collect())
+    }
+    fn get_attrs(&self, object: u64, attributes: &[u64]) -> BResult<AttrReads> {
+        let attrs = self
+            .objects
+            .get(&object)
+            .ok_or_else(|| fail(rv::CKR_OBJECT_HANDLE_INVALID, "get_attrs"))?;
+        attributes
+            .iter()
+            .map(|attribute| {
+                if let Some(&code) = self.refused.get(&(object, *attribute)) {
+                    return if super::is_attribute_refusal(code) {
+                        Ok(None)
+                    } else {
+                        Err(fail(code, "get_attrs"))
+                    };
+                }
+                if *attribute == w(sys::CKA_VALUE) && !FakeBackend::value_readable(attrs) {
+                    return Ok(None);
+                }
+                Ok(attrs.get(attribute).map(|v| Zeroizing::new(v.clone())))
+            })
+            .collect()
+    }
+}
+
 impl Backend for FakeBackend {
     fn initialize(&self) -> BResult<()> {
         self.enter("initialize")?;
@@ -875,6 +927,46 @@ impl Backend for FakeBackend {
             return Ok(None);
         }
         Ok(obj.attrs.get(&attribute).map(|v| Zeroizing::new(v.clone())))
+    }
+
+    fn get_attrs(&self, object: u64, attributes: &[u64]) -> BResult<AttrReads> {
+        // the batch's per-entry semantics = one get_attr each (RawFns' fallback path)
+        attributes
+            .iter()
+            .map(|attribute| self.get_attr(object, *attribute))
+            .collect()
+    }
+
+    fn loader(&self, slot: u64) -> BResult<LoaderFactory> {
+        self.enter("loader")?;
+        let state = self.state.borrow();
+        if !state.initialized {
+            return Err(fail(rv::CKR_CRYPTOKI_NOT_INITIALIZED, "loader"));
+        }
+        // a snapshot of the token's objects, taken now: the fake loader session reads it on
+        // the loader thread (the fake state itself is !Send)
+        let objects: BTreeMap<u64, BTreeMap<u64, Vec<u8>>> = state
+            .objects
+            .iter()
+            .filter(|(_, o)| o.slot == slot)
+            .map(|(h, o)| (*h, o.attrs.clone()))
+            .collect();
+        let refused = state.refused_reads.clone();
+        let logged_in = state.slots.get(&slot).is_some_and(|t| t.logged_in);
+        let fail_loader = state
+            .fail_always
+            .iter()
+            .find(|(m, _)| *m == "loader_session")
+            .map(|(_, code)| *code);
+        Ok(Box::new(move || {
+            if let Some(code) = fail_loader {
+                return Err(fail(code, "loader_session"));
+            }
+            if !logged_in {
+                return Err(fail(rv::CKR_USER_NOT_LOGGED_IN, "C_OpenSession"));
+            }
+            Ok(Box::new(FakeLoader { objects, refused }) as Box<dyn LoaderSession>)
+        }))
     }
 
     fn set_attrs(&self, object: u64, template: &[RawAttr]) -> BResult<()> {

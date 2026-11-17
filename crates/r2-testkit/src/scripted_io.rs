@@ -22,6 +22,8 @@ pub struct ScriptedIo {
     output: RefCell<Vec<String>>,
     renderables: RefCell<Vec<Renderable>>,
     prompts: RefCell<Vec<String>>,
+    /// `set_live_progress` (§5.19): present as a terminal IO with live progress.
+    live_progress: std::cell::Cell<bool>,
 }
 
 /// What a popped answer means.
@@ -46,7 +48,13 @@ impl ScriptedIo {
             output: RefCell::new(Vec::new()),
             renderables: RefCell::new(Vec::new()),
             prompts: RefCell::new(Vec::new()),
+            live_progress: std::cell::Cell::new(false),
         }
+    }
+    /// Present as a terminal IO that shows live progress (`ConsoleIo::live_progress`,
+    /// §5.19): the key cache then shows partial results before waiting. Default false.
+    pub fn set_live_progress(&self, live: bool) {
+        self.live_progress.set(live);
     }
     /// No scripted answers (c2 `ScriptedIO([])`; `new([])` cannot infer its types).
     pub fn empty() -> Self {
@@ -90,6 +98,9 @@ impl ScriptedIo {
 }
 
 impl ConsoleIo for ScriptedIo {
+    fn live_progress(&self) -> bool {
+        self.live_progress.get()
+    }
     fn prompt(&self, spec: &ParamSpec) -> Result<String> {
         match self.next_answer("prompt", &spec.prompt) {
             Answer::Text(answer) => Ok(answer),

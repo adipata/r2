@@ -94,6 +94,7 @@ pub fn run_repl(ctx: &Rc<AppContext>, debug: bool, commands: Rc<CommandTable>) {
         Rc::clone(&commands),
     )));
     loop {
+        crate::cache::service(ctx);
         let buffer = match read_buffer(ctx) {
             Read::Buffer(buffer) => buffer,
             Read::Aborted => {
@@ -127,6 +128,9 @@ pub fn run_repl(ctx: &Rc<AppContext>, debug: bool, commands: Rc<CommandTable>) {
             }
         }
     }
+    // exit never waits for a loader: stop them; a loader still inside a PKCS#11 call keeps
+    // its module from being finalized (§5.19)
+    crate::cache::stop_all();
 }
 
 /// The single error-rendering boundary (§4.2).

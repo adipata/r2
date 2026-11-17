@@ -94,8 +94,11 @@ scripts/            softhsm-init.sh, build-softhsm.sh, release/
   spec §4.1.3.
 - **No `unwrap`/`expect` outside tests** (deny). No panics as control flow. `Drop` guards
   never panic.
-- **Single-threaded** (spec §6). `std::thread::spawn` is disallowed: the ctrlc handler and
-  the indicatif ticker are the only threads. Providers, IO and the registry are
+- **Single-threaded** (spec §6). `std::thread::spawn` is disallowed: the ctrlc handler,
+  the indicatif ticker and the key cache loader threads (spec §5.19; one sanctioned
+  `std::thread::Builder::spawn` in `r2_console::cache`, each holding only a `Send` job and
+  its own PKCS#11 session, every PKCS#11 call serialized with the REPL thread's) are the
+  only threads. Providers, IO and the registry are
   `!Send`/`!Sync` and use `Rc`/`RefCell` with `&self` methods. Never hold a `RefCell`
   borrow across a call into another trait object (spec §4 re-entrancy rule).
 - **`unsafe`.** `#![forbid(unsafe_code)]` everywhere except `r2-pkcs11` and the dev-only

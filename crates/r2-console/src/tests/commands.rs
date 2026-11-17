@@ -259,7 +259,8 @@ fn config_show_is_byte_identical_to_c2() {
             .config(config)
             .build();
         run_line(&ctx, "config show").unwrap();
-        let expected = c2_to_r2(expected);
+        // r2 appends its own `cache` section (§5.19) after c2's
+        let expected = format!("{}\ncache:\n  on_login: true", c2_to_r2(expected));
         let renderables = io.renderables();
         let [Renderable::Text(shown)] = renderables.as_slice() else {
             panic!("{renderables:?}");
@@ -309,6 +310,7 @@ fn test_config_show_origin_renders_all_six_sections() {
             ("softhsm", "default"),
             ("templates", "default"),
             ("custom_mechanisms", "default"),
+            ("cache", "default"), // r2 addition (§5.19)
         ]
     );
 }
@@ -376,7 +378,7 @@ fn config_show_origin_appends_unknown_sections_and_defaults_missing_ones() {
     assert_eq!(rows[1], ("ui", "/x.yaml"));
     assert_eq!(rows[0], ("app", "default"));
     assert_eq!(rows.last(), Some(&("extra", "/x.yaml")));
-    assert_eq!(rows.len(), 7);
+    assert_eq!(rows.len(), CONFIG_SECTIONS.len() + 1);
 }
 
 #[test]

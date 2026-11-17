@@ -15,5 +15,5 @@ pub mod scripted_io;
 pub mod softhsm;
 
 pub use env::{EnvGuard, set_env};
-pub use fake_provider::{FakeHooks, FakeProvider};
+pub use fake_provider::{FakeHooks, FakeProvider, LoadGate};
 pub use scripted_io::{RecordingEditor, ScriptedIo, global_state_lock};

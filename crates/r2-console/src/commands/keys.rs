@@ -157,12 +157,12 @@ impl Command for KeysCommand {
             _ => {}
         }
 
-        let mut infos: Vec<KeyInfo> = Vec::new();
         let mut skipped: Vec<String> = Vec::new();
         // The providers actually listed, in listing order, for the per-provider counts.
         let mut listed: Vec<String> = Vec::new();
+        let mut sources: Vec<std::rc::Rc<dyn Provider>> = Vec::new();
         if let Some(name) = provider_name {
-            infos = ctx.providers.get(name)?.list_keys()?;
+            sources.push(ctx.providers.get(name)?);
             listed.push(name.to_owned());
         } else {
             for provider in ctx.providers.all() {
@@ -170,40 +170,49 @@ impl Command for KeysCommand {
                     skipped.push(provider.name().to_owned()); // never force a library load
                     continue;
                 }
-                infos.extend(provider.list_keys()?);
                 listed.push(provider.name().to_owned());
+                sources.push(provider);
             }
         }
-        // display_refs suffixes colliding refs with :<class>/@<handle> (§4.3), so every
-        // listed ref is unambiguous and pasteable; the filter matches the suffixed form.
-        let mut pairs: Vec<(String, &KeyInfo)> =
-            display_refs(&infos).into_iter().zip(infos.iter()).collect();
-        if let Some(filter) = ref_filter {
-            let needle = filter.to_lowercase();
-            pairs.retain(|(text, _)| text.to_lowercase().contains(&needle));
+        // §5.19: providers with a key cache list from it (and start loading it when it is
+        // not complete); the others list live
+        let mut listing = Listing::collect(&sources, true)?;
+        let live = ctx.io.live_progress();
+        if !live && !listing.loads.is_empty() {
+            // piped input: wait first, so scripts get the complete, deterministic table
+            wait_for_loads(ctx, &listing.loads);
+            listing = Listing::collect(&sources, false)?;
         }
-        let counts: Vec<(&str, usize)> = listed
-            .iter()
-            .map(|name| {
-                let count = pairs
-                    .iter()
-                    .filter(|(_, info)| info.key_ref.provider == *name)
-                    .count();
-                (name.as_str(), count)
-            })
-            .collect();
-        let rows: Vec<Vec<String>> = pairs
-            .into_iter()
-            .map(|(text, info)| key_row(text, info))
-            .collect();
-        if !rows.is_empty() {
-            let total = rows.len();
-            ctx.io.print(table(Some("keys"), &KEY_TABLE_COLUMNS, rows));
-            text(ctx, count_summary(total, &counts, provider_name.is_some()));
-        } else if let Some(filter) = ref_filter {
-            text(ctx, format!("no keys match '{filter}'"));
-        } else {
-            text(ctx, "no keys".to_owned());
+        let shown = listing.print(ctx, ref_filter, &listed, provider_name.is_some(), None);
+        if live && !listing.loads.is_empty() {
+            let completed = wait_for_loads(ctx, &listing.loads);
+            let first = std::mem::take(&mut listing.loads);
+            listing = Listing::collect(&sources, false)?;
+            listing.print(
+                ctx,
+                ref_filter,
+                &listed,
+                provider_name.is_some(),
+                Some(&shown),
+            );
+            if completed {
+                for load in &first {
+                    if matches!(
+                        load.outcome(),
+                        Some((r2_provider::cache::LoadOutcome::Complete, _))
+                    ) {
+                        crate::cache::mark_reported(load); // the table just showed it
+                    }
+                }
+            } else {
+                text(
+                    ctx,
+                    "stopped waiting — the key cache keeps loading in the background".to_owned(),
+                );
+            }
+        }
+        for note in listing.failure_notes() {
+            text(ctx, note);
         }
         for name in skipped {
             text(
@@ -232,6 +241,217 @@ fn count_summary(total: usize, counts: &[(&str, usize)], single: bool) -> String
             format!("found {total} {} ({})", noun(total), per.join(", "))
         }
     }
+}
+
+/// What `keys` lists (§5.19): every source's objects — from its key cache when it keeps
+/// one, else live — and the cache loads still running.
+struct Listing {
+    infos: Vec<KeyInfo>,
+    loads: Vec<std::sync::Arc<r2_provider::cache::LoadShared>>,
+    /// Per cached provider whose objects are incomplete: (name, partial text).
+    partial: Vec<(String, String)>,
+    /// Per cached provider whose last load failed: the reason.
+    failures: Vec<(String, String)>,
+}
+
+impl Listing {
+    fn collect(sources: &[std::rc::Rc<dyn Provider>], trigger: bool) -> r2_core::Result<Self> {
+        let mut listing = Listing {
+            infos: Vec::new(),
+            loads: Vec::new(),
+            partial: Vec::new(),
+            failures: Vec::new(),
+        };
+        for provider in sources {
+            let cache = provider
+                .key_cache()
+                .filter(|_| provider.status().auth == AuthState::LoggedIn);
+            let Some(cache) = cache else {
+                listing.infos.extend(provider.list_keys()?);
+                continue;
+            };
+            if trigger {
+                crate::cache::ensure_loading(provider.as_ref());
+            }
+            // take the running load before the view: a load that ends in between is
+            // still waited for and collected again, and every check below reads the one
+            // snapshot (a load may end at any moment on its own thread)
+            let load = cache.current_load();
+            let view = cache.view();
+            let name = provider.name().to_owned();
+            let failed = view.status.state == r2_provider::cache::CacheState::Partial
+                && view.status.last_error.is_some();
+            if view.status.state == r2_provider::cache::CacheState::Empty || failed {
+                // no cache and none loading (the loader could not start), or the last
+                // load failed: list live, as without a cache
+                if let Some(error) = view.status.last_error.clone() {
+                    crate::cache::claim_reports(&name); // the note below says it once
+                    listing.failures.push((name, error));
+                }
+                listing.infos.extend(provider.list_keys()?);
+                continue;
+            }
+            match (view.status.state.clone(), view.status.progress) {
+                (r2_provider::cache::CacheState::Loading, Some((loaded, total))) => {
+                    let text = match total {
+                        Some(total) => format!("{name} {loaded} of {total} objects loaded"),
+                        None => format!("{name} counting objects"),
+                    };
+                    listing.partial.push((name.clone(), text));
+                }
+                (r2_provider::cache::CacheState::Partial, _) => {
+                    listing
+                        .partial
+                        .push((name.clone(), format!("{name} incomplete")));
+                }
+                _ => {}
+            }
+            if let Some(load) = load {
+                listing.loads.push(load);
+            }
+            listing.infos.extend(view.keys);
+        }
+        Ok(listing)
+    }
+
+    /// Print the table (only the rows not in `already`, when given) and the count line;
+    /// returns the identities of every row the listing holds.
+    fn print(
+        &self,
+        ctx: &AppContext,
+        ref_filter: Option<&str>,
+        listed: &[String],
+        single: bool,
+        already: Option<&BTreeSet<RowKey>>,
+    ) -> BTreeSet<RowKey> {
+        // display_refs suffixes colliding refs with :<class>/@<handle> (§4.3), so every
+        // listed ref is unambiguous and pasteable; the filter matches the suffixed form.
+        let mut pairs: Vec<(String, &KeyInfo)> = display_refs(&self.infos)
+            .into_iter()
+            .zip(self.infos.iter())
+            .collect();
+        if let Some(filter) = ref_filter {
+            let needle = filter.to_lowercase();
+            pairs.retain(|(text, _)| text.to_lowercase().contains(&needle));
+        }
+        let all: BTreeSet<RowKey> = pairs.iter().map(|(_, info)| row_key(info)).collect();
+        let counts: Vec<(&str, usize)> = listed
+            .iter()
+            .map(|name| {
+                let count = pairs
+                    .iter()
+                    .filter(|(_, info)| info.key_ref.provider == *name)
+                    .count();
+                (name.as_str(), count)
+            })
+            .collect();
+        let total = pairs.len();
+        let new_rows: Vec<Vec<String>> = pairs
+            .into_iter()
+            .filter(|(_, info)| already.is_none_or(|seen| !seen.contains(&row_key(info))))
+            .map(|(text, info)| key_row(text, info))
+            .collect();
+        let partial = (!self.partial.is_empty()).then(|| {
+            let parts: Vec<&str> = self.partial.iter().map(|(_, t)| t.as_str()).collect();
+            format!(" (partial: {})", parts.join(", "))
+        });
+        match already {
+            None => {
+                if total > 0 {
+                    ctx.io
+                        .print(table(Some("keys"), &KEY_TABLE_COLUMNS, new_rows));
+                    text(
+                        ctx,
+                        format!(
+                            "{}{}",
+                            count_summary(total, &counts, single),
+                            partial.unwrap_or_default()
+                        ),
+                    );
+                } else if !self.loads.is_empty() && ctx.io.live_progress() {
+                    // nothing cached yet: the wait below shows the progress
+                } else if let Some(filter) = ref_filter {
+                    text(ctx, format!("no keys match '{filter}'"));
+                } else {
+                    text(ctx, "no keys".to_owned());
+                }
+            }
+            Some(seen) => {
+                if !new_rows.is_empty() {
+                    let title = if seen.is_empty() {
+                        "keys"
+                    } else {
+                        "keys (loaded while waiting)"
+                    };
+                    ctx.io
+                        .print(table(Some(title), &KEY_TABLE_COLUMNS, new_rows));
+                }
+                if total > 0 {
+                    text(
+                        ctx,
+                        format!(
+                            "{}{}",
+                            count_summary(total, &counts, single),
+                            partial.unwrap_or_default()
+                        ),
+                    );
+                } else if let Some(filter) = ref_filter {
+                    text(ctx, format!("no keys match '{filter}'"));
+                } else {
+                    text(ctx, "no keys".to_owned());
+                }
+            }
+        }
+        all
+    }
+
+    fn failure_notes(&self) -> Vec<String> {
+        self.failures
+            .iter()
+            .map(|(name, error)| {
+                format!(
+                    "note: the key cache of '{name}' could not be loaded ({error}) — listed live; \
+                     `cache {name}` retries"
+                )
+            })
+            .collect()
+    }
+}
+
+/// A row's identity across the two `keys` tables.
+type RowKey = (String, Option<u64>, String, &'static str);
+
+fn row_key(info: &KeyInfo) -> RowKey {
+    (
+        info.key_ref.provider.clone(),
+        info.handle,
+        info.key_ref.display(),
+        info.key_class.token(),
+    )
+}
+
+/// Wait (with a spinner on a terminal) until every load ended; Ctrl+C stops the waiting
+/// only — the loads continue. True when they all ended.
+fn wait_for_loads(
+    ctx: &AppContext,
+    loads: &[std::sync::Arc<r2_provider::cache::LoadShared>],
+) -> bool {
+    let names: Vec<&str> = loads.iter().map(|load| load.provider()).collect();
+    let message = format!(
+        "loading the key cache of {} … Ctrl+C stops waiting (loading continues)",
+        names.join(", ")
+    );
+    busy_with(ctx.io.as_ref(), &message, || {
+        loop {
+            if loads.iter().all(|load| load.is_finished()) {
+                return true;
+            }
+            if r2_core::runtime::interrupted() {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(40));
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------------------
@@ -329,16 +549,20 @@ fn run_info(ctx: &AppContext, args: &BoundArgs) -> r2_core::Result<()> {
         &["field", "value"],
         rows,
     ));
-    let related: Vec<String> = provider
-        .list_keys()?
-        .iter()
-        .filter(|other| {
-            other.key_ref.label == info.key_ref.label
-                && other.key_ref.key_id == info.key_ref.key_id
-                && other.key_class != info.key_class
-        })
-        .map(object_text)
-        .collect();
+    // a targeted label search, never a whole-token listing (§5.19)
+    let related: Vec<String> = r2_provider::lookup::find_related(
+        provider.as_ref(),
+        &r2_provider::ObjectQuery::label(info.key_ref.label.clone()),
+        &info,
+    )?
+    .iter()
+    .filter(|other| {
+        other.key_ref.label == info.key_ref.label
+            && other.key_ref.key_id == info.key_ref.key_id
+            && other.key_class != info.key_class
+    })
+    .map(object_text)
+    .collect();
     if !related.is_empty() {
         // the family's other objects, as pasteable qualified refs
         text(ctx, format!("related: {}", related.join(", ")));
@@ -533,13 +757,16 @@ fn hex_lower(bytes: &[u8]) -> String {
 
 /// Other objects sharing the target's (label, id): keypair halves, certificates.
 fn family_siblings(provider: &dyn Provider, key: &KeyInfo) -> r2_core::Result<Vec<KeyInfo>> {
-    let mut family: Vec<KeyInfo> = provider
-        .list_keys()?
-        .into_iter()
-        .filter(|info| {
-            info.key_ref.label == key.key_ref.label && info.key_ref.key_id == key.key_ref.key_id
-        })
-        .collect();
+    let mut family: Vec<KeyInfo> = r2_provider::lookup::find_related(
+        provider,
+        &r2_provider::ObjectQuery::label(key.key_ref.label.clone()),
+        key,
+    )?
+    .into_iter()
+    .filter(|info| {
+        info.key_ref.label == key.key_ref.label && info.key_ref.key_id == key.key_ref.key_id
+    })
+    .collect();
     let wanted = key.handle;
     let self_index = family
         .iter()

@@ -15,8 +15,9 @@ use r2_core::keys::{Curve, KeyAlgorithm, KeyClass, KeyInfo, KeyMaterial, KeyRef,
 use r2_core::template::{AttrKind, AttrValue, KeyTemplate};
 use r2_core::text::py_repr;
 use r2_core::x509info::{self, Classifier};
+use r2_provider::cache::KeyLoadJob;
 use r2_provider::lookup;
-use r2_provider::{GenerateRequest, KeySelector};
+use r2_provider::{GenerateRequest, KeySelector, ObjectQuery};
 use zeroize::Zeroizing;
 
 use super::{OResult, OpError, Pkcs11Provider};
@@ -24,7 +25,7 @@ use crate::attributes::{
     self, Pkcs11Attr, decode_ulong, encode_vendor_value, hex, template_identity, template_to_attrs,
     ulong_bytes,
 };
-use crate::backend::{MechSpec, RawAttr};
+use crate::backend::{BackendError, MechSpec, RawAttr};
 
 /// CKA codes of cryptoki-sys widened to u64 (`as u64` widens CK_ULONG on every target).
 pub(crate) mod cka {
@@ -399,6 +400,178 @@ fn flag(raw: &Option<Zeroizing<Vec<u8>>>) -> bool {
     raw.as_ref().is_some_and(|v| v.iter().any(|b| *b != 0))
 }
 
+/// The attributes `build_key_info` reads for an object of `class` (one batched read).
+pub(crate) fn info_attrs(class: KeyClass) -> &'static [u64] {
+    match class {
+        KeyClass::Certificate => &[cka::LABEL, cka::ID, cka::VALUE],
+        KeyClass::Data => &[
+            cka::LABEL,
+            cka::ID,
+            cka::VALUE,
+            cka::APPLICATION,
+            cka::OBJECT_ID,
+        ],
+        KeyClass::Secret | KeyClass::Private => &[
+            cka::LABEL,
+            cka::ID,
+            cka::KEY_TYPE,
+            cka::VALUE_LEN,
+            cka::SENSITIVE,
+            cka::EXTRACTABLE,
+            cka::MODULUS,
+            cka::EC_PARAMS,
+        ],
+        KeyClass::Public => &[
+            cka::LABEL,
+            cka::ID,
+            cka::KEY_TYPE,
+            cka::MODULUS,
+            cka::EC_PARAMS,
+        ],
+    }
+}
+
+/// The values of one batched read, by attribute type.
+pub(crate) struct AttrValues {
+    pub(crate) kinds: &'static [u64],
+    pub(crate) values: Vec<Option<Zeroizing<Vec<u8>>>>,
+}
+
+impl AttrValues {
+    fn get(&self, kind: u64) -> Option<Zeroizing<Vec<u8>>> {
+        self.kinds
+            .iter()
+            .position(|k| *k == kind)
+            .and_then(|at| self.values.get(at).cloned().flatten())
+    }
+}
+
+/// Build a KeyInfo snapshot from the `info_attrs(key_class)` values; None for objects r2
+/// cannot model (c2 `_key_info`). Pure: the cache loader thread uses it too (§5.19).
+pub(crate) fn build_key_info(
+    name: &str,
+    handle: u64,
+    key_class: KeyClass,
+    attrs: &AttrValues,
+) -> Result<Option<KeyInfo>> {
+    let label = label_text(attrs.get(cka::LABEL));
+    let key_id = attrs
+        .get(cka::ID)
+        .map(|v| v.to_vec())
+        .filter(|v| !v.is_empty());
+    let name = name.to_string();
+    let key_ref = KeyRef::new(name.clone(), label.clone(), key_id);
+    match key_class {
+        KeyClass::Certificate => {
+            let der = attrs.get(cka::VALUE).filter(|v| !v.is_empty());
+            let mut info = KeyInfo {
+                key_ref,
+                key_class,
+                algorithm: KeyAlgorithm::Rsa,
+                size_bits: None,
+                curve: None,
+                exportable: true,
+                attributes: BTreeMap::new(),
+                handle: Some(handle),
+            };
+            if let Some(der) = der {
+                let facts = x509info::cert_facts(&der, Classifier::Pkcs11)
+                    .and_then(|facts| Ok((facts, x509info::cert_attributes(&der)?)));
+                match facts {
+                    Ok((facts, attributes)) => {
+                        info.algorithm = facts.algorithm;
+                        info.size_bits = facts.size_bits;
+                        info.curve = facts.curve;
+                        info.attributes = attributes;
+                    }
+                    Err(err) if x509info::pkcs11_skips_certificate(&err) => return Ok(None),
+                    Err(err) => return Err(err),
+                }
+            }
+            Ok(Some(info))
+        }
+        KeyClass::Data => {
+            let value = attrs.get(cka::VALUE).map(|v| v.len()).unwrap_or(0);
+            let mut attributes = BTreeMap::new();
+            // c2 `if app_v:` tests the str PyKCS11 decoded with errors="ignore", so an
+            // all-invalid value is omitted like an empty one.
+            let app = attrs
+                .get(cka::APPLICATION)
+                .map(|v| crate::attributes::utf8_ignore(&v))
+                .unwrap_or_default();
+            if !app.is_empty() {
+                attributes.insert("CKA_APPLICATION".to_string(), AttrValue::Str(app));
+            }
+            if let Some(oid) = attrs.get(cka::OBJECT_ID).filter(|v| !v.is_empty()) {
+                attributes.insert("CKA_OBJECT_ID".to_string(), AttrValue::Bytes(oid.to_vec()));
+            }
+            Ok(Some(KeyInfo {
+                key_ref: KeyRef::new(name, label, None), // no CKA_ID (§4.3)
+                key_class,
+                algorithm: KeyAlgorithm::None,
+                size_bits: u32::try_from(value.saturating_mul(8)).ok(),
+                curve: None,
+                exportable: true,
+                attributes,
+                handle: Some(handle),
+            }))
+        }
+        _ => {
+            let ckk_raw = attrs.get(cka::KEY_TYPE);
+            let ckk_code = ckk_raw.as_ref().map(|v| decode_ulong(v));
+            let algorithm = ckk_code.map_or(KeyAlgorithm::Other, algorithm_for_ckk);
+            let mut size_bits = None;
+            let mut curve = None;
+            let mut attributes = BTreeMap::new();
+            let mut exportable = true;
+            if matches!(key_class, KeyClass::Secret | KeyClass::Private) {
+                if key_class == KeyClass::Secret {
+                    let vlen = attrs.get(cka::VALUE_LEN).map_or(0, |v| decode_ulong(&v));
+                    if vlen != 0 {
+                        size_bits = u32::try_from(vlen.saturating_mul(8)).ok();
+                    }
+                }
+                let sensitive = flag(&attrs.get(cka::SENSITIVE));
+                let extractable = flag(&attrs.get(cka::EXTRACTABLE));
+                exportable = extractable && !sensitive;
+                attributes.insert("CKA_SENSITIVE".to_string(), AttrValue::Bool(sensitive));
+                attributes.insert("CKA_EXTRACTABLE".to_string(), AttrValue::Bool(extractable));
+            }
+            match algorithm {
+                KeyAlgorithm::Rsa => {
+                    if let Some(modulus) = attrs.get(cka::MODULUS).filter(|m| !m.is_empty()) {
+                        let significant = modulus.iter().skip_while(|b| **b == 0).count();
+                        size_bits = u32::try_from(significant.saturating_mul(8)).ok();
+                    }
+                }
+                KeyAlgorithm::Ec | KeyAlgorithm::EcEdwards | KeyAlgorithm::EcMontgomery => {
+                    if let Some(params) = attrs.get(cka::EC_PARAMS).filter(|p| !p.is_empty()) {
+                        curve = r2_core::der::curve_from_oid_der(&params);
+                    }
+                }
+                KeyAlgorithm::Other => {
+                    // §4.3 catch-all: listed with its raw key type, never operated on
+                    exportable = false;
+                    let symbol =
+                        ckk_code.map_or_else(|| "unknown".to_string(), crate::catalog::ckk_symbol);
+                    attributes.insert("CKA_KEY_TYPE".to_string(), AttrValue::Symbol(symbol));
+                }
+                _ => {}
+            }
+            Ok(Some(KeyInfo {
+                key_ref,
+                key_class,
+                algorithm,
+                size_bits,
+                curve,
+                exportable,
+                attributes,
+                handle: Some(handle),
+            }))
+        }
+    }
+}
+
 impl Pkcs11Provider {
     // ------------------------------------------------------------------
     // templates & attributes (§4.7 / §5.4)
@@ -587,130 +760,17 @@ impl Pkcs11Provider {
         Ok(self.backend().get_attr(handle, kind)?)
     }
 
-    /// Build a KeyInfo snapshot; None for objects r2 cannot model (c2 `_key_info`).
+    /// Build a KeyInfo snapshot; None for objects r2 cannot model (c2 `_key_info`). The
+    /// attributes come from ONE batched read (`Backend::get_attrs`, §5.19).
     pub(crate) fn key_info(&self, handle: u64, key_class: KeyClass) -> OResult<Option<KeyInfo>> {
-        let label = label_text(self.attr(handle, cka::LABEL)?);
-        let key_id = self
-            .attr(handle, cka::ID)?
-            .map(|v| v.to_vec())
-            .filter(|v| !v.is_empty());
-        let name = self.provider_name().to_string();
-        let key_ref = KeyRef::new(name.clone(), label.clone(), key_id);
-        match key_class {
-            KeyClass::Certificate => {
-                let der = self.attr(handle, cka::VALUE)?.filter(|v| !v.is_empty());
-                let mut info = KeyInfo {
-                    key_ref,
-                    key_class,
-                    algorithm: KeyAlgorithm::Rsa,
-                    size_bits: None,
-                    curve: None,
-                    exportable: true,
-                    attributes: BTreeMap::new(),
-                    handle: Some(handle),
-                };
-                if let Some(der) = der {
-                    let facts = x509info::cert_facts(&der, Classifier::Pkcs11)
-                        .and_then(|facts| Ok((facts, x509info::cert_attributes(&der)?)));
-                    match facts {
-                        Ok((facts, attributes)) => {
-                            info.algorithm = facts.algorithm;
-                            info.size_bits = facts.size_bits;
-                            info.curve = facts.curve;
-                            info.attributes = attributes;
-                        }
-                        Err(err) if x509info::pkcs11_skips_certificate(&err) => return Ok(None),
-                        Err(err) => return Err(err.into()),
-                    }
-                }
-                Ok(Some(info))
-            }
-            KeyClass::Data => {
-                let value = self.attr(handle, cka::VALUE)?.map(|v| v.len()).unwrap_or(0);
-                let mut attributes = BTreeMap::new();
-                // c2 `if app_v:` tests the str PyKCS11 decoded with errors="ignore", so an
-                // all-invalid value is omitted like an empty one.
-                let app = self
-                    .attr(handle, cka::APPLICATION)?
-                    .map(|v| crate::attributes::utf8_ignore(&v))
-                    .unwrap_or_default();
-                if !app.is_empty() {
-                    attributes.insert("CKA_APPLICATION".to_string(), AttrValue::Str(app));
-                }
-                if let Some(oid) = self.attr(handle, cka::OBJECT_ID)?.filter(|v| !v.is_empty()) {
-                    attributes.insert("CKA_OBJECT_ID".to_string(), AttrValue::Bytes(oid.to_vec()));
-                }
-                Ok(Some(KeyInfo {
-                    key_ref: KeyRef::new(name, label, None), // no CKA_ID (§4.3)
-                    key_class,
-                    algorithm: KeyAlgorithm::None,
-                    size_bits: u32::try_from(value.saturating_mul(8)).ok(),
-                    curve: None,
-                    exportable: true,
-                    attributes,
-                    handle: Some(handle),
-                }))
-            }
-            _ => {
-                let ckk_raw = self.attr(handle, cka::KEY_TYPE)?;
-                let ckk_code = ckk_raw.as_ref().map(|v| decode_ulong(v));
-                let algorithm = ckk_code.map_or(KeyAlgorithm::Other, algorithm_for_ckk);
-                let mut size_bits = None;
-                let mut curve = None;
-                let mut attributes = BTreeMap::new();
-                let mut exportable = true;
-                if matches!(key_class, KeyClass::Secret | KeyClass::Private) {
-                    if key_class == KeyClass::Secret {
-                        let vlen = self
-                            .attr(handle, cka::VALUE_LEN)?
-                            .map_or(0, |v| decode_ulong(&v));
-                        if vlen != 0 {
-                            size_bits = u32::try_from(vlen.saturating_mul(8)).ok();
-                        }
-                    }
-                    let sensitive = flag(&self.attr(handle, cka::SENSITIVE)?);
-                    let extractable = flag(&self.attr(handle, cka::EXTRACTABLE)?);
-                    exportable = extractable && !sensitive;
-                    attributes.insert("CKA_SENSITIVE".to_string(), AttrValue::Bool(sensitive));
-                    attributes.insert("CKA_EXTRACTABLE".to_string(), AttrValue::Bool(extractable));
-                }
-                match algorithm {
-                    KeyAlgorithm::Rsa => {
-                        if let Some(modulus) =
-                            self.attr(handle, cka::MODULUS)?.filter(|m| !m.is_empty())
-                        {
-                            let significant = modulus.iter().skip_while(|b| **b == 0).count();
-                            size_bits = u32::try_from(significant.saturating_mul(8)).ok();
-                        }
-                    }
-                    KeyAlgorithm::Ec | KeyAlgorithm::EcEdwards | KeyAlgorithm::EcMontgomery => {
-                        if let Some(params) =
-                            self.attr(handle, cka::EC_PARAMS)?.filter(|p| !p.is_empty())
-                        {
-                            curve = r2_core::der::curve_from_oid_der(&params);
-                        }
-                    }
-                    KeyAlgorithm::Other => {
-                        // §4.3 catch-all: listed with its raw key type, never operated on
-                        exportable = false;
-                        let symbol = ckk_code
-                            .map_or_else(|| "unknown".to_string(), crate::catalog::ckk_symbol);
-                        attributes.insert("CKA_KEY_TYPE".to_string(), AttrValue::Symbol(symbol));
-                    }
-                    _ => {}
-                }
-                Ok(Some(KeyInfo {
-                    key_ref,
-                    key_class,
-                    algorithm,
-                    size_bits,
-                    curve,
-                    exportable,
-                    attributes,
-                    handle: Some(handle),
-                }))
-            }
-        }
+        let kinds = info_attrs(key_class);
+        let values = self.backend().get_attrs(handle, kinds)?;
+        Ok(build_key_info(
+            self.provider_name(),
+            handle,
+            key_class,
+            &AttrValues { kinds, values },
+        )?)
     }
 
     pub(crate) fn class_of_handle(&self, handle: u64) -> OResult<Option<KeyClass>> {
@@ -857,6 +917,137 @@ impl Pkcs11Provider {
             }
             Ok(infos)
         })
+    }
+
+    /// Targeted search (`Provider::find_objects`): one C_FindObjects per class (KeyClass
+    /// order, as `list_keys`) with the query's label / CKA_ID in the template.
+    pub(crate) fn find_objects_impl(&self, query: &ObjectQuery) -> Result<Vec<KeyInfo>> {
+        self.op("key lookup", || {
+            let classes: Vec<KeyClass> = match query.key_class {
+                Some(class) => vec![class],
+                None => KeyClass::ALL.to_vec(),
+            };
+            let mut infos = Vec::new();
+            for key_class in classes {
+                let mut template = vec![(cka::CLASS, Zeroizing::new(ulong_bytes(cko(key_class))?))];
+                if let Some(label) = &query.label {
+                    template.push((cka::LABEL, bytes(label.as_bytes())));
+                }
+                if let Some(id) = &query.key_id {
+                    template.push((cka::ID, bytes(id)));
+                }
+                for handle in self.backend().find_objects(&template)? {
+                    if let Some(info) = self.key_info(handle, key_class)?
+                        && query.matches(&info)
+                    {
+                        infos.push(info);
+                    }
+                }
+            }
+            Ok(infos)
+        })
+    }
+
+    /// The cache loader job (§5.19): on the loader thread, a read-only session of its own,
+    /// every handle of every class first (so the total is known), then one batched read
+    /// per object. A stop request ends it after the current object; an object that
+    /// vanished meanwhile is skipped.
+    pub(crate) fn key_load_job_impl(&self) -> Result<KeyLoadJob> {
+        let (slot, token_label) = {
+            let state = self.state_snapshot();
+            match state {
+                (true, Some(slot), label) => (slot, label),
+                _ => return Err(self.auth_required()),
+            }
+        };
+        let factory = self
+            .backend()
+            .loader(slot)
+            .map_err(|err| self.translate(err, "key cache loading"))?;
+        let name = self.provider_name().to_owned();
+        Ok(KeyLoadJob::new(move |sink| {
+            let fail = |err: BackendError| {
+                crate::ckr::translate(err, &name, "key cache loading", token_label.as_deref())
+            };
+            let session = factory().map_err(fail)?;
+            let mut handles: Vec<(KeyClass, u64)> = Vec::new();
+            for key_class in KeyClass::ALL {
+                if sink.cancelled() {
+                    return Ok(());
+                }
+                let template = vec![(
+                    cka::CLASS,
+                    Zeroizing::new(ulong_bytes(cko(key_class)).map_err(fail)?),
+                )];
+                for handle in session
+                    .find_objects(&template, &|| sink.cancelled())
+                    .map_err(fail)?
+                {
+                    handles.push((key_class, handle));
+                }
+            }
+            if sink.cancelled() {
+                // a search stopped early: its count is not the token's total
+                return Ok(());
+            }
+            sink.set_total(handles.len());
+            for (key_class, handle) in handles {
+                if sink.cancelled() {
+                    return Ok(());
+                }
+                let kinds = info_attrs(key_class);
+                let values = match session.get_attrs(handle, kinds) {
+                    Ok(values) => values,
+                    Err(err)
+                        if crate::ckr::code_of(&err)
+                            == Some(crate::ckr::rv::CKR_OBJECT_HANDLE_INVALID) =>
+                    {
+                        sink.skip(); // deleted since the search
+                        continue;
+                    }
+                    Err(err) => return Err(fail(err)),
+                };
+                match build_key_info(&name, handle, key_class, &AttrValues { kinds, values })? {
+                    Some(info) => sink.push(info),
+                    None => sink.skip(),
+                }
+            }
+            crate::mechanisms::clear_openssl_errors();
+            Ok(())
+        }))
+    }
+
+    /// In-place cache patch after r2 created or changed `info`: every object of its
+    /// identity (label + CKA_ID — both halves of a keypair) is re-read. Best effort: a
+    /// failure only logs (the command already succeeded).
+    pub(crate) fn cache_refresh_identity(&self, info: &KeyInfo) {
+        if !self.cache.is_active() {
+            return;
+        }
+        let query =
+            ObjectQuery::label(info.key_ref.label.clone()).with_id(info.key_ref.key_id.clone());
+        match self.find_objects_impl(&query) {
+            Ok(found) => {
+                for found in found {
+                    self.cache.upsert(found);
+                }
+            }
+            Err(err) => {
+                tracing::info!(target: "r2::pkcs11", "{}: cache refresh failed: {}", self.provider_name(), err.message);
+                self.cache.upsert(info.clone()); // at least the object r2 got back
+            }
+        }
+    }
+
+    /// In-place cache patch: re-read one object (gone → dropped from the cache).
+    pub(crate) fn cache_refresh_handle(&self, handle: u64, key_class: KeyClass) {
+        if !self.cache.is_active() {
+            return;
+        }
+        match self.op("key lookup", || self.key_info(handle, key_class)) {
+            Ok(Some(info)) => self.cache.upsert(info),
+            _ => self.cache.remove(handle),
+        }
     }
 
     pub(crate) fn find_key_impl(&self, selector: &KeySelector) -> Result<KeyInfo> {

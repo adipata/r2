@@ -68,6 +68,7 @@ impl reedline::Completer for BridgeCompleter {
 impl reedline::Highlighter for BridgeHighlighter {
     fn highlight(&self, line: &str, cursor: usize) -> reedline::StyledText {
         let _ = cursor;
+        super::indicator::note_buffer(line);
         let Some(assist) = active() else {
             return plain_text(line);
         };
