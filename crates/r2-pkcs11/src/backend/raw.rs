@@ -280,13 +280,8 @@ impl RawFns {
         object: CK_OBJECT_HANDLE,
         kinds: &[u64],
     ) -> BResult<AttrReads> {
-        match self.get_attrs_batched(session, object, kinds)? {
-            Some(values) => Ok(values),
-            None => kinds
-                .iter()
-                .map(|kind| self.get_attr(session, object, *kind))
-                .collect(),
-        }
+        let batched = self.get_attrs_batched(session, object, kinds)?;
+        batched_or_each(batched, kinds, |kind| self.get_attr(session, object, kind))
     }
 
     /// The batched read; Ok(None) = the token refused the batch (fall back).
@@ -680,6 +675,19 @@ thread_local! {
 /// path; the path as given when that fails.
 pub(crate) fn registry_key(library: &Path) -> PathBuf {
     std::fs::canonicalize(library).unwrap_or_else(|_| library.to_path_buf())
+}
+
+/// The fallback rule of [`RawFns::get_attrs`]: the batch's values, or — when the token
+/// refused the batch (`None`) — one `each` read per attribute, whose first error ends it.
+pub(crate) fn batched_or_each(
+    batched: Option<AttrReads>,
+    kinds: &[u64],
+    each: impl Fn(u64) -> BResult<Option<Zeroizing<Vec<u8>>>>,
+) -> BResult<AttrReads> {
+    match batched {
+        Some(values) => Ok(values),
+        None => kinds.iter().map(|kind| each(*kind)).collect(),
+    }
 }
 
 /// Cache loaders alive per module (canonical library path), process-wide: the loader

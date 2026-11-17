@@ -986,6 +986,10 @@ impl Pkcs11Provider {
                     handles.push((key_class, handle));
                 }
             }
+            if sink.cancelled() {
+                // a search stopped early: its count is not the token's total
+                return Ok(());
+            }
             sink.set_total(handles.len());
             for (key_class, handle) in handles {
                 if sink.cancelled() {

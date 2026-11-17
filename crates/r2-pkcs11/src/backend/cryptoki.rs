@@ -4,7 +4,8 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use cryptoki::error::{Error, Rv, RvError};
 use cryptoki::mechanism::vendor_defined::VendorDefinedMechanism;
@@ -374,6 +375,25 @@ struct RawLoader {
     raw: raw::RawFns,
     session: sys::CK_SESSION_HANDLE,
     _guard: raw::LoaderGuard,
+    _own: OwnLoader,
+}
+
+/// One cache loader of ONE backend alive (its `wait_for_loaders` counts only its own;
+/// `raw::LoaderGuard` counts per module, for the C_Finalize rule). Dropped with the
+/// loader session, or with a loader factory that never ran.
+struct OwnLoader(Arc<AtomicUsize>);
+
+impl OwnLoader {
+    fn new(count: &Arc<AtomicUsize>) -> Self {
+        count.fetch_add(1, Ordering::SeqCst);
+        Self(Arc::clone(count))
+    }
+}
+
+impl Drop for OwnLoader {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl LoaderSession for RawLoader {
@@ -413,6 +433,8 @@ pub(crate) struct CryptokiBackend {
     library: PathBuf,
     module: RefCell<Option<(PathBuf, Rc<SharedModule>)>>,
     session: RefCell<Option<Session>>,
+    /// This backend's cache loaders still alive (§5.19).
+    loaders: Arc<AtomicUsize>,
 }
 
 impl CryptokiBackend {
@@ -421,6 +443,7 @@ impl CryptokiBackend {
             library: config.library.clone(),
             module: RefCell::new(None),
             session: RefCell::new(None),
+            loaders: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -667,6 +690,7 @@ impl super::Backend for CryptokiBackend {
         // registered now, on the REPL thread, so no release can finalize between the
         // spawn and the loader's first call
         let guard = raw::LoaderGuard::new(key.clone());
+        let own = OwnLoader::new(&self.loaders);
         Ok(Box::new(move || {
             let raw = raw::RawFns::open(&key).map_err(BackendError::LibraryUnavailable)?;
             let session = {
@@ -677,17 +701,17 @@ impl super::Backend for CryptokiBackend {
                 raw,
                 session,
                 _guard: guard,
+                _own: own,
             }) as Box<dyn LoaderSession>)
         }))
     }
 
     fn wait_for_loaders(&self, timeout: std::time::Duration) -> bool {
-        // no call lock here: the loader needs it to finish its call and close its session
-        let Some(key) = self.module.borrow().as_ref().map(|(key, _)| key.clone()) else {
-            return true;
-        };
+        // no call lock here: the loader needs it to finish its call and close its session.
+        // Only this backend's loaders: another provider's load on the same module is not
+        // stopped and must not be waited for.
         let start = std::time::Instant::now();
-        while raw::loader_active(&key) {
+        while self.loaders.load(Ordering::SeqCst) > 0 {
             if start.elapsed() >= timeout {
                 return false;
             }

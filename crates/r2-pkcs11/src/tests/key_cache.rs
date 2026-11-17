@@ -276,9 +276,53 @@ fn related_lookups_fall_back_when_the_raw_label_is_not_the_decoded_one() {
     assert!(family.iter().any(|k| k.handle == Some(unlabeled)));
 }
 
+/// The fallback rule of `RawFns::get_attrs`: a refused batch is read one attribute at a
+/// time, and the first real error of those reads is the result.
+#[test]
+fn a_refused_batch_is_read_one_attribute_at_a_time() {
+    use std::cell::RefCell;
+
+    use zeroize::Zeroizing;
+
+    use crate::backend::raw::batched_or_each;
+    use crate::backend::{BackendError, Ckr};
+
+    let kinds = [3u64, 0x11, 0x161];
+    let value = |byte: u8| Some(Zeroizing::new(vec![byte]));
+    // the batch answered: its values are the result and nothing is read again
+    let reads = batched_or_each(Some(vec![value(1), None, value(3)]), &kinds, |_| {
+        panic!("no per-attribute read after a batch that answered")
+    })
+    .unwrap();
+    assert_eq!(reads, vec![value(1), None, value(3)]);
+    // the batch was refused: one read per attribute, in order, refusals kept as None
+    let asked = RefCell::new(Vec::new());
+    let reads = batched_or_each(None, &kinds, |kind| {
+        asked.borrow_mut().push(kind);
+        Ok((kind != 0x11).then(|| Zeroizing::new(vec![9])))
+    })
+    .unwrap();
+    assert_eq!(*asked.borrow(), kinds);
+    assert_eq!(reads, vec![value(9), None, value(9)]);
+    // a real error of a per-attribute read surfaces
+    let err = batched_or_each(None, &kinds, |_| {
+        Err(BackendError::Ckr(Ckr {
+            code: rv::CKR_OBJECT_HANDLE_INVALID,
+            function: "C_GetAttributeValue",
+        }))
+    })
+    .unwrap_err();
+    assert_eq!(
+        crate::ckr::code_of(&err),
+        Some(rv::CKR_OBJECT_HANDLE_INVALID)
+    );
+}
+
 /// The batched C_GetAttributeValue of RawFns (the loader's and `key info`'s read) against
-/// a real module: one call when every attribute is readable, the per-attribute fallback
-/// when the token refuses the batch (a sensitive CKA_VALUE).
+/// a real module: every attribute readable; a sensitive CKA_VALUE refused inside the batch
+/// (its entry is None, the others are read); and a batch the token refuses as a whole (a
+/// handle that names no object), which falls back to per-attribute reads and surfaces
+/// their error.
 #[cfg(feature = "softhsm")]
 #[test]
 fn softhsm_batched_attribute_reads_and_their_fallback() {
@@ -342,5 +386,14 @@ fn softhsm_batched_attribute_reads_and_their_fallback() {
     );
     assert!(reads[1].is_none(), "a sensitive CKA_VALUE is refused");
     assert!(reads[2].is_some());
+
+    let err = provider
+        .backend()
+        .get_attrs(0x7fff_fff0, &kinds)
+        .unwrap_err();
+    assert_eq!(
+        crate::ckr::code_of(&err),
+        Some(rv::CKR_OBJECT_HANDLE_INVALID)
+    );
     provider.shutdown().unwrap();
 }
