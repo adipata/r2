@@ -273,9 +273,15 @@ impl Listing {
             if trigger {
                 crate::cache::ensure_loading(provider.as_ref());
             }
+            // take the running load before the view: a load that ends in between is
+            // still waited for and collected again, and every check below reads the one
+            // snapshot (a load may end at any moment on its own thread)
+            let load = cache.current_load();
             let view = cache.view();
             let name = provider.name().to_owned();
-            if view.status.state == r2_provider::cache::CacheState::Empty || cache.failed() {
+            let failed = view.status.state == r2_provider::cache::CacheState::Partial
+                && view.status.last_error.is_some();
+            if view.status.state == r2_provider::cache::CacheState::Empty || failed {
                 // no cache and none loading (the loader could not start), or the last
                 // load failed: list live, as without a cache
                 if let Some(error) = view.status.last_error.clone() {
@@ -300,7 +306,7 @@ impl Listing {
                 }
                 _ => {}
             }
-            if let Some(load) = cache.current_load() {
+            if let Some(load) = load {
                 listing.loads.push(load);
             }
             listing.infos.extend(view.keys);
