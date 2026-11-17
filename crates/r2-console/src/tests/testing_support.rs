@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use r2_config::model::CONFIG_SECTIONS;
 use r2_core::io::{ConsoleIo, TemplateEditor};
 use r2_core::keys::KeyClass;
 use r2_core::template::KeyTemplate;
@@ -36,7 +37,7 @@ fn make_config_merges_overrides_and_make_loaded_defaults_origins() {
     assert_eq!(config.ui.hex_width, 16);
     assert_eq!(config.ui.hex_group, 2);
     let loaded = make_loaded(config.clone(), None, None);
-    assert_eq!(loaded.origins.len(), 6);
+    assert_eq!(loaded.origins.len(), CONFIG_SECTIONS.len());
     assert!(loaded.origins.values().all(|origin| origin == "default"));
     assert_eq!(loaded.source_path, None);
     assert_eq!(loaded.config, config);

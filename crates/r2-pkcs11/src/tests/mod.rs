@@ -23,6 +23,8 @@ mod edit;
 mod mechanisms;
 mod verbs;
 mod wrap_kek;
+// r2 addition (§5.19)
+mod key_cache;
 
 pub(crate) const USER_PIN: &str = "1234";
 

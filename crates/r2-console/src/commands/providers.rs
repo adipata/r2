@@ -178,7 +178,7 @@ impl Command for SlotsCommand {
 // ---------------------------------------------------------------------------------------
 
 const LOGIN_USAGE: &str =
-    "login <provider> [<token-label> | --slot <n>] [--pin <pin>] [--keep-pin]";
+    "login <provider> [<token-label> | --slot <n>] [--pin <pin>] [--keep-pin] [--no-cache]";
 
 struct LoginCommand;
 
@@ -193,7 +193,7 @@ impl Command for LoginCommand {
         LOGIN_USAGE
     }
     fn flags(&self) -> &'static [&'static str] {
-        &["keep-pin"]
+        &["keep-pin", "no-cache"]
     }
     fn run(&self, ctx: &AppContext, args: &BoundArgs) -> r2_core::Result<Flow> {
         reject_named(args, self.usage(), NOUN)?;
@@ -267,16 +267,51 @@ impl Command for LoginCommand {
             token.slot_id,
             provider.name()
         )));
+        if !args.flag("no-cache") && cache_on_login(ctx, provider.name()) {
+            start_cache_after_login(ctx, provider.as_ref());
+        }
         Ok(Flow::Continue)
     }
     fn complete(&self, ctx: &AppContext, tokens: &[String], cursor_token: &str) -> Vec<String> {
         if completed_args(tokens, cursor_token) == 0 {
             return complete_provider_names(ctx, cursor_token);
         }
-        ["--slot", "--pin", "--keep-pin"]
+        ["--slot", "--pin", "--keep-pin", "--no-cache"]
             .iter()
             .map(|s| (*s).to_owned())
             .collect()
+    }
+}
+
+/// `providers.pkcs11[].cache_on_login`, else `cache.on_login` (§5.19).
+fn cache_on_login(ctx: &AppContext, name: &str) -> bool {
+    let cfg = ctx.cfg();
+    cfg.providers
+        .pkcs11
+        .iter()
+        .find(|instance| instance.name == name)
+        .and_then(|instance| instance.cache_on_login)
+        .unwrap_or(cfg.cache.on_login)
+}
+
+/// Start loading the key cache after a login; a provider without a cache is left alone and
+/// a loader that cannot start only logs (`keys` lists live then).
+fn start_cache_after_login(ctx: &AppContext, provider: &dyn Provider) {
+    match crate::cache::start(provider) {
+        Ok(crate::cache::Start::Started) if ctx.io.live_progress() => {
+            ctx.io.print(Renderable::Text(format!(
+                "loading the key cache of {} in the background — {} stops it",
+                provider.name(),
+                crate::cache::STOP_KEY
+            )));
+        }
+        Ok(_) => {}
+        Err(err) => tracing::info!(
+            target: "r2::cache",
+            "{}: cannot start key cache loading: {}",
+            provider.name(),
+            err.message
+        ),
     }
 }
 

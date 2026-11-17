@@ -593,3 +593,62 @@ fn softhsm_symlinked_library_shares_one_module() {
     assert!(!second.list_tokens().unwrap().is_empty()); // lazy re-initialize works
     second.shutdown().unwrap();
 }
+
+// ---- r2 addition: key cache loader and targeted lookups (§5.19) ----
+
+#[test]
+fn softhsm_key_cache_loads_on_its_own_thread_and_session() {
+    use r2_provider::ObjectQuery;
+    use r2_provider::cache::{CacheState, LoadOutcome, LoadSink};
+
+    let _lock = r2_testkit::global_state_lock();
+    let provider = logged_in();
+    let label = unique_label();
+    let mut request = GenerateRequest::new(KeyAlgorithm::Ec, label.as_str());
+    request.curve = Some(Curve::P256);
+    request.template = Some(session_template(&[]));
+    provider.generate_key(&request).unwrap();
+    let mut aes = GenerateRequest::new(KeyAlgorithm::Aes, label.as_str());
+    aes.size_bits = Some(128);
+    aes.template = Some(session_template(&[]));
+    aes.key_id = Some(vec![0xa5]);
+    provider.generate_key(&aes).unwrap();
+
+    // targeted lookups: one C_FindObjects each
+    let family = provider
+        .find_objects(&ObjectQuery::label(label.as_str()))
+        .unwrap();
+    assert_eq!(family.len(), 3);
+    let by_id = provider.find_objects(&ObjectQuery::id(vec![0xa5])).unwrap();
+    assert_eq!(by_id.len(), 1);
+    assert_eq!(by_id[0].key_class, KeyClass::Secret);
+
+    // the loader job runs on another thread with a session of its own
+    let cache = provider.key_cache().unwrap();
+    let job = provider.key_load_job().unwrap();
+    let shared = cache.begin(provider.name()).unwrap();
+    let thread_shared = std::sync::Arc::clone(&shared);
+    #[allow(clippy::disallowed_methods)] // the loader thread, as r2_console::cache spawns it
+    let handle = std::thread::spawn(move || {
+        let result = job.run(&LoadSink::new(&thread_shared));
+        thread_shared.finish(result);
+    });
+    handle.join().unwrap();
+    assert!(matches!(shared.outcome(), Some((LoadOutcome::Complete, _))));
+    let view = cache.view();
+    assert_eq!(view.status.state, CacheState::Complete);
+    let mut cached: Vec<_> = view
+        .keys
+        .into_iter()
+        .filter(|k| k.key_ref.label == label.as_str())
+        .collect();
+    cached.sort_by_key(|k| k.handle);
+    let mut live = family;
+    live.sort_by_key(|k| k.handle);
+    assert_eq!(cached, live); // batched reads build the same KeyInfo as the live path
+
+    // logout drops the cache; the provider's own session still works afterwards
+    provider.logout().unwrap();
+    assert_eq!(cache.status().state, CacheState::Empty);
+    provider.shutdown().unwrap();
+}

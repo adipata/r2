@@ -8,10 +8,10 @@ use std::sync::{Arc, Mutex};
 
 use nu_ansi_term::Style;
 use reedline::{
-    Color, DefaultHinter, Emacs, FileBackedHistory, IdeMenu, KeyCode, KeyModifiers, MenuBuilder,
-    Prompt, PromptEditMode, PromptHistorySearch, PromptHistorySearchStatus, Reedline,
-    ReedlineEvent, ReedlineMenu, Signal, Span, StyledText, Suggestion, ValidationResult, Validator,
-    default_emacs_keybindings,
+    Color, DefaultHinter, Emacs, ExternalPrinter, FileBackedHistory, IdeMenu, KeyCode,
+    KeyModifiers, MenuBuilder, Prompt, PromptEditMode, PromptHistorySearch,
+    PromptHistorySearchStatus, Reedline, ReedlineEvent, ReedlineMenu, Signal, Span, StyledText,
+    Suggestion, ValidationResult, Validator, default_emacs_keybindings,
 };
 
 use crossterm::event as ct;
@@ -19,6 +19,7 @@ use r2_core::io::Key;
 
 use super::assist::{BridgeCompleter, BridgeHighlighter, plain_text};
 use super::history::SecretFilteringHistory;
+use super::indicator;
 use super::line::{LineIo, LineReader, ReadOutcome, SecretRead};
 use super::plain::{PlainReader, rpassword_secret};
 use super::session::{TermOp, TerminalDriver};
@@ -26,17 +27,26 @@ use crate::parser::line_is_complete;
 use crate::repl::CONTINUATION_PROMPT;
 
 /// `r2> ` (or a param prompt text) with the `…> ` multiline indicator; uncoloured like c2.
+/// The command prompt carries the key cache indicator on the right (§5.19).
 struct ConsolePrompt<'a> {
     left: &'a str,
+    indicator: bool,
 }
 impl Prompt for ConsolePrompt<'_> {
     fn render_prompt_left(&self) -> Cow<'_, str> {
         Cow::Borrowed(self.left)
     }
     fn render_prompt_right(&self) -> Cow<'_, str> {
-        Cow::Borrowed("")
+        if self.indicator {
+            Cow::Owned(indicator::right_prompt())
+        } else {
+            Cow::Borrowed("")
+        }
     }
     fn render_prompt_indicator(&self, _mode: PromptEditMode) -> Cow<'_, str> {
+        if self.indicator {
+            indicator::note_left(self.left, false);
+        }
         Cow::Borrowed("")
     }
     fn render_prompt_multiline_indicator(&self) -> Cow<'_, str> {
@@ -48,7 +58,14 @@ impl Prompt for ConsolePrompt<'_> {
         } else {
             ""
         };
-        Cow::Owned(format!("({failing}reverse-search: {}) ", search.term))
+        let text = format!("({failing}reverse-search: {}) ", search.term);
+        if self.indicator {
+            indicator::note_left(&format!("{}{text}", self.left), true);
+        }
+        Cow::Owned(text)
+    }
+    fn get_prompt_right_color(&self) -> Color {
+        Color::DarkGrey
     }
     fn get_prompt_color(&self) -> Color {
         Color::Reset
@@ -121,6 +138,20 @@ fn keybindings() -> reedline::Keybindings {
     bindings
 }
 
+/// The host command Ctrl+G sends from the command prompt: stop every key cache load
+/// (§5.19). It replaces reedline's Emacs Ctrl+G (redo).
+const STOP_CACHE: &str = "\u{0}r2-stop-cache";
+
+fn command_keybindings() -> reedline::Keybindings {
+    let mut bindings = keybindings();
+    bindings.add_binding(
+        KeyModifiers::CONTROL,
+        KeyCode::Char('g'),
+        ReedlineEvent::ExecuteHostCommand(STOP_CACHE.to_owned()),
+    );
+    bindings
+}
+
 fn completion_menu() -> ReedlineMenu {
     ReedlineMenu::EngineCompleter(Box::new(
         IdeMenu::default()
@@ -159,16 +190,26 @@ pub(crate) struct ReedlineReader {
 
 impl ReedlineReader {
     pub(crate) fn new(history_file: Option<&Path>, ansi_colors: bool) -> Self {
+        indicator::set_color(ansi_colors);
+        let printer = ExternalPrinter::<String>::default();
+        let notices = printer.clone();
         let command = Reedline::create()
             .with_history(Box::new(SecretFilteringHistory::open(history_file)))
-            .with_hinter(Box::new(
+            .with_hinter(Box::new(indicator::RecordingHinter(
                 DefaultHinter::default().with_style(Style::new().fg(nu_ansi_term::Color::DarkGray)),
-            ))
+            )))
+            .with_external_printer(printer)
+            .with_poll_interval(std::time::Duration::from_millis(100))
+            .with_idle_callback(Box::new(move || {
+                indicator::idle_tick(&|line| {
+                    let _ = notices.print(line);
+                });
+            }))
             .with_completer(Box::new(BridgeCompleter))
             .with_highlighter(Box::new(BridgeHighlighter))
             .with_validator(Box::new(QuoteValidator))
             .with_menu(completion_menu())
-            .with_edit_mode(Box::new(Emacs::new(keybindings())))
+            .with_edit_mode(Box::new(Emacs::new(command_keybindings())))
             .with_quick_completions(true)
             .with_partial_completions(true)
             .use_bracketed_paste(true)
@@ -195,13 +236,23 @@ impl ReedlineReader {
 impl LineReader for ReedlineReader {
     fn read_command(&mut self, prompt: &str) -> io::Result<ReadOutcome> {
         let _raw = RawModeGuard;
-        let signal = self
-            .command
-            .read_line(&ConsolePrompt { left: prompt })
-            .map_err(io::Error::other)?;
-        // reedline writes the history file only on sync(); c2 appended immediately.
-        let _ = self.command.sync_history();
-        Ok(from_signal(signal))
+        let prompt = ConsolePrompt {
+            left: prompt,
+            indicator: true,
+        };
+        loop {
+            indicator::reset();
+            let signal = self.command.read_line(&prompt).map_err(io::Error::other)?;
+            if matches!(&signal, Signal::HostCommand(command) if command == STOP_CACHE) {
+                // Ctrl+G: stop the loads, keep editing the same line (reedline keeps the
+                // buffer across a host command)
+                crate::cache::stop_all();
+                continue;
+            }
+            // reedline writes the history file only on sync(); c2 appended immediately.
+            let _ = self.command.sync_history();
+            return Ok(from_signal(signal));
+        }
     }
     fn read_param(&mut self, prompt: &str, choices: &[String]) -> io::Result<ReadOutcome> {
         if let Ok(mut slot) = self.choices.lock() {
@@ -210,7 +261,10 @@ impl LineReader for ReedlineReader {
         let _raw = RawModeGuard;
         let signal = self
             .answer
-            .read_line(&ConsolePrompt { left: prompt })
+            .read_line(&ConsolePrompt {
+                left: prompt,
+                indicator: false,
+            })
             .map_err(io::Error::other)?;
         Ok(from_signal(signal))
     }

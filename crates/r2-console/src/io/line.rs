@@ -444,6 +444,9 @@ impl<R: LineReader> r2_core::io::ConsoleIo for LineIo<R> {
         };
         f();
     }
+    fn live_progress(&self) -> bool {
+        self.spinner_allowed && self.sink.style != SinkStyle::Plain
+    }
     fn interactive(&self, f: &mut dyn FnMut(&mut dyn KeySession)) -> bool {
         // No escape sequences on the Plain sink; never under a running spinner (it would draw
         // over the frame) — the caller's line prompts suspend it instead.

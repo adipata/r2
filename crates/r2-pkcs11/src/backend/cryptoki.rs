@@ -18,7 +18,10 @@ use secrecy::{ExposeSecret, SecretString};
 use zeroize::{Zeroize, Zeroizing};
 
 use super::raw::{self, RawOp, SharedModule};
-use super::{BResult, BackendError, Ckr, MechSpec, RawAttr, RawTokenInfo, UserKind};
+use super::{
+    AttrReads, BResult, BackendError, Ckr, LoaderFactory, LoaderSession, MechSpec, RawAttr,
+    RawTokenInfo, UserKind,
+};
 use crate::ckr::rv;
 
 /// The r2-owned RvError → CK_RV map: the reverse table built once by probing cryptoki's
@@ -364,6 +367,39 @@ fn with_mechanism<R>(spec: &MechSpec, f: impl FnOnce(&Mechanism<'_>) -> BResult<
     }
 }
 
+/// The cache loader's session (spec §5.19): its own dlopen of the module (refcounted, the
+/// module is already initialized) and a read-only session, both created and used only on
+/// the loader thread.
+struct RawLoader {
+    raw: raw::RawFns,
+    session: sys::CK_SESSION_HANDLE,
+    _guard: raw::LoaderGuard,
+}
+
+impl LoaderSession for RawLoader {
+    fn find_objects(&self, template: &[RawAttr]) -> BResult<Vec<u64>> {
+        self.raw.find_objects(self.session, template)
+    }
+    fn get_attrs(&self, object: u64, attributes: &[u64]) -> BResult<AttrReads> {
+        self.raw
+            .get_attrs(self.session, Self::handle(object)?, attributes)
+    }
+}
+
+impl RawLoader {
+    fn handle(object: u64) -> BResult<sys::CK_OBJECT_HANDLE> {
+        sys::CK_OBJECT_HANDLE::try_from(object)
+            .map_err(|_| ckr(rv::CKR_OBJECT_HANDLE_INVALID, "obj"))
+    }
+}
+
+impl Drop for RawLoader {
+    fn drop(&mut self) {
+        // best effort: a session of a finalized module is already gone
+        let _ = self.raw.close_session(self.session);
+    }
+}
+
 /// The real backend: cryptoki safe API + RawFns over the shared module of
 /// `config.library`; never touches the library before `Backend::initialize`.
 pub(crate) struct CryptokiBackend {
@@ -589,6 +625,33 @@ impl super::Backend for CryptokiBackend {
         self.with_session("C_GetAttributeValue", |session| {
             module.raw.get_attr(session.handle(), handle, attribute)
         })
+    }
+
+    fn get_attrs(&self, object: u64, attributes: &[u64]) -> BResult<AttrReads> {
+        let module = self.module()?;
+        let handle = Self::raw_handle(object)?;
+        self.with_session("C_GetAttributeValue", |session| {
+            module.raw.get_attrs(session.handle(), handle, attributes)
+        })
+    }
+
+    fn loader(&self, slot: u64) -> BResult<LoaderFactory> {
+        let key = match self.module.borrow().as_ref() {
+            Some((key, _)) => key.clone(),
+            None => return Err(ckr(rv::CKR_CRYPTOKI_NOT_INITIALIZED, "module")),
+        };
+        // registered now, on the REPL thread, so no release can finalize between the
+        // spawn and the loader's first call
+        let guard = raw::LoaderGuard::new(key.clone());
+        Ok(Box::new(move || {
+            let raw = raw::RawFns::open(&key).map_err(BackendError::LibraryUnavailable)?;
+            let session = raw.open_ro_session(slot)?;
+            Ok(Box::new(RawLoader {
+                raw,
+                session,
+                _guard: guard,
+            }) as Box<dyn LoaderSession>)
+        }))
     }
 
     fn set_attrs(&self, object: u64, template: &[RawAttr]) -> BResult<()> {

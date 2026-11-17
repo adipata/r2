@@ -124,3 +124,36 @@ fn hex_lower(data: &[u8]) -> String {
             out
         })
 }
+
+/// The objects of `classes` that share `key`'s CKA_ID (when it has one) or its label — the
+/// candidates for a key's public half / certificate / siblings — found with targeted
+/// searches (`Provider::find_objects`, §5.19) instead of a whole-token listing. Order: the
+/// id matches, then the label matches (each in `list_keys` order), without duplicates.
+pub fn family_candidates(
+    provider: &dyn crate::provider::Provider,
+    key: &KeyInfo,
+    classes: &[KeyClass],
+) -> Result<Vec<KeyInfo>> {
+    let mut found: Vec<KeyInfo> = Vec::new();
+    let mut queries = Vec::new();
+    if let Some(id) = &key.key_ref.key_id {
+        queries.push(crate::types::ObjectQuery::id(id.clone()));
+    }
+    queries.push(crate::types::ObjectQuery::label(key.key_ref.label.clone()));
+    for query in queries {
+        for info in provider.find_objects(&query)? {
+            if !classes.contains(&info.key_class) {
+                continue;
+            }
+            let duplicate = found.iter().any(|seen| {
+                seen.key_class == info.key_class
+                    && seen.handle == info.handle
+                    && seen.key_ref == info.key_ref
+            });
+            if !duplicate {
+                found.push(info);
+            }
+        }
+    }
+    Ok(found)
+}

@@ -7,6 +7,7 @@ allow-expect-in-tests = true
 allow-print-in-tests = true
 disallowed-methods = [
     { path = "std::thread::spawn", reason = "single-threaded invariant (spec §6)" },
+    { path = "std::thread::Builder::spawn", reason = "single-threaded invariant (spec §6); only the key cache loader, r2_console::cache::spawn (spec §5.19)" },
     { path = "std::env::set_var", reason = "only r2_pkcs11::env (production) and r2_testkit::env (tests)" },
     { path = "std::env::remove_var", reason = "only r2_pkcs11::env (production) and r2_testkit::env (tests)" },
     { path = "openssl::pkey::PKey::private_key_from_pem", reason = "prompts on the TTY" },

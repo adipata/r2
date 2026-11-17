@@ -22,7 +22,7 @@ use cryptoki_sys::{
 };
 use zeroize::Zeroizing;
 
-use super::{BResult, BackendError, Ckr, RawAttr, RawTokenInfo};
+use super::{AttrReads, BResult, BackendError, Ckr, RawAttr, RawTokenInfo};
 use crate::ckr::rv;
 
 /// A CK_RV of RawFns as a backend error (widening, `crate::ulong_to_u64`).
@@ -267,6 +267,187 @@ impl RawFns {
         Ok(Some(buffer))
     }
 
+    /// Several attributes of one object in ONE `C_GetAttributeValue` (a size pass with NULL
+    /// values, then a value pass over the available ones) — the same per-entry `Option`
+    /// semantics as [`get_attr`](Self::get_attr). CKR_ATTRIBUTE_SENSITIVE /
+    /// CKR_ATTRIBUTE_TYPE_INVALID are the batch's normal per-entry refusals (the entry's
+    /// length is CK_UNAVAILABLE_INFORMATION). Any other failure of the batch (a token that
+    /// rejects multi-attribute reads, CKR_ARGUMENTS_BAD, …) falls back to one `get_attr`
+    /// per attribute, which surfaces a real error (lost session, bad handle) as before.
+    pub(crate) fn get_attrs(
+        &self,
+        session: CK_SESSION_HANDLE,
+        object: CK_OBJECT_HANDLE,
+        kinds: &[u64],
+    ) -> BResult<AttrReads> {
+        match self.get_attrs_batched(session, object, kinds)? {
+            Some(values) => Ok(values),
+            None => kinds
+                .iter()
+                .map(|kind| self.get_attr(session, object, *kind))
+                .collect(),
+        }
+    }
+
+    /// The batched read; Ok(None) = the token refused the batch (fall back).
+    fn get_attrs_batched(
+        &self,
+        session: CK_SESSION_HANDLE,
+        object: CK_OBJECT_HANDLE,
+        kinds: &[u64],
+    ) -> BResult<Option<AttrReads>> {
+        let f = entry!(self, C_GetAttributeValue);
+        let batch_ok = |code: u64| {
+            matches!(
+                code,
+                rv::CKR_OK | rv::CKR_ATTRIBUTE_SENSITIVE | rv::CKR_ATTRIBUTE_TYPE_INVALID
+            )
+        };
+        let mut sized: Vec<CK_ATTRIBUTE> = Vec::with_capacity(kinds.len());
+        for kind in kinds {
+            let type_ = cryptoki_sys::CK_ATTRIBUTE_TYPE::try_from(*kind).map_err(|_| {
+                BackendError::Ckr(Ckr {
+                    code: rv::CKR_ATTRIBUTE_TYPE_INVALID,
+                    function: "C_GetAttributeValue",
+                })
+            })?;
+            sized.push(CK_ATTRIBUTE {
+                type_,
+                pValue: null_mut(),
+                ulValueLen: 0,
+            });
+        }
+        if sized.is_empty() {
+            return Ok(Some(Vec::new()));
+        }
+        let count = ulong(sized.len(), rv::CKR_ARGUMENTS_BAD, "C_GetAttributeValue")?;
+        // SAFETY: size pass: `count` attributes, every value pointer NULL.
+        let code = crate::ulong_to_u64(unsafe { f(session, object, sized.as_mut_ptr(), count) });
+        if !batch_ok(code) {
+            return Ok(None);
+        }
+        // value pass over the entries that have a value
+        let mut buffers: Vec<Option<Zeroizing<Vec<u8>>>> = sized
+            .iter()
+            .map(|attr| {
+                (attr.ulValueLen != CK_UNAVAILABLE_INFORMATION).then(|| {
+                    Zeroizing::new(vec![0u8; usize::try_from(attr.ulValueLen).unwrap_or(0)])
+                })
+            })
+            .collect();
+        let mut wanted: Vec<(usize, CK_ATTRIBUTE)> = Vec::new();
+        for (at, buffer) in buffers.iter_mut().enumerate() {
+            if let Some(buffer) = buffer {
+                wanted.push((
+                    at,
+                    CK_ATTRIBUTE {
+                        type_: sized[at].type_,
+                        pValue: buffer.as_mut_ptr() as *mut c_void,
+                        ulValueLen: sized[at].ulValueLen,
+                    },
+                ));
+            }
+        }
+        if !wanted.is_empty() {
+            let mut raw: Vec<CK_ATTRIBUTE> = wanted.iter().map(|(_, attr)| *attr).collect();
+            let count = ulong(raw.len(), rv::CKR_ARGUMENTS_BAD, "C_GetAttributeValue")?;
+            // SAFETY: value pass: each entry points at a buffer of this frame holding
+            // exactly the `ulValueLen` bytes the size pass reported.
+            let code = crate::ulong_to_u64(unsafe { f(session, object, raw.as_mut_ptr(), count) });
+            if !batch_ok(code) {
+                return Ok(None);
+            }
+            for ((at, _), attr) in wanted.iter().zip(raw.iter()) {
+                if attr.ulValueLen == CK_UNAVAILABLE_INFORMATION {
+                    buffers[*at] = None;
+                } else if let Some(buffer) = buffers[*at].as_mut() {
+                    buffer.truncate(usize::try_from(attr.ulValueLen).unwrap_or(0));
+                }
+            }
+        }
+        Ok(Some(buffers))
+    }
+
+    /// C_OpenSession(slot, CKF_SERIAL_SESSION) — a read-only session (the cache loader's;
+    /// the token's login state applies to it).
+    pub(crate) fn open_ro_session(&self, slot: u64) -> BResult<CK_SESSION_HANDLE> {
+        let f = entry!(self, C_OpenSession);
+        let slot = CK_SLOT_ID::try_from(slot).map_err(|_| {
+            BackendError::Ckr(Ckr {
+                code: rv::CKR_SLOT_ID_INVALID,
+                function: "C_OpenSession",
+            })
+        })?;
+        let mut session: CK_SESSION_HANDLE = 0;
+        // SAFETY: no application pointer and no notify callback; `session` is a valid
+        // out-parameter.
+        check(
+            unsafe {
+                f(
+                    slot,
+                    cryptoki_sys::CKF_SERIAL_SESSION,
+                    null_mut(),
+                    None,
+                    &mut session,
+                )
+            },
+            "C_OpenSession",
+        )?;
+        Ok(session)
+    }
+
+    /// C_CloseSession.
+    pub(crate) fn close_session(&self, session: CK_SESSION_HANDLE) -> BResult<()> {
+        let f = entry!(self, C_CloseSession);
+        // SAFETY: plain call on a session handle this module returned.
+        check(unsafe { f(session) }, "C_CloseSession")
+    }
+
+    /// C_FindObjectsInit + C_FindObjects (1024 handles per call) + C_FindObjectsFinal.
+    pub(crate) fn find_objects(
+        &self,
+        session: CK_SESSION_HANDLE,
+        template: &[RawAttr],
+    ) -> BResult<Vec<u64>> {
+        let (init, find, last) = (
+            entry!(self, C_FindObjectsInit),
+            entry!(self, C_FindObjects),
+            entry!(self, C_FindObjectsFinal),
+        );
+        let mut attrs = raw_template(template)?;
+        let count = ulong(
+            attrs.len(),
+            rv::CKR_TEMPLATE_INCONSISTENT,
+            "C_FindObjectsInit",
+        )?;
+        // SAFETY: the template and the values it points into live in this frame.
+        check(
+            unsafe { init(session, attrs.as_mut_ptr(), count) },
+            "C_FindObjectsInit",
+        )?;
+        let mut handles = Vec::new();
+        let mut batch: Vec<CK_OBJECT_HANDLE> = vec![0; 1024];
+        let result = loop {
+            let mut found: CK_ULONG = 0;
+            let room = ulong(batch.len(), rv::CKR_ARGUMENTS_BAD, "C_FindObjects")?;
+            // SAFETY: `batch` holds `room` writable handles; `found` is an out-parameter.
+            let code = unsafe { find(session, batch.as_mut_ptr(), room, &mut found) };
+            if let Err(err) = check(code, "C_FindObjects") {
+                break Err(err);
+            }
+            let found = usize::try_from(found).unwrap_or(0).min(batch.len());
+            handles.extend(batch[..found].iter().map(|h| crate::ulong_to_u64(*h)));
+            if found < batch.len() {
+                break Ok(());
+            }
+        };
+        // SAFETY: plain call ending the search this function started.
+        let finished = check(unsafe { last(session) }, "C_FindObjectsFinal");
+        result?;
+        finished?;
+        Ok(handles)
+    }
+
     /// The two-call output convention (size query, then the real call), truncated to the
     /// length the second call reports.
     fn two_call(
@@ -484,6 +665,43 @@ pub(crate) fn registry_key(library: &Path) -> PathBuf {
     std::fs::canonicalize(library).unwrap_or_else(|_| library.to_path_buf())
 }
 
+/// Cache loaders alive per module (canonical library path), process-wide: the loader
+/// threads register here so the last `release` never runs C_Finalize under a loader that
+/// may be inside a call (spec §5.19 exit rule).
+static LOADERS: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+fn loaders() -> std::sync::MutexGuard<'static, Vec<PathBuf>> {
+    LOADERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// One cache loader alive on a module; dropping it unregisters (on the loader thread, or
+/// wherever the never-run loader factory is dropped).
+#[derive(Debug)]
+pub(crate) struct LoaderGuard(PathBuf);
+
+impl LoaderGuard {
+    pub(crate) fn new(key: PathBuf) -> Self {
+        loaders().push(key.clone());
+        Self(key)
+    }
+}
+
+impl Drop for LoaderGuard {
+    fn drop(&mut self) {
+        let mut list = loaders();
+        if let Some(at) = list.iter().position(|key| *key == self.0) {
+            list.swap_remove(at);
+        }
+    }
+}
+
+/// True while a cache loader of the module `key` is alive.
+pub(crate) fn loader_active(key: &Path) -> bool {
+    loaders().iter().any(|k| k == key)
+}
+
 /// Number of backends holding the module of `key` (0 when not loaded).
 pub(crate) fn module_users(key: &Path) -> usize {
     MODULES.with(|m| m.borrow().get(key).map_or(0, |module| module.users.get()))
@@ -554,6 +772,17 @@ pub(crate) fn release(key: &Path, module: Rc<SharedModule>) -> BResult<()> {
     }
     let removed = MODULES.with(|m| m.borrow_mut().remove(key));
     drop(removed);
+    if loader_active(key) {
+        // a cache loader may be inside a call: never C_Finalize under it (§5.19); the
+        // process is exiting or the next acquire re-initializes (ALREADY_INITIALIZED = ok)
+        tracing::info!(
+            target: "r2::pkcs11",
+            "skipping C_Finalize of {}: a key cache loader is still running",
+            key.display()
+        );
+        drop(module);
+        return Ok(());
+    }
     let result = module.ctx.clone().finalize();
     drop(module);
     match result {

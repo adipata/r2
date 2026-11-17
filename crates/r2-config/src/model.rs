@@ -17,14 +17,16 @@ use crate::decode::{
 };
 use crate::yaml::{Mapping, Value, as_int, python_type_name};
 
-/// The six top-level sections in defaults.yaml order (`config show --origin`).
-pub const CONFIG_SECTIONS: [&str; 6] = [
+/// The top-level sections in defaults.yaml order (`config show --origin`); `cache` is an
+/// r2 addition (§5.19).
+pub const CONFIG_SECTIONS: [&str; 7] = [
     "app",
     "ui",
     "providers",
     "softhsm",
     "templates",
     "custom_mechanisms",
+    "cache",
 ];
 /// Class keys of templates.pkcs11 (§7) and of template files (§5.16).
 pub const TEMPLATE_CLASS_KEYS: [&str; 8] = [
@@ -166,6 +168,8 @@ pub struct Pkcs11InstanceConfig {
     pub token_label: Option<String>,
     /// Set in the process environment immediately before C_Initialize (§4.5.5).
     pub env: IndexMap<String, String>,
+    /// Load the key cache at `login` (§5.19); None = `cache.on_login`.
+    pub cache_on_login: Option<bool>,
 }
 impl Pkcs11InstanceConfig {
     /// slot/token_label None, env empty (the SoftHSM autodetect instance).
@@ -176,8 +180,16 @@ impl Pkcs11InstanceConfig {
             slot: None,
             token_label: None,
             env: IndexMap::new(),
+            cache_on_login: None,
         }
     }
+}
+
+/// `cache` (r2 addition, §5.19).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CacheSection {
+    /// Load a PKCS#11 provider's key cache in the background at `login`.
+    pub on_login: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -331,6 +343,7 @@ pub struct AppConfig {
     pub softhsm: SoftHsmSection,
     pub templates: TemplatesSection,
     pub custom_mechanisms: Vec<CustomMechanismConfig>,
+    pub cache: CacheSection,
 }
 impl AppConfig {
     /// Typed decode of the merged tree + cross-checks (§4.8.3).
@@ -364,6 +377,7 @@ impl AppConfig {
                 &join(path, "templates"),
             )?,
             custom_mechanisms,
+            cache: CacheSection::from_value(req(data, "cache", path)?, &join(path, "cache"))?,
         };
         config.cross_check(path)?;
         Ok(config)
@@ -399,7 +413,7 @@ impl AppConfig {
             .pkcs11
             .iter()
             .map(|inst| {
-                map([
+                let mut entry = map([
                     ("name", Value::from(inst.name.as_str())),
                     ("library", path_value(&inst.library)),
                     ("slot", inst.slot.map_or(Value::Null, Value::from)),
@@ -416,7 +430,12 @@ impl AppConfig {
                                 .collect(),
                         ),
                     ),
-                ])
+                ]);
+                // r2 addition (§5.19): shown only when set (null = cache.on_login)
+                if let (Some(on), Value::Mapping(fields)) = (inst.cache_on_login, &mut entry) {
+                    fields.insert(Value::from("cache_on_login"), Value::from(on));
+                }
+                entry
             })
             .collect();
         let providers = map([
@@ -524,6 +543,10 @@ impl AppConfig {
             ("softhsm", softhsm),
             ("templates", templates),
             ("custom_mechanisms", Value::Sequence(mechanisms)),
+            (
+                "cache",
+                map([("on_login", Value::from(self.cache.on_login))]),
+            ),
         ])
     }
 
@@ -709,7 +732,14 @@ impl Pkcs11InstanceConfig {
         let data = as_mapping(value, path)?;
         warn_unknown(
             data,
-            &["name", "library", "slot", "token_label", "env"],
+            &[
+                "name",
+                "library",
+                "slot",
+                "token_label",
+                "env",
+                "cache_on_login",
+            ],
             path,
             "config key",
         );
@@ -734,12 +764,26 @@ impl Pkcs11InstanceConfig {
                 );
             }
         }
+        let cache_on_login = match get(data, "cache_on_login") {
+            None => None,
+            Some(raw) => Some(as_bool(raw, &join(path, "cache_on_login"))?),
+        };
         Ok(Self {
             name,
             library,
             slot,
             token_label,
             env,
+            cache_on_login,
+        })
+    }
+}
+impl CacheSection {
+    pub fn from_value(value: &Value, path: &str) -> Result<Self> {
+        let data = as_mapping(value, path)?;
+        warn_unknown(data, &["on_login"], path, "config key");
+        Ok(Self {
+            on_login: as_bool(req(data, "on_login", path)?, &join(path, "on_login"))?,
         })
     }
 }

@@ -202,6 +202,33 @@ pub trait Provider {
         )))
     }
 
+    // -- targeted lookup and key cache (r2 additions, §5.19) --
+    /// Every object matching all of the query's set fields (label, CKA_ID, class), in
+    /// `list_keys` order — a targeted search for a key's partners that never lists the
+    /// whole token (PKCS#11: one `C_FindObjects` per class with the template). Default:
+    /// `list_keys` filtered the same way (memory and fakes list instantly).
+    fn find_objects(&self, query: &ObjectQuery) -> Result<Vec<KeyInfo>> {
+        Ok(self
+            .list_keys()?
+            .into_iter()
+            .filter(|info| query.matches(info))
+            .collect())
+    }
+    /// The provider's key cache, read by `keys` and ref completion. None = the provider
+    /// keeps none (memory: its listing is already instant).
+    fn key_cache(&self) -> Option<&crate::cache::KeyCache> {
+        None
+    }
+    /// The job that fills the cache: it runs on the loader thread (`Send`), on a session of
+    /// its own, and yields `list_keys`' snapshots in `list_keys` order. AuthRequired while
+    /// logged out; UnsupportedOperation for providers without a cache.
+    fn key_load_job(&self) -> Result<crate::cache::KeyLoadJob> {
+        Err(ConsoleError::unsupported(format!(
+            "{} keeps no key cache",
+            self.name()
+        )))
+    }
+
     // -- seams --
     /// The SoftHSM-wizard seam (§4.9.9): Some for providers that can initialize tokens
     /// (Pkcs11Provider; FakeProvider configured with `.with_tokens(..)`).

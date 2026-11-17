@@ -56,6 +56,9 @@ pub struct Pkcs11Provider {
     custom_attributes: IndexMap<String, CustomAttributeDef>,
     backend: Rc<dyn Backend>,
     state: RefCell<State>,
+    /// The key cache (§5.19): filled by the console's loader thread, patched in place by
+    /// this provider's own creates/edits/deletes, dropped on logout or a lost session.
+    cache: r2_provider::cache::KeyCache,
 }
 
 fn token_from_raw(info: RawTokenInfo) -> TokenInfo {
@@ -107,6 +110,7 @@ impl Pkcs11Provider {
             custom_attributes,
             backend,
             state: RefCell::new(State::default()),
+            cache: r2_provider::cache::KeyCache::new(),
         }
     }
 
@@ -307,6 +311,16 @@ impl Pkcs11Provider {
         ckr::translate(err, &self.name, context, token_label)
     }
 
+    /// (logged in with a session, slot, token label) — for the cache loader job.
+    pub(crate) fn state_snapshot(&self) -> (bool, Option<u64>, Option<String>) {
+        let state = self.state.borrow();
+        (
+            state.logged_in && self.backend.has_session(),
+            state.slot,
+            state.token.as_ref().map(|t| t.label.clone()),
+        )
+    }
+
     pub(crate) fn auth_required(&self) -> ConsoleError {
         ConsoleError::auth_required(format!("login required: run `login {}`", self.name))
     }
@@ -322,6 +336,7 @@ impl Pkcs11Provider {
     /// c2 `_drop_session`: forget slot/login/PIN/mechanisms and close the session (errors
     /// suppressed — it is already gone, that is why it is dropped).
     pub(crate) fn drop_session(&self) {
+        self.cache.clear();
         {
             let mut state = self.state.borrow_mut();
             state.slot = None;
@@ -378,6 +393,8 @@ impl Pkcs11Provider {
                 });
                 state.mech_codes = codes;
                 drop(state);
+                // handles may have changed and session objects are gone (§5.19)
+                self.cache.invalidate_and_reload();
                 tracing::info!(target: "r2::pkcs11", "{}: session recovered on slot {}", self.name, slot);
                 Ok(())
             }
@@ -667,6 +684,7 @@ impl r2_provider::Provider for Pkcs11Provider {
     }
 
     fn logout(&self) -> Result<()> {
+        self.cache.clear();
         let logged_in = {
             let mut state = self.state.borrow_mut();
             state.pin = None;
@@ -709,6 +727,15 @@ impl r2_provider::Provider for Pkcs11Provider {
     fn list_keys(&self) -> Result<Vec<KeyInfo>> {
         self.list_keys_impl()
     }
+    fn find_objects(&self, query: &r2_provider::ObjectQuery) -> Result<Vec<KeyInfo>> {
+        self.find_objects_impl(query)
+    }
+    fn key_cache(&self) -> Option<&r2_provider::cache::KeyCache> {
+        Some(&self.cache)
+    }
+    fn key_load_job(&self) -> Result<r2_provider::cache::KeyLoadJob> {
+        self.key_load_job_impl()
+    }
     fn find_key(&self, selector: &r2_provider::KeySelector) -> Result<KeyInfo> {
         self.find_key_impl(selector)
     }
@@ -719,13 +746,21 @@ impl r2_provider::Provider for Pkcs11Provider {
         template: Option<&r2_core::template::KeyTemplate>,
         key_id: Option<&[u8]>,
     ) -> Result<KeyInfo> {
-        self.import_key_impl(material, label, template, key_id)
+        let info = self.import_key_impl(material, label, template, key_id)?;
+        self.cache_refresh_identity(&info);
+        Ok(info)
     }
     fn generate_key(&self, request: &r2_provider::GenerateRequest) -> Result<KeyInfo> {
-        self.generate_key_impl(request)
+        let info = self.generate_key_impl(request)?;
+        self.cache_refresh_identity(&info); // both halves of a keypair
+        Ok(info)
     }
     fn delete_key(&self, key: &KeyInfo) -> Result<()> {
-        self.delete_key_impl(key)
+        self.delete_key_impl(key)?;
+        if let Some(handle) = key.handle {
+            self.cache.remove(handle);
+        }
+        Ok(())
     }
     fn export_key(&self, key: &KeyInfo) -> Result<r2_core::keys::KeyMaterial> {
         self.export_key_impl(key)
@@ -768,7 +803,11 @@ impl r2_provider::Provider for Pkcs11Provider {
         key: &r2_core::keys::KeyInfo,
         mech: &r2_provider::MechanismInvocation,
     ) -> r2_core::Result<r2_provider::DeriveResult> {
-        self.derive_impl(key, mech)
+        let result = self.derive_impl(key, mech)?;
+        if let Some(info) = &result.key {
+            self.cache_refresh_identity(info);
+        }
+        Ok(result)
     }
     fn generate_random(&self, len: usize) -> r2_core::Result<zeroize::Zeroizing<Vec<u8>>> {
         self.generate_random_impl(len)
@@ -789,7 +828,9 @@ impl r2_provider::Provider for Pkcs11Provider {
         wrapped: &[u8],
         request: &r2_provider::UnwrapRequest,
     ) -> r2_core::Result<r2_core::keys::KeyInfo> {
-        self.unwrap_key_impl(wrapping_key, mech, wrapped, request)
+        let info = self.unwrap_key_impl(wrapping_key, mech, wrapped, request)?;
+        self.cache_refresh_identity(&info);
+        Ok(info)
     }
     fn read_key_template(
         &self,
@@ -802,7 +843,15 @@ impl r2_provider::Provider for Pkcs11Provider {
         key: &r2_core::keys::KeyInfo,
         changes: &r2_core::template::KeyTemplate,
     ) -> r2_core::Result<r2_provider::KeyEditResult> {
-        self.update_key_impl(key, changes)
+        let result = self.update_key_impl(key, changes)?;
+        // the edited object (same handle, maybe a new identity)
+        self.cache_refresh_identity(&result.key);
+        if let Some(handle) = key.handle
+            && result.key.handle != Some(handle)
+        {
+            self.cache_refresh_handle(handle, key.key_class);
+        }
+        Ok(result)
     }
     fn read_full_template(
         &self,

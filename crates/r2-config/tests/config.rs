@@ -28,6 +28,9 @@ use r2_core::params::{ParamKind, ParamStruct, ParamValue, Verb};
 use r2_core::template::{AttrKind, AttrValue};
 use r2_testkit::{EnvGuard, global_state_lock, set_env};
 
+/// The r2-only `cache` section (§5.19) `config show` appends after c2's sections.
+const R2_CACHE_SHOW: &str = "cache:\n  on_login: true\n";
+
 mod vectors {
     #![allow(dead_code)]
     include!("support/yaml_vectors.rs");
@@ -198,7 +201,11 @@ mod embedded_defaults {
     fn defaults_yaml_ships_inside_the_package() {
         let c2 = include_str!("support/c2_defaults.yaml");
         let transformed = c2.replace("/c2/", "/r2/").replacen("c2.log", "r2.log", 1);
-        assert_eq!(DEFAULTS_YAML, transformed);
+        // r2 additions are appended after c2's sections (§5.19 `cache`)
+        let r2_only = DEFAULTS_YAML
+            .strip_prefix(transformed.as_str())
+            .expect("defaults.yaml starts with c2's file");
+        assert!(r2_only.starts_with("\n# r2 addition"), "{r2_only:?}");
         assert!(!DEFAULTS_YAML.is_empty());
     }
 
@@ -328,7 +335,8 @@ mod embedded_defaults {
         assert_eq!(text, "");
         let config = config_from_yaml(None).unwrap();
         let dumped = yaml::dump(&config.to_value());
-        assert_eq!(posix_paths(&dumped, expected), expected);
+        let expected = format!("{expected}{R2_CACHE_SHOW}");
+        assert_eq!(posix_paths(&dumped, &expected), expected);
     }
 }
 
@@ -945,6 +953,7 @@ mod origins {
             sections,
             [
                 "app",
+                "cache", // r2 addition (§5.19)
                 "custom_mechanisms",
                 "providers",
                 "softhsm",
@@ -968,7 +977,7 @@ mod origins {
         let external = write(&iso.path().join("c.yaml"), "uii: {color: always}\n");
         let (loaded, _) = config_warnings(|| load_config(Some(&external)));
         let loaded = loaded.unwrap();
-        assert_eq!(loaded.origins.len(), 6);
+        assert_eq!(loaded.origins.len(), CONFIG_SECTIONS.len());
         assert!(!loaded.origins.contains_key("uii"));
     }
 }
@@ -1857,7 +1866,8 @@ mod config_show {
             let (config, _) = config_warnings(|| config_from_yaml(Some(text)));
             let config = config.unwrap();
             let dumped = yaml::dump(&config.to_value());
-            assert_eq!(posix_paths(&dumped, expected), *expected, "{text:?}");
+            let expected = format!("{expected}{R2_CACHE_SHOW}");
+            assert_eq!(posix_paths(&dumped, &expected), expected, "{text:?}");
         }
     }
 }
@@ -2155,4 +2165,43 @@ mod config_objects {
             assert_eq!(err.kind, ErrorKind::Config);
         }
     }
+}
+
+// ---- r2 addition: the key cache settings (§5.19) ----
+
+#[test]
+fn cache_settings_default_on_and_decode() {
+    let config = config_from_yaml(None).unwrap();
+    assert!(config.cache.on_login);
+    assert!(
+        config
+            .providers
+            .pkcs11
+            .iter()
+            .all(|i| i.cache_on_login.is_none())
+    );
+
+    let config = config_from_yaml(Some(
+        "cache: {on_login: false}\nproviders:\n  pkcs11:\n    - {name: a, library: /a.so, cache_on_login: true}\n    - {name: b, library: /b.so}\n",
+    ))
+    .unwrap();
+    assert!(!config.cache.on_login);
+    assert_eq!(config.providers.pkcs11[0].cache_on_login, Some(true));
+    assert_eq!(config.providers.pkcs11[1].cache_on_login, None);
+    // dumped back only when set
+    let dumped = yaml::dump(&config.to_value());
+    assert_contains(&dumped, "cache_on_login: true");
+    assert_eq!(dumped.matches("cache_on_login").count(), 1);
+    assert_contains(&dumped, "cache:\n  on_login: false");
+}
+
+#[test]
+fn cache_settings_reject_non_booleans() {
+    let err = config_from_yaml(Some("cache: {on_login: maybe}")).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Config);
+    let err = config_from_yaml(Some(
+        "providers:\n  pkcs11:\n    - {name: a, library: /a.so, cache_on_login: 3}\n",
+    ))
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Config);
 }

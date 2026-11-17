@@ -49,6 +49,50 @@ pub struct FakeProvider {
     type_name: String,
     hooks: Option<Rc<dyn FakeHooks>>,
     state: RefCell<State>,
+    /// `.with_key_cache()` (§5.19): the provider keeps a key cache like Pkcs11Provider.
+    key_cache: Option<r2_provider::cache::KeyCache>,
+    /// `.with_load_gate(..)`: the loader job pauses at the gate.
+    load_gate: Option<std::sync::Arc<LoadGate>>,
+}
+
+/// A pause point for the fake's cache loader (§5.19 tests): the job pushes `pause_after`
+/// objects, then waits until `open()` (or a stop request) before pushing the rest.
+#[derive(Debug)]
+pub struct LoadGate {
+    pause_after: usize,
+    opened: std::sync::Mutex<bool>,
+    signal: std::sync::Condvar,
+}
+
+impl LoadGate {
+    pub fn new(pause_after: usize) -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            pause_after,
+            opened: std::sync::Mutex::new(false),
+            signal: std::sync::Condvar::new(),
+        })
+    }
+    /// Let the paused loader continue.
+    pub fn open(&self) {
+        if let Ok(mut opened) = self.opened.lock() {
+            *opened = true;
+        }
+        self.signal.notify_all();
+    }
+    fn wait(&self, cancelled: &dyn Fn() -> bool) {
+        let Ok(mut opened) = self.opened.lock() else {
+            return;
+        };
+        while !*opened && !cancelled() {
+            match self
+                .signal
+                .wait_timeout(opened, std::time::Duration::from_millis(10))
+            {
+                Ok((guard, _)) => opened = guard,
+                Err(_) => return,
+            }
+        }
+    }
 }
 
 struct StoredKey {
@@ -103,6 +147,23 @@ impl FakeProvider {
                 tokens: None,
                 serial_counter: 0,
             }),
+            key_cache: None,
+            load_gate: None,
+        }
+    }
+    /// Builder: keep a key cache (§5.19) — `key_cache()` is Some, `key_load_job()` lists a
+    /// snapshot of the stored keys, and the fake patches the cache on its own changes.
+    pub fn with_key_cache(self) -> Self {
+        Self {
+            key_cache: Some(r2_provider::cache::KeyCache::new()),
+            ..self
+        }
+    }
+    /// Builder: the cache loader pauses at `gate` (implies `with_key_cache`).
+    pub fn with_load_gate(self, gate: std::sync::Arc<LoadGate>) -> Self {
+        Self {
+            load_gate: Some(gate),
+            ..self.with_key_cache()
         }
     }
     /// Builder: present as another type (copy-flow tests use "pkcs11"). Any type other than
@@ -204,6 +265,26 @@ impl FakeProvider {
 
     // -- internals -------------------------------------------------------------------------
 
+    /// In-place cache patch (§5.19): every stored object of `info`'s identity.
+    fn cache_patch_identity(&self, info: &KeyInfo) {
+        let Some(cache) = &self.key_cache else {
+            return;
+        };
+        let family: Vec<KeyInfo> = self
+            .state
+            .borrow()
+            .keys
+            .iter()
+            .filter(|rec| {
+                rec.info.key_ref.label == info.key_ref.label
+                    && rec.info.key_ref.key_id == info.key_ref.key_id
+            })
+            .map(|rec| rec.info.clone())
+            .collect();
+        for member in family {
+            cache.upsert(member);
+        }
+    }
     fn hooks(&self) -> Option<&dyn FakeHooks> {
         self.hooks.as_deref()
     }
@@ -1447,6 +1528,9 @@ impl Provider for FakeProvider {
         )
     }
     fn logout(&self) -> Result<()> {
+        if let Some(cache) = &self.key_cache {
+            cache.clear();
+        }
         dispatch!(self, logout(), self.base_logout())
     }
     fn mechanisms(&self) -> BTreeSet<String> {
@@ -1465,17 +1549,27 @@ impl Provider for FakeProvider {
         template: Option<&KeyTemplate>,
         key_id: Option<&[u8]>,
     ) -> Result<KeyInfo> {
-        dispatch!(
-            self,
-            import_key(material, label, template, key_id),
-            self.base_import_key(material, label, template, key_id)
-        )
+        let info = (|| {
+            dispatch!(
+                self,
+                import_key(material, label, template, key_id),
+                self.base_import_key(material, label, template, key_id)
+            )
+        })()?;
+        self.cache_patch_identity(&info);
+        Ok(info)
     }
     fn generate_key(&self, request: &GenerateRequest) -> Result<KeyInfo> {
-        dispatch!(self, generate_key(request), self.base_generate_key(request))
+        let info = (|| dispatch!(self, generate_key(request), self.base_generate_key(request)))()?;
+        self.cache_patch_identity(&info);
+        Ok(info)
     }
     fn delete_key(&self, key: &KeyInfo) -> Result<()> {
-        dispatch!(self, delete_key(key), self.base_delete_key(key))
+        (|| dispatch!(self, delete_key(key), self.base_delete_key(key)))()?;
+        if let (Some(cache), Some(handle)) = (&self.key_cache, key.handle) {
+            cache.remove(handle);
+        }
+        Ok(())
     }
     fn export_key(&self, key: &KeyInfo) -> Result<KeyMaterial> {
         dispatch!(self, export_key(key), self.base_export_key(key))
@@ -1567,6 +1661,42 @@ impl Provider for FakeProvider {
             read_full_template(key),
             self.base_read_full_template(key)
         )
+    }
+    fn key_cache(&self) -> Option<&r2_provider::cache::KeyCache> {
+        self.key_cache.as_ref()
+    }
+    fn key_load_job(&self) -> Result<r2_provider::cache::KeyLoadJob> {
+        if self.key_cache.is_none() {
+            return Err(ConsoleError::unsupported(format!(
+                "{} keeps no key cache",
+                self.name
+            )));
+        }
+        self.record("key_load_job", Vec::new());
+        self.require_login()?;
+        let snapshot: Vec<KeyInfo> = self
+            .state
+            .borrow()
+            .keys
+            .iter()
+            .map(|rec| rec.info.clone())
+            .collect();
+        let gate = self.load_gate.clone();
+        Ok(r2_provider::cache::KeyLoadJob::new(move |sink| {
+            sink.set_total(snapshot.len());
+            for (at, info) in snapshot.into_iter().enumerate() {
+                if let Some(gate) = &gate
+                    && at == gate.pause_after
+                {
+                    gate.wait(&|| sink.cancelled());
+                }
+                if sink.cancelled() {
+                    return Ok(());
+                }
+                sink.push(info);
+            }
+            Ok(())
+        }))
     }
     fn as_token_init(&self) -> Option<&dyn TokenInit> {
         if self.tokens_configured() {

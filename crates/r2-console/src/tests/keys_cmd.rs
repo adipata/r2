@@ -2006,7 +2006,7 @@ fn sibling_rename_stops_at_the_interrupt_flag() {
 fn keys_command_has_no_flags_and_export_login_flags() {
     let commands = all_commands().unwrap();
     assert_eq!(commands["export"].flags(), ["public"]);
-    assert_eq!(commands["login"].flags(), ["keep-pin"]);
+    assert_eq!(commands["login"].flags(), ["keep-pin", "no-cache"]);
     assert!(commands["keys"].flags().is_empty());
     for name in ["keys", "key", "generate", "load", "export", "csr", "delete"] {
         assert!(commands.contains_key(name), "{name}");

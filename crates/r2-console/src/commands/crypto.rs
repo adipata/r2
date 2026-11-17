@@ -82,7 +82,7 @@ pub(crate) fn public_half_for_verify(
         return Ok(key);
     }
     let candidates: Vec<KeyInfo> = provider
-        .list_keys()?
+        .find_objects(&r2_provider::ObjectQuery::label(key.key_ref.label.clone()))?
         .into_iter()
         .filter(|info| {
             info.key_ref.label == key.key_ref.label

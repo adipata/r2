@@ -62,7 +62,11 @@ pub fn find_public_part(
 ) -> r2_core::Result<Option<KeyInfo>> {
     // buckets: public by id, public by label, certificate by id, certificate by label
     let mut buckets: [Option<KeyInfo>; 4] = [None, None, None, None];
-    for info in provider.list_keys()? {
+    for info in r2_provider::lookup::family_candidates(
+        provider,
+        key,
+        &[KeyClass::Public, KeyClass::Certificate],
+    )? {
         let (id_bucket, label_bucket) = match info.key_class {
             KeyClass::Public => (0, 1),
             KeyClass::Certificate => (2, 3),

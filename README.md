@@ -86,6 +86,18 @@ touching the keys on it (the `pkcs11-tool --login --login-type so --init-pin` eq
 r2> init-pin prodhsm --slot 16     # prompts for the SO PIN, then the new user PIN twice
 ```
 
+On HSMs with many objects, `keys` and Tab completion read a key cache that r2 loads in
+the background after `login` (a spinner on the right of the prompt shows the progress).
+Commands that use a key still look it up live on the token. Ctrl+G or `cache stop` stops
+loading and keeps what was read; `keys` shows what is cached, then waits for the rest
+(Ctrl+C stops only the wait):
+
+```text
+r2> login prodhsm --no-cache       # log in without loading the cache
+r2> cache                          # state of each provider's cache
+r2> cache prodhsm                  # (re)load it in the background
+```
+
 Keys on PKCS#11 tokens go through a checklist template editor before creation — defaults
 are conservative (sensitive, non-extractable); flip rows deliberately. On a terminal it is
 an inline panel: ↑/↓ move, Space toggles a checkbox or edits a value (hex for bytes such as
@@ -115,6 +127,7 @@ providers:
     - name: prodhsm
       library: /usr/lib/libvendor_pkcs11.so
       token_label: PROD-TOKEN     # optional; slot: <id> also works
+      cache_on_login: false       # optional; overrides `cache: {on_login: true}`
 ```
 
 `config path` and `config show --origin` inside the REPL show which file each setting

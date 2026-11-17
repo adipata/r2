@@ -550,7 +550,11 @@ fn data_attr_rows(key: &KeyInfo) -> Vec<TemplateAttr> {
 /// A PUBLIC (preferred) or CERTIFICATE object sharing the key's CKA_ID/label.
 fn find_public_part(source: &dyn Provider, key: &KeyInfo) -> Result<Option<KeyInfo>> {
     let mut best: Option<(u8, KeyInfo)> = None;
-    for info in source.list_keys()? {
+    for info in r2_provider::lookup::family_candidates(
+        source,
+        key,
+        &[KeyClass::Public, KeyClass::Certificate],
+    )? {
         if !matches!(info.key_class, KeyClass::Public | KeyClass::Certificate) {
             continue;
         }
@@ -572,7 +576,7 @@ fn find_public_part(source: &dyn Provider, key: &KeyInfo) -> Result<Option<KeyIn
 }
 
 fn find_generated_public(dest: &dyn Provider, label: &str) -> Result<KeyInfo> {
-    dest.list_keys()?
+    dest.find_objects(&r2_provider::ObjectQuery::label(label).with_class(Some(KeyClass::Public)))?
         .into_iter()
         .find(|info| info.key_ref.label == label && info.key_class == KeyClass::Public)
         .ok_or_else(|| {

@@ -8,6 +8,7 @@ fn build_rs_lists_every_command_module() {
     assert_eq!(
         stems,
         [
+            "cache",
             "copy",
             "crypto",
             "help",

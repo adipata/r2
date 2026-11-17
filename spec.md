@@ -240,7 +240,7 @@ Compile-time and lint enforcement of c2's CLAUDE.md conventions (workspace lints
 | c2 convention | r2 enforcement |
 |---|---|
 | no `print()` (ruff T20) | `clippy::print_stdout` / `print_stderr` = deny. Allowed sites (each `#[allow]`ed): r2-cli `--version` and pre-REPL startup errors; r2-console's two one-line stderr warnings (`DegradingReader` fallback, mintty/msys hidden-input warning); `r2_testkit::contract::skip`. Console output goes through `std::io::Write` on the Sink, never the print macros |
-| no ad-hoc threads (§6) | `disallowed-methods`: `std::thread::spawn`. Allowed exceptions: the indicatif ticker (only inside `busy()`) and the `ctrlc` handler thread, which touch nothing but their own state / one `AtomicBool`. Providers are `!Send`/`!Sync` (`Rc`/`RefCell` inside), so moving one to another thread does not compile |
+| no ad-hoc threads (§6) | `disallowed-methods`: `std::thread::spawn`. Allowed exceptions: the indicatif ticker (only inside `busy()`), the `ctrlc` handler thread, which touch nothing but their own state / one `AtomicBool`, and the key cache loader threads (§5.19, `std::thread::Builder::spawn` in `r2_console::cache`), which touch only their `LoadShared` and their own PKCS#11 session. Providers are `!Send`/`!Sync` (`Rc`/`RefCell` inside), so moving one to another thread does not compile |
 | env mutation only before `C_Initialize` | `disallowed-methods`: `std::env::set_var`/`remove_var`, with exactly one audited production `#[allow]` site in `r2-pkcs11` (`crate::env::apply_env`; edition 2024 makes it `unsafe`; the single-thread invariant is the safety argument; the site asserts no spinner is active) and one test-only site, `r2_testkit::env` (`set_env` + `EnvGuard`, used under `global_state_lock()`; c2 `monkeypatch.setenv`/`delenv`) |
 | no bare `except`; every raised error is a `ConsoleError` | every fallible public fn returns `r2_core::Result<T>`; `clippy::unwrap_used` / `expect_used` = deny outside tests (test exemption mechanism: §4.1.3); panics that still occur are caught per command (§5.1, §11 D4) |
 | mypy strict | the compiler; `#![forbid(unsafe_code)]` in every crate except `r2-pkcs11` and the dev-only `r2-testkit` (`#![deny(unsafe_code)]` + audited `#[allow]`s) |
@@ -787,7 +787,8 @@ port of rich's `Table` layout (§4.9.2; `comfy-table` was dropped by R13 fix rou
   clippy::expect_used, clippy::print_stdout, clippy::print_stderr)]` (helper fns outside
   `#[test]` fns, and the testkit's library code, are otherwise linted).
 - `clippy.toml` `disallowed-methods`: `std::thread::spawn` (allowed: the `ctrlc` handler in
-  r2-cli and the indicatif ticker in r2-console, §4.9.8), `std::env::set_var` and
+  r2-cli and the indicatif ticker in r2-console, §4.9.8), `std::thread::Builder::spawn`
+  (allowed only in `r2_console::cache::spawn`, the key cache loader thread, §5.19), `std::env::set_var` and
   `std::env::remove_var` (allowed only in r2-pkcs11's `crate::env` — production — and in
   `r2_testkit::env` — tests),
   `openssl::pkey::PKey::private_key_from_pem`, `openssl::rsa::Rsa::private_key_from_pem`,
@@ -2359,6 +2360,20 @@ pub trait Provider {
         Err(ConsoleError::unsupported(format!("{} does not support template dumps", self.name())))
     }
 
+    // -- key cache and targeted lookups (r2 addition, §5.19, §11 D36) --
+    /// The objects matching every set field of `query` (`ObjectQuery { label, key_id,
+    /// key_class }`), in `list_keys` order. Default: `list_keys` filtered by
+    /// `query.matches`; Pkcs11Provider runs one C_FindObjects with the query as template.
+    /// Used for the partner lookups (`lookup::family_candidates`, `key info` related, verify
+    /// with a private ref, export/cert/transfer partners) so they never list the token.
+    fn find_objects(&self, query: &ObjectQuery) -> Result<Vec<KeyInfo>> { .. }
+    /// The provider's key cache (`r2_provider::cache::KeyCache`), read by `keys` and ref
+    /// completion only. Default None (memory: always listed live).
+    fn key_cache(&self) -> Option<&crate::cache::KeyCache> { None }
+    /// A `Send` job that lists every object on a session of its own (the loader thread runs
+    /// it). Default UnsupportedOperation; AuthRequired while logged out.
+    fn key_load_job(&self) -> Result<crate::cache::KeyLoadJob> { .. }
+
     // -- seams --
     /// The SoftHSM-wizard seam (§4.9.9): Some for providers that can initialize tokens
     /// (Pkcs11Provider; FakeProvider configured with `.with_tokens(..)`).
@@ -2930,6 +2945,15 @@ pub(crate) trait Backend {
     fn find_objects(&self, template: &[RawAttr]) -> BResult<Vec<u64>>;
     /// One attribute per call; None = sensitive, type-invalid, arguments-bad or unavailable.
     fn get_attr(&self, object: u64, attribute: u64) -> BResult<Option<Zeroizing<Vec<u8>>>>;
+    /// One C_GetAttributeValue for all `attributes` (§5.19); when the token answers the
+    /// batch with a refusal, falls back to one `get_attr` per attribute. Same per-entry
+    /// semantics as `get_attr`.
+    fn get_attrs(&self, object: u64, attributes: &[u64]) -> BResult<Vec<Option<Zeroizing<Vec<u8>>>>>;
+    /// The key cache loader's session factory (§5.19): runs on the loader thread and opens
+    /// a read-only session of its own on `slot` (RawFns: its own `dlopen` handle, raw
+    /// C_OpenSession/C_FindObjects/C_GetAttributeValue/C_CloseSession). While any loader
+    /// lives, `release()` skips C_Finalize.
+    fn loader(&self, slot: u64) -> BResult<LoaderFactory>;
     /// One C_SetAttributeValue call (all-or-nothing).
     fn set_attrs(&self, object: u64, template: &[RawAttr]) -> BResult<()>;
     fn create_object(&self, template: &[RawAttr]) -> BResult<u64>;
@@ -3745,8 +3769,9 @@ use r2_core::params::{ParamKind, ParamStruct, ParamValue, Verb};
 use r2_core::template::{AttrKind, AttrValue, KeyTemplate};
 use crate::yaml::Value;
 
-/// The six top-level sections in defaults.yaml order (`config show --origin`).
-pub const CONFIG_SECTIONS: [&str; 6] = ["app", "ui", "providers", "softhsm", "templates", "custom_mechanisms"];
+/// The top-level sections in defaults.yaml order (`config show --origin`); `cache` is the
+/// r2 addition of §5.19, appended after c2's six.
+pub const CONFIG_SECTIONS: [&str; 7] = ["app", "ui", "providers", "softhsm", "templates", "custom_mechanisms", "cache"];
 /// Class keys of templates.pkcs11 (§7) and of template files (§5.16).
 pub const TEMPLATE_CLASS_KEYS: [&str; 8] =
     ["aes", "rsa_private", "rsa_public", "ec_private", "ec_public", "certificate", "generic_secret", "data"];
@@ -3799,6 +3824,9 @@ pub struct Pkcs11InstanceConfig {
     pub token_label: Option<String>,
     /// Set in the process environment immediately before C_Initialize (§4.5.5).
     pub env: IndexMap<String, String>,
+    /// r2 addition (§5.19): overrides `cache.on_login` for this instance; dumped only
+    /// when set.
+    pub cache_on_login: Option<bool>,
 }
 impl Pkcs11InstanceConfig {
     /// slot/token_label None, env empty (the SoftHSM autodetect instance).
@@ -3896,6 +3924,8 @@ pub struct AppConfig {
     pub softhsm: SoftHsmSection,
     pub templates: TemplatesSection,
     pub custom_mechanisms: Vec<CustomMechanismConfig>,
+    /// r2 addition (§5.19): `cache: {on_login: bool}`, default true.
+    pub cache: CacheSection,
 }
 impl AppConfig {
     /// Typed decode of the merged tree + cross-checks (§4.8.3).
@@ -4146,6 +4176,12 @@ pub trait ConsoleIo {
         let _ = message;
         f();
     }
+    /// True when output reaches a live terminal that shows progress (TerminalIo with
+    /// spinners allowed and a styled sink; r2 addition, §5.19). `keys` then prints the
+    /// cached objects before waiting for a running load, and the REPL prints load notices;
+    /// otherwise `keys` waits first and only failure notices are printed. Default false
+    /// (ScriptedIo: `set_live_progress`).
+    fn live_progress(&self) -> bool { false }
     /// Hand `f` the keyboard and the screen rows below the output so far (provisional r2
     /// addition, §11 D34; c2 never had one). TerminalIo on a working terminal with styled
     /// output calls `f` exactly once with a `KeySession`, erases the last frame when `f`
@@ -6176,11 +6212,13 @@ config path
 
 providers                         # table: name, type, library, auth state, token label/serial
 slots <provider>                  # tokens of a PKCS#11 provider
-login <provider> [<token-label> | --slot <n>] [--pin <pin>] [--keep-pin]
-                                  # PIN prompted hidden if omitted; --keep-pin: §5.2
+login <provider> [<token-label> | --slot <n>] [--pin <pin>] [--keep-pin] [--no-cache]
+                                  # PIN prompted hidden if omitted; --keep-pin: §5.2;
+                                  # starts loading the key cache unless --no-cache (§5.19)
 logout <provider>
 init-pin <provider> [<token-label> | --slot <n>] [--so-pin <pin>] [--new-pin <pin>]
                                   # SO login + C_InitPIN: set/reset the user PIN (§5.18, D35)
+cache [<provider> | stop]         # key cache status / (re)load in the background / stop (§5.19)
 
 keys [<provider>] [<filter>]      # table: ref, class (secret/private/public/cert/data), algorithm
                                   # (incl. generic, `-` for data, `other` for unmodelled types),
@@ -7492,6 +7530,77 @@ never printed or logged, and lines with `--so-pin`/`--new-pin` stay out of the h
 like `--pin` (§5.1). Completion: provider names for the first argument, otherwise
 `--slot`, `--so-pin`, `--new-pin`.
 
+### 5.19 Key cache (r2 addition, §11 D36)
+
+On an HSM with very many objects, listing the whole token takes long and froze `keys` and
+ref completion. Each PKCS#11 provider therefore keeps a **key cache**
+(`r2_provider::cache::KeyCache`, returned by `Provider::key_cache()`; memory providers
+have none and are always listed live). The cache lives in memory only.
+
+**Readers.** Only `keys` and ref completion (Tab) read the cache. Every command that acts
+on a key resolves it live, exactly as before. Partner lookups never list the token: they
+use `Provider::find_objects(ObjectQuery)` (a C_FindObjects on label and/or CKA_ID),
+through `lookup::family_candidates` (export of a public part, certificate lookups,
+transfer partners), `key info`'s `related:` line, the public half for `verify` with a
+private ref, and the generated public half after `generate`.
+
+**Loading.** A load runs on a loader thread of its own (spec §6 exception), which opens a
+read-only PKCS#11 session of its own (`Backend::loader`), searches every class
+(C_FindObjects in batches of 1024), then reads each object's `key info` attributes with
+one batched C_GetAttributeValue (`Backend::get_attrs`, falling back to one attribute per
+call when the batch is refused). An object deleted meanwhile (CKR_OBJECT_HANDLE_INVALID)
+is skipped. The thread only fills its `LoadShared` (progress, objects, outcome); the REPL
+thread merges them (`KeyCache::sync`). One load per provider runs at a time; loads of
+different providers run in parallel. While a load runs, the previous objects stay
+readable; a load that completes replaces them.
+
+A load starts:
+- at `login`, when `cache.on_login` (default true) or the instance's
+  `providers.pkcs11[].cache_on_login` (which overrides it) is true, unless
+  `login --no-cache` is given; on a live terminal r2 prints
+  `loading the key cache of <p> in the background — Ctrl+G stops it`;
+- on `cache <provider>`, `keys` and Tab, when the cache is not complete and not loading;
+- after a session auto-recovery (§5.2, `--keep-pin`), which drops the cache and loads it
+  again.
+
+**Stopping.** Ctrl+G at the prompt (it replaces reedline's Emacs redo binding) and
+`cache stop` stop every running load. A stopped or failed load keeps the objects read so
+far; the cache is then *partial* until `cache <provider>`, `keys` or Tab loads it again.
+`logout` and `init-pin` drop the cache and stop its load. `exit` never waits for a load:
+it stops them, and C_Finalize is skipped while a loader is still inside a PKCS#11 call.
+
+**Changes made by r2** patch the cache in place: import, generate, unwrap, derive, `key
+edit` re-read the objects of the new identity; `delete` removes them. There is no
+periodic refresh (objects created outside r2 appear after the next load).
+
+**`keys`.** Cached providers are listed from the cache. While a load runs, on a live
+terminal (`ConsoleIo::live_progress`), `keys` prints what is cached with the count line
+suffixed ` (partial: <p> <n> of <total> objects loaded)`, then waits with the spinner
+`loading the key cache of <p> … Ctrl+C stops waiting (loading continues)`, then prints
+the rows that arrived (table `keys (loaded while waiting)`) and the final count line.
+Ctrl+C ends the wait only: `stopped waiting — the key cache keeps loading in the
+background`. On piped input `keys` waits first and prints one complete table. A cache whose
+last load failed adds `note: the key cache of '<p>' is incomplete — its last load failed:
+<error>`.
+
+**Tab** never waits: it completes from the cache as it is, starts a load when needed, and
+each Tab press searches the cache again.
+
+**`cache`** (`commands/cache.rs`, usage `cache [<provider> | stop]`): without argument, the
+table `key caches` with columns provider, state (`none`, `empty`, `loading`, `complete`,
+`partial`), objects and detail; `cache <provider>` starts a load (`loading the key cache of
+<p> in the background — Ctrl+G or `cache stop` stops it`) or reports `the key cache of <p>
+is already loading (<n> of <total>)`; a memory provider → UnsupportedOperation `<p> keeps
+no key cache`; logged out → AuthRequired. `cache stop` prints `stopping the key cache
+loading of <p>, …` or `no key cache is loading`. Completion: provider names and `stop`.
+
+**Indicator and notices.** While a load runs, the prompt line shows right-aligned dark-grey
+text `⠹ cache <p> <n>/<total> · Ctrl+G stops`, redrawn every 100 ms from reedline's idle
+callback only when the input fits on the prompt row (reedline's own right-prompt rule).
+When a load ends, a line is printed above the prompt: `cache: <p>: <n> objects loaded in
+<s> s`, `cache: <p>: loading stopped (<n> of <total> objects loaded)` or `cache: <p>:
+loading failed: <error> (<n> of <total>)`. On piped input only failure notices are printed.
+
 ## 6. Non-functional requirements
 
 - **Single-threaded invariant**: every cryptoki call happens on the REPL thread. PKCS#11
@@ -7503,6 +7612,10 @@ like `--pin` (§5.1). Completion: provider names for the first argument, otherwi
   (sets one `AtomicBool`) and the indicatif ticker, which lives only inside `busy()`.
   Future background work requires an explicit event queue — no ad-hoc threads (§3.1
   `disallowed-methods`).
+  Exception (r2 addition, §5.19): the key cache loader threads, one per running load. Each
+  holds only a `Send` job built on the REPL thread, its `Arc<LoadShared>` and a read-only
+  PKCS#11 session it opens itself on its own RawFns handle; it never touches a provider,
+  the registry or the IO. Its results are merged on the REPL thread.
 - **Spinner** (an r2 addition, §11 D10; c2 §6 specified a `rich.status` spinner that c2
   never shipped): long HSM calls run inside `LineIo::busy(msg, f)`, which shows an
   indicatif spinner only in TerminalIo and only when stderr is a terminal. Draw target
@@ -9065,6 +9178,21 @@ one OpenSSL's `X509` decoder accepts). Verified by R6 x509build tests
   init_pin_rejected_new_pin_gets_a_hint, init_pin_refuses_a_logged_in_provider}` and
   `softhsm_provider::softhsm_init_pin_resets_the_user_pin_and_keeps_the_objects`;
   r2-console `tests::init_pin_cmd::*` and `tests::io::test_history_filters_pin_and_password_lines`.
+
+**D36 — Key cache for `keys` and ref completion (r2 addition; user decision 2026-11-17).**
+- *Description*: c2@408d6f2 listed the whole token for every `keys` and every Tab, and
+  partner lookups listed it too. r2 keeps a memory-only key cache per PKCS#11 provider,
+  loaded on a background thread (§5.19, §6 exception) at login (`cache.on_login`,
+  `providers.pkcs11[].cache_on_login`, `login --no-cache`), by `cache <provider>`, `keys`
+  and Tab; Ctrl+G or `cache stop` stops loading; r2's own changes patch it in place.
+  Partner lookups use targeted searches (`Provider::find_objects`), and attribute reads are
+  batched (`Backend::get_attrs`). New: the `cache` command, the `cache` config section
+  (appended after c2's six), `ConsoleIo::live_progress`, the prompt indicator and load
+  notices; Ctrl+G no longer means redo.
+- *Reason*: on HSMs with very many keys `keys` and Tab froze the console.
+- *Verified by*: r2-provider `key_cache::*`; r2-pkcs11 `tests::key_cache::*`; r2-console
+  `tests::cache_cmd::*` and `io::indicator::unit::*`; r2-config
+  `cache_settings_default_on_and_decode`, `cache_settings_reject_non_booleans`.
 
 **Resolved without deviation** (recorded so they are not mistaken for gaps):
 
