@@ -36,8 +36,9 @@ pub fn matches_selector(info: &KeyInfo, selector: &KeySelector) -> bool {
 /// "no {class }key '{label}' on provider {provider}" ("{class} " = `key_class.as_str()`
 /// plus a space when a class selector was given, else empty). 1 match → it. Several: when
 /// `selector.key_class` is None AND all matches share one key_id AND their classes are
-/// pairwise distinct (a keypair / key+certificate family) → the first match in
-/// CLASS_PREFERENCE order; otherwise AmbiguousKey "'{label}' matches {n} keys on
+/// pairwise distinct (a keypair / key+certificate family) and no Secret match sits beside
+/// a Private, Public or Certificate one (that is two keys, r2 addition) → the first match
+/// in CLASS_PREFERENCE order; otherwise AmbiguousKey "'{label}' matches {n} keys on
 /// {provider}: {display_refs(matches) joined ', '}" with candidates = their refs and hint
 /// "disambiguate with label#id, a :priv/:pub/:cert/:secret/:data suffix, or @handle".
 pub fn select_match(
@@ -68,7 +69,12 @@ pub fn select_match(
                 .iter()
                 .all(|other| other.key_class != info.key_class)
         });
-        if one_id && distinct_classes {
+        // a secret key is never one key with a private/public key or a certificate:
+        // the same label on both is two keys, and picking one would be a silent guess
+        let has = |class: KeyClass| matches.iter().any(|info| info.key_class == class);
+        let secret_with_asymmetric = has(KeyClass::Secret)
+            && (has(KeyClass::Private) || has(KeyClass::Public) || has(KeyClass::Certificate));
+        if one_id && distinct_classes && !secret_with_asymmetric {
             for preferred in CLASS_PREFERENCE {
                 if let Some(pos) = matches.iter().position(|info| info.key_class == preferred) {
                     return Ok(matches.swap_remove(pos));

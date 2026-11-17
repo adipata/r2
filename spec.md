@@ -2466,8 +2466,9 @@ pub fn matches_selector(info: &KeyInfo, selector: &KeySelector) -> bool { .. }
 /// "no {class }key '{label}' on provider {provider}" ("{class} " = `key_class.as_str()`
 /// plus a space when a class selector was given, else empty). 1 match → it. Several: when
 /// `selector.key_class` is None AND all matches share one key_id AND their classes are
-/// pairwise distinct (a keypair / key+certificate family) → the first match in
-/// CLASS_PREFERENCE order; otherwise AmbiguousKey "'{label}' matches {n} keys on
+/// pairwise distinct (a keypair / key+certificate family) and no Secret match sits beside
+/// a Private, Public or Certificate one (that is two keys, r2 addition) → the first match
+/// in CLASS_PREFERENCE order; otherwise AmbiguousKey "'{label}' matches {n} keys on
 /// {provider}: {display_refs(matches) joined ', '}" with candidates = their refs and hint
 /// "disambiguate with label#id, a :priv/:pub/:cert/:secret/:data suffix, or @handle".
 pub fn select_match(provider: &str, selector: &KeySelector, matches: Vec<KeyInfo>) -> Result<KeyInfo> { .. }
@@ -6302,7 +6303,11 @@ input` error with a re-prompt; inline `iv=…` values are never replaced.
 CERTIFICATE object sharing its label (and CKA_ID when the ref carries one) — there is no
 ref grammar for a keypair's public half, and verify operations bind to
 `{PUBLIC, CERTIFICATE}` (§4.6); with no co-located object the private resolution stands
-and the ordinary capability errors apply (c2 L13 fold-back). Positional disambiguation for
+and the ordinary capability errors apply (c2 L13 fold-back). When two objects of the
+class it would use fit (two public halves, or no public half and two certificates), it
+never picks one: AmbiguousKey "'{label}' has {n} {class} objects to verify with on
+{provider}: {display_refs}" with hint "name the one to verify with: label#id, :pub/:cert,
+or @handle" (r2 addition). Positional disambiguation for
 crypto verbs: positional 1 must parse as a key ref; positional 2 is a mechanism iff it is
 **unquoted** (`BoundArgs.positional_quoted`, §4.9) and matches `resolve_cli()` for that
 key, else it is data — so quoting data forces it as data, and mech-name-shaped strings
