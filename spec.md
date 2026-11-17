@@ -7572,7 +7572,9 @@ A load starts:
 `cache stop` stop every running load. A stopped or failed load keeps the objects read so
 far; the cache is then *partial* until `cache <provider>`, `keys` or Tab loads it again.
 `logout` and `init-pin` drop the cache and stop its load. `exit` never waits for a load:
-it stops them, and C_Finalize is skipped while a loader is still inside a PKCS#11 call.
+it stops them, and each provider's shutdown waits at most 2 s for a stopped loader to
+finish its current PKCS#11 call (a module torn down under a running call can crash the
+process); a loader still inside a call after that keeps the module un-finalized.
 
 **Changes made by r2** patch the cache in place: import, generate, unwrap, derive, `key
 edit` re-read the objects of the new identity; `delete` removes them. There is no

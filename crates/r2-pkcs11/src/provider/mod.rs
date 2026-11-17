@@ -16,6 +16,10 @@ use crate::backend::cryptoki::CryptokiBackend;
 use crate::backend::{Backend, BackendError, RawTokenInfo, UserKind};
 use crate::ckr::{self, rv};
 
+/// How long `shutdown` (exit) waits for a stopped key cache loader to finish its current
+/// PKCS#11 call before finalizing (spec §5.19).
+const LOADER_EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Errors inside a session operation: a raw backend failure (translated by `op`, after the
 /// §5.2 recovery check) or an already translated console error (passed through).
 #[derive(Debug)]
@@ -587,7 +591,13 @@ impl r2_provider::Provider for Pkcs11Provider {
         if self.backend.has_session() {
             let _ = self.backend.logout(); // shutdown is best-effort
         }
-        self.drop_session();
+        self.drop_session(); // also stops a running key cache load
+        // a loader still inside a call when the process exits can crash in the module's
+        // teardown: give it a moment to finish its call (§5.19); if it doesn't, finalize
+        // is skipped and exit goes ahead
+        if !self.backend.wait_for_loaders(LOADER_EXIT_WAIT) {
+            tracing::info!(target: "r2::pkcs11", "{}: a key cache loader is still in a call", self.name);
+        }
         let initialized = {
             let mut state = self.state.borrow_mut();
             state.token = None;

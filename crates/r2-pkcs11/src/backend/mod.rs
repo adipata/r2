@@ -150,6 +150,13 @@ pub(crate) trait Backend {
     /// `Send` closure run ON the loader thread, which opens a read-only session of its own
     /// there (the token's login applies to it). The module must be initialized.
     fn loader(&self, slot: u64) -> BResult<LoaderFactory>;
+    /// Wait up to `timeout` until no key cache loader of this module is alive (their
+    /// stop was requested before). True when none is left. Never holds the call lock,
+    /// so a loader can finish its current call and close its session (spec §5.19).
+    fn wait_for_loaders(&self, timeout: std::time::Duration) -> bool {
+        let _ = timeout;
+        true
+    }
     /// One C_SetAttributeValue call (all-or-nothing).
     fn set_attrs(&self, object: u64, template: &[RawAttr]) -> BResult<()>;
     fn create_object(&self, template: &[RawAttr]) -> BResult<u64>;

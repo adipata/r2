@@ -677,6 +677,21 @@ impl super::Backend for CryptokiBackend {
         }))
     }
 
+    fn wait_for_loaders(&self, timeout: std::time::Duration) -> bool {
+        // no call lock here: the loader needs it to finish its call and close its session
+        let Some(key) = self.module.borrow().as_ref().map(|(key, _)| key.clone()) else {
+            return true;
+        };
+        let start = std::time::Instant::now();
+        while raw::loader_active(&key) {
+            if start.elapsed() >= timeout {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        true
+    }
+
     fn set_attrs(&self, object: u64, template: &[RawAttr]) -> BResult<()> {
         let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         let handle = obj(object)?;
