@@ -6224,6 +6224,11 @@ export <provider>:<label> <path> --kek <label>[#<id-hex>][:<class>] [--mech <nam
                                   # wrapped export (§5.6): the blob `load --kek` consumes
 csr <provider>:<label> <path> [--subject "<DN>"] [--hash sha256|sha384|sha512]
 delete <provider>:<label>         # confirmation per ui.confirm_delete
+                                  # a ref matching several objects (no keypair-family
+                                  # collapse) lists them in a `matches` table, asks once
+                                  # "'<label>' matches N objects on <provider>: delete all N?"
+                                  # and deletes them all; a failure stops there and says
+                                  # "(deleted k of N before this failure)"
 
 ops [<provider>] [--key <provider>:<label>]
 encrypt <provider>:<label> [<mech>] [<name>=<value> ...] [<data>] [--in <path>]
