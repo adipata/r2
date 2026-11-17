@@ -979,7 +979,10 @@ impl Pkcs11Provider {
                     cka::CLASS,
                     Zeroizing::new(ulong_bytes(cko(key_class)).map_err(fail)?),
                 )];
-                for handle in session.find_objects(&template).map_err(fail)? {
+                for handle in session
+                    .find_objects(&template, &|| sink.cancelled())
+                    .map_err(fail)?
+                {
                     handles.push((key_class, handle));
                 }
             }

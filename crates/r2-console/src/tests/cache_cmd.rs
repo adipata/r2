@@ -364,3 +364,106 @@ fn cache_on_login_config_turns_it_off_globally_and_per_hsm() {
     );
     assert_eq!(loads(&hsm), 1);
 }
+
+// ---- a loader that cannot work ----
+
+fn failing_hsm(labels: &[&str]) -> Rc<FakeProvider> {
+    with_keys(
+        FakeProvider::new("hsm")
+            .with_type_name("pkcs11")
+            .with_failing_cache_load("CKR_SESSION_COUNT"),
+        labels,
+    )
+}
+
+#[test]
+fn a_failed_load_lists_live_and_is_not_retried_per_keys_or_tab() {
+    let hsm = failing_hsm(&["alpha", "beta"]);
+    let (ctx, io) = session(&hsm, &[]);
+    run_line(&ctx, "keys hsm").unwrap(); // piped: waits for the (failing) load
+    let text = io.text();
+    assert!(
+        text.contains("hsm:alpha") && text.contains("hsm:beta"),
+        "{text}"
+    );
+    assert!(text.contains("found 2 keys in hsm"), "{text}");
+    assert!(
+        text.contains(
+            "note: the key cache of 'hsm' could not be loaded (CKR_SESSION_COUNT) — listed live; \
+             `cache hsm` retries"
+        ),
+        "{text}"
+    );
+    assert!(hsm.key_cache().unwrap().failed());
+    // no new loader per keys or Tab, and Tab completes live
+    run_line(&ctx, "keys hsm").unwrap();
+    assert_eq!(complete_refs(&ctx, "hsm:a"), ["hsm:alpha#00000001"]);
+    assert_eq!(loads(&hsm), 1);
+    // the failure is reported once: keys showed it, so no notice follows
+    assert!(crate::cache::take_notices(false).is_empty());
+    // `cache hsm` retries
+    run_line(&ctx, "cache hsm").unwrap();
+    assert_eq!(loads(&hsm), 2);
+}
+
+#[test]
+fn cache_status_shows_a_failed_load() {
+    let hsm = failing_hsm(&[]);
+    let (ctx, io) = session(&hsm, &[]);
+    run_line(&ctx, "cache hsm").unwrap();
+    wait_until(&hsm, |status| status.state == CacheState::Partial);
+    run_line(&ctx, "cache").unwrap();
+    let text = io.text();
+    assert!(text.contains("failed"), "{text}");
+    assert!(
+        text.contains("CKR_SESSION_COUNT — listed live until `cache hsm` succeeds"),
+        "{text}"
+    );
+}
+
+#[test]
+fn tab_does_not_undo_a_stop_but_keys_and_cache_do() {
+    let gate = LoadGate::new(1);
+    let hsm = with_keys(
+        FakeProvider::new("hsm")
+            .with_type_name("pkcs11")
+            .with_load_gate(Arc::clone(&gate)),
+        &["alpha", "beta"],
+    );
+    let (ctx, io) = session(&hsm, &[]);
+    run_line(&ctx, "cache hsm").unwrap();
+    wait_until(&hsm, |status| status.count == 1);
+    run_line(&ctx, "cache stop").unwrap();
+    wait_until(&hsm, |status| status.state == CacheState::Partial);
+    // Tab completes from the partial cache and starts nothing
+    assert_eq!(complete_refs(&ctx, "hsm:a"), ["hsm:alpha#00000001"]);
+    assert!(complete_refs(&ctx, "hsm:b").is_empty());
+    assert_eq!(loads(&hsm), 1);
+    // `cache hsm` loads again
+    gate.open();
+    run_line(&ctx, "cache hsm").unwrap();
+    assert_eq!(loads(&hsm), 2);
+    wait_until(&hsm, |status| status.state == CacheState::Complete);
+    assert_eq!(complete_refs(&ctx, "hsm:b"), ["hsm:beta#00000002"]);
+    assert!(!io.text().contains("already loading"));
+}
+
+#[test]
+fn cache_right_after_a_stop_starts_at_once() {
+    let gate = LoadGate::new(0);
+    let hsm = with_keys(
+        FakeProvider::new("hsm")
+            .with_type_name("pkcs11")
+            .with_load_gate(Arc::clone(&gate)),
+        &["alpha"],
+    );
+    let (ctx, io) = session(&hsm, &[]);
+    run_line(&ctx, "cache hsm").unwrap();
+    run_line(&ctx, "cache stop").unwrap();
+    // the stopped loader may still be winding down: a new load starts anyway
+    run_line(&ctx, "cache hsm").unwrap();
+    assert_eq!(loads(&hsm), 2);
+    assert!(!io.text().contains("already loading"), "{}", io.text());
+    gate.open();
+    wait_until(&hsm, |status| status.state == CacheState::Complete);
+}

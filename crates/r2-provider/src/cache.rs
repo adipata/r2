@@ -363,6 +363,20 @@ impl KeyCache {
         CacheView { keys, status }
     }
 
+    /// True when the last load was stopped (and none runs): Tab then completes from what
+    /// it read and does not load again; `keys` and `cache <provider>` do.
+    pub fn stopped(&self) -> bool {
+        let status = self.status();
+        status.state == CacheState::Partial && status.last_error.is_none()
+    }
+
+    /// True when the last load failed (and none runs): the console then lists live and
+    /// does not retry on its own — only `cache <provider>`, a login or a recovery load again.
+    pub fn failed(&self) -> bool {
+        let status = self.status();
+        status.state == CacheState::Partial && status.last_error.is_some()
+    }
+
     /// True while a load runs.
     pub fn is_loading(&self) -> bool {
         self.sync();
@@ -376,12 +390,25 @@ impl KeyCache {
     }
 
     /// Start a load: None when one is already running (loading happens once at a time).
-    /// The served objects stay readable until the new load completes.
+    /// A load that was asked to stop but is still finishing its current call does not
+    /// count: it is let go (what it read so far is kept, as after any stop; its later
+    /// results are ignored). The served objects stay readable until the new load completes.
     pub fn begin(&self, provider: &str) -> Option<Arc<LoadShared>> {
         self.sync();
         let mut inner = self.inner.borrow_mut();
-        if inner.loading.is_some() {
-            return None;
+        if let Some(old) = inner.loading.clone() {
+            if !old.stop_requested() {
+                return None;
+            }
+            inner.loading = None;
+            inner.touched.clear();
+            let incoming = std::mem::take(&mut inner.incoming);
+            for info in incoming.items {
+                inner.entries.upsert(info);
+            }
+            inner.complete = false;
+            inner.has_data = true;
+            inner.last_error = None;
         }
         let load = Arc::new(LoadShared::new(provider));
         inner.loading = Some(Arc::clone(&load));

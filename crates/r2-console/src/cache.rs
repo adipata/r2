@@ -45,7 +45,10 @@ pub(crate) fn start(provider: &dyn Provider) -> r2_core::Result<Start> {
     let Some(cache) = provider.key_cache() else {
         return Ok(Start::NoCache);
     };
-    if cache.is_loading() {
+    if cache
+        .current_load()
+        .is_some_and(|load| !load.stop_requested())
+    {
         return Ok(Start::AlreadyLoading);
     }
     let job = provider.key_load_job()?;
@@ -112,7 +115,8 @@ pub(crate) fn ensure_loading(provider: &dyn Provider) {
         return;
     }
     let state = cache.status().state;
-    if matches!(state, CacheState::Complete | CacheState::Loading) {
+    if matches!(state, CacheState::Complete | CacheState::Loading) || cache.failed() {
+        // a failed load is retried only on request (`cache <provider>`), never per Tab
         return;
     }
     if let Err(err) = start(provider) {
@@ -123,6 +127,15 @@ pub(crate) fn ensure_loading(provider: &dyn Provider) {
             err.message
         );
     }
+}
+
+/// Tab: like `ensure_loading`, except that a stopped cache stays as it is (Ctrl+G or
+/// `cache stop` is not undone by the next Tab; `keys` and `cache <provider>` load again).
+pub(crate) fn ensure_loading_for_tab(provider: &dyn Provider) {
+    if provider.key_cache().is_some_and(|cache| cache.stopped()) {
+        return;
+    }
+    ensure_loading(provider);
 }
 
 /// Stop every running load (Ctrl+G, `cache stop`, exit). Returns the providers stopped.
@@ -199,6 +212,15 @@ pub(crate) fn take_notices(failures_only: bool) -> Vec<String> {
         .filter(|(_, failure)| *failure || !failures_only)
         .map(|(text, _)| text)
         .collect()
+}
+
+/// Mark every finished load of `provider` as reported (`keys` just showed the failure).
+pub(crate) fn claim_reports(provider: &str) {
+    for load in loads() {
+        if load.provider() == provider && load.is_finished() {
+            load.claim_report();
+        }
+    }
 }
 
 /// Mark `provider`'s finished load as reported (`keys` waited for it and showed the

@@ -864,7 +864,7 @@ serde_yaml_ng  = "0.10"             # Value / Mapping tree only (r2 parses and e
 yaml-rust2     = { version = "0.13", default-features = false }   # event parser (scalar styles)
 hex            = "0.4"
 base64         = "0.22"
-reedline       = "=0.49.0"
+reedline       = { version = "=0.49.0", features = ["external_printer", "idle_callback"] }  # §5.19: load notices, prompt indicator
 crossterm      = { version = "=0.29.0", features = ["use-dev-tty"] }   # burst-stall fix, S0 spike 3
 nu-ansi-term   = "0.50"             # reedline 0.49's Style type (StyledText, DefaultHinter::with_style)
 rpassword      = "=7.5.4"
@@ -2363,7 +2363,10 @@ pub trait Provider {
     // -- key cache and targeted lookups (r2 addition, §5.19, §11 D36) --
     /// The objects matching every set field of `query` (`ObjectQuery { label, key_id,
     /// key_class }`), in `list_keys` order. Default: `list_keys` filtered by
-    /// `query.matches`; Pkcs11Provider runs one C_FindObjects with the query as template.
+    /// `query.matches`; Pkcs11Provider runs one C_FindObjects per class (the query's class,
+    /// else every class) with the label/CKA_ID as template. Callers looking around a known
+    /// object use `lookup::find_related`, which falls back to the filtered listing when the
+    /// byte-exact label search misses that object (invalid UTF-8 or a missing CKA_LABEL).
     /// Used for the partner lookups (`lookup::family_candidates`, `key info` related, verify
     /// with a private ref, export/cert/transfer partners) so they never list the token.
     fn find_objects(&self, query: &ObjectQuery) -> Result<Vec<KeyInfo>> { .. }
@@ -7539,7 +7542,10 @@ have none and are always listed live). The cache lives in memory only.
 
 **Readers.** Only `keys` and ref completion (Tab) read the cache. Every command that acts
 on a key resolves it live, exactly as before. Partner lookups never list the token: they
-use `Provider::find_objects(ObjectQuery)` (a C_FindObjects on label and/or CKA_ID),
+use `Provider::find_objects(ObjectQuery)` (C_FindObjects on label and/or CKA_ID, one per
+class) through `lookup::find_related`, which falls back to the old filtered listing when
+the byte-exact label search misses the object the lookup starts from (a raw label with
+invalid UTF-8, or no CKA_LABEL),
 through `lookup::family_candidates` (export of a public part, certificate lookups,
 transfer partners), `key info`'s `related:` line, the public half for `verify` with a
 private ref, and the generated public half after `generate`.
@@ -7552,26 +7558,39 @@ call when the batch is refused). An object deleted meanwhile (CKR_OBJECT_HANDLE_
 is skipped. The thread only fills its `LoadShared` (progress, objects, outcome); the REPL
 thread merges them (`KeyCache::sync`). One load per provider runs at a time; loads of
 different providers run in parallel. While a load runs, the previous objects stay
-readable; a load that completes replaces them. PKCS#11 calls never overlap: every backend call, on the
-REPL thread and on loaders, holds one process-wide lock for its duration
-(`raw::serialize_calls`, re-entrant per thread), because some modules — SoftHSM's file
-store among them — fail a call that overlaps a call on another session. A loader takes
-the lock per call (one search batch, one object's attributes), so a command waits for at
-most one loader call.
+readable; a load that completes replaces them. PKCS#11 calls never overlap: every backend call on the
+REPL thread holds one process-wide lock for its duration (`raw::serialize_calls`,
+re-entrant per thread), because some modules — SoftHSM's file store among them — fail a
+call that overlaps a call on another session. A loader takes the lock per PKCS#11 call
+(each C_FindObjectsInit / C_FindObjects batch / C_FindObjectsFinal, one object's
+attributes; `raw::serialize_loader_call`) and yields to every command waiting for it, so
+a command waits for at most the one loader call already running. The stop request is
+checked between search batches and between objects.
 
 A load starts:
 - at `login`, when `cache.on_login` (default true) or the instance's
   `providers.pkcs11[].cache_on_login` (which overrides it) is true, unless
   `login --no-cache` is given; on a live terminal r2 prints
   `loading the key cache of <p> in the background — Ctrl+G stops it`;
-- on `cache <provider>`, `keys` and Tab, when the cache is not complete and not loading;
+- on `cache <provider>`, `keys` and Tab, when the cache is not complete and not loading —
+  except that Tab does not load a cache whose loading was stopped (Ctrl+G is not undone by
+  the next Tab; user decision 2026-11-17), and neither `keys` nor Tab retries a cache whose
+  last load failed (only `cache <provider>`, a login or a recovery load it again);
 - after a session auto-recovery (§5.2, `--keep-pin`), which drops the cache and loads it
   again.
 
 **Stopping.** Ctrl+G at the prompt (it replaces reedline's Emacs redo binding) and
-`cache stop` stop every running load. A stopped or failed load keeps the objects read so
-far; the cache is then *partial* until `cache <provider>`, `keys` or Tab loads it again.
-`logout` and `init-pin` drop the cache and stop its load. `exit` never waits for a load:
+`cache stop` stop every running load. A stopped load keeps the objects read so far; the
+cache is then *partial* until `cache <provider>` or `keys` loads it again. `cache
+<provider>` right after a stop starts at once: the stopping loader is let go (its later
+results are ignored). A **failed** load (e.g. the token refuses the loader's session)
+makes `keys` and Tab list live, as without a cache, until `cache <provider>` succeeds;
+`keys` then adds `note: the key cache of '<p>' could not be loaded (<error>) — listed
+live; `cache <p>` retries` (and the REPL's failure notice for that load is dropped), and
+the `cache` table shows state `failed`.
+`logout` and `init-pin` drop the cache and stop its load. `init-pin` then waits at most 2 s for the
+stopped loader to close its read-only session, which would refuse the SO login
+(CKR_SESSION_READ_ONLY_EXISTS). `exit` never waits for a load:
 it stops them, and each provider's shutdown waits at most 2 s for a stopped loader to
 finish its current PKCS#11 call (a module torn down under a running call can crash the
 process); a loader still inside a call after that keeps the module un-finalized.
@@ -7586,16 +7605,14 @@ suffixed ` (partial: <p> <n> of <total> objects loaded)`, then waits with the sp
 `loading the key cache of <p> … Ctrl+C stops waiting (loading continues)`, then prints
 the rows that arrived (table `keys (loaded while waiting)`) and the final count line.
 Ctrl+C ends the wait only: `stopped waiting — the key cache keeps loading in the
-background`. On piped input `keys` waits first and prints one complete table. A cache whose
-last load failed adds `note: the key cache of '<p>' is incomplete — its last load failed:
-<error>`.
+background`. On piped input `keys` waits first and prints one complete table.
 
 **Tab** never waits: it completes from the cache as it is, starts a load when needed, and
 each Tab press searches the cache again.
 
 **`cache`** (`commands/cache.rs`, usage `cache [<provider> | stop]`): without argument, the
 table `key caches` with columns provider, state (`none`, `empty`, `loading`, `complete`,
-`partial`), objects and detail; `cache <provider>` starts a load (`loading the key cache of
+`partial`, `failed`), objects and detail; `cache <provider>` starts a load (`loading the key cache of
 <p> in the background — Ctrl+G or `cache stop` stops it`) or reports `the key cache of <p>
 is already loading (<n> of <total>)`; a memory provider → UnsupportedOperation `<p> keeps
 no key cache`; logged out → AuthRequired. `cache stop` prints `stopping the key cache

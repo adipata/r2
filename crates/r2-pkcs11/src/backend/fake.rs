@@ -662,7 +662,11 @@ struct FakeLoader {
 }
 
 impl LoaderSession for FakeLoader {
-    fn find_objects(&self, template: &[RawAttr]) -> BResult<Vec<u64>> {
+    fn find_objects(
+        &self,
+        template: &[RawAttr],
+        _cancelled: &dyn Fn() -> bool,
+    ) -> BResult<Vec<u64>> {
         Ok(self
             .objects
             .iter()

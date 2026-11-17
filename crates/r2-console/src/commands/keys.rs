@@ -274,12 +274,17 @@ impl Listing {
                 crate::cache::ensure_loading(provider.as_ref());
             }
             let view = cache.view();
-            if view.status.state == r2_provider::cache::CacheState::Empty {
-                // no cache and none loading (the loader could not start): list live
+            let name = provider.name().to_owned();
+            if view.status.state == r2_provider::cache::CacheState::Empty || cache.failed() {
+                // no cache and none loading (the loader could not start), or the last
+                // load failed: list live, as without a cache
+                if let Some(error) = view.status.last_error.clone() {
+                    crate::cache::claim_reports(&name); // the note below says it once
+                    listing.failures.push((name, error));
+                }
                 listing.infos.extend(provider.list_keys()?);
                 continue;
             }
-            let name = provider.name().to_owned();
             match (view.status.state.clone(), view.status.progress) {
                 (r2_provider::cache::CacheState::Loading, Some((loaded, total))) => {
                     let text = match total {
@@ -294,11 +299,6 @@ impl Listing {
                         .push((name.clone(), format!("{name} incomplete")));
                 }
                 _ => {}
-            }
-            if let Some(error) = view.status.last_error.clone()
-                && view.status.state == r2_provider::cache::CacheState::Partial
-            {
-                listing.failures.push((name, error));
             }
             if let Some(load) = cache.current_load() {
                 listing.loads.push(load);
@@ -404,7 +404,8 @@ impl Listing {
             .iter()
             .map(|(name, error)| {
                 format!(
-                    "note: the key cache of '{name}' is incomplete — its last load failed: {error}"
+                    "note: the key cache of '{name}' could not be loaded ({error}) — listed live; \
+                     `cache {name}` retries"
                 )
             })
             .collect()
@@ -543,16 +544,19 @@ fn run_info(ctx: &AppContext, args: &BoundArgs) -> r2_core::Result<()> {
         rows,
     ));
     // a targeted label search, never a whole-token listing (§5.19)
-    let related: Vec<String> = provider
-        .find_objects(&r2_provider::ObjectQuery::label(info.key_ref.label.clone()))?
-        .iter()
-        .filter(|other| {
-            other.key_ref.label == info.key_ref.label
-                && other.key_ref.key_id == info.key_ref.key_id
-                && other.key_class != info.key_class
-        })
-        .map(object_text)
-        .collect();
+    let related: Vec<String> = r2_provider::lookup::find_related(
+        provider.as_ref(),
+        &r2_provider::ObjectQuery::label(info.key_ref.label.clone()),
+        &info,
+    )?
+    .iter()
+    .filter(|other| {
+        other.key_ref.label == info.key_ref.label
+            && other.key_ref.key_id == info.key_ref.key_id
+            && other.key_class != info.key_class
+    })
+    .map(object_text)
+    .collect();
     if !related.is_empty() {
         // the family's other objects, as pasteable qualified refs
         text(ctx, format!("related: {}", related.join(", ")));
@@ -747,13 +751,16 @@ fn hex_lower(bytes: &[u8]) -> String {
 
 /// Other objects sharing the target's (label, id): keypair halves, certificates.
 fn family_siblings(provider: &dyn Provider, key: &KeyInfo) -> r2_core::Result<Vec<KeyInfo>> {
-    let mut family: Vec<KeyInfo> = provider
-        .find_objects(&r2_provider::ObjectQuery::label(key.key_ref.label.clone()))?
-        .into_iter()
-        .filter(|info| {
-            info.key_ref.label == key.key_ref.label && info.key_ref.key_id == key.key_ref.key_id
-        })
-        .collect();
+    let mut family: Vec<KeyInfo> = r2_provider::lookup::find_related(
+        provider,
+        &r2_provider::ObjectQuery::label(key.key_ref.label.clone()),
+        key,
+    )?
+    .into_iter()
+    .filter(|info| {
+        info.key_ref.label == key.key_ref.label && info.key_ref.key_id == key.key_ref.key_id
+    })
+    .collect();
     let wanted = key.handle;
     let self_index = family
         .iter()

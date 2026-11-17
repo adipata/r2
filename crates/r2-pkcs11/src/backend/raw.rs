@@ -404,10 +404,15 @@ impl RawFns {
     }
 
     /// C_FindObjectsInit + C_FindObjects (1024 handles per call) + C_FindObjectsFinal.
+    /// A whole object search on `session` (the key cache loader's): every C_FindObjects*
+    /// call holds the call lock on its own (`serialize_loader_call`), so a command waits
+    /// for at most one 1024-handle batch; `cancelled` is checked between batches (the
+    /// search then ends early with what it found).
     pub(crate) fn find_objects(
         &self,
         session: CK_SESSION_HANDLE,
         template: &[RawAttr],
+        cancelled: &dyn Fn() -> bool,
     ) -> BResult<Vec<u64>> {
         let (init, find, last) = (
             entry!(self, C_FindObjectsInit),
@@ -420,18 +425,27 @@ impl RawFns {
             rv::CKR_TEMPLATE_INCONSISTENT,
             "C_FindObjectsInit",
         )?;
-        // SAFETY: the template and the values it points into live in this frame.
-        check(
-            unsafe { init(session, attrs.as_mut_ptr(), count) },
-            "C_FindObjectsInit",
-        )?;
+        {
+            let _calls = serialize_loader_call();
+            // SAFETY: the template and the values it points into live in this frame.
+            check(
+                unsafe { init(session, attrs.as_mut_ptr(), count) },
+                "C_FindObjectsInit",
+            )?;
+        }
         let mut handles = Vec::new();
         let mut batch: Vec<CK_OBJECT_HANDLE> = vec![0; 1024];
         let result = loop {
+            if cancelled() {
+                break Ok(());
+            }
             let mut found: CK_ULONG = 0;
             let room = ulong(batch.len(), rv::CKR_ARGUMENTS_BAD, "C_FindObjects")?;
-            // SAFETY: `batch` holds `room` writable handles; `found` is an out-parameter.
-            let code = unsafe { find(session, batch.as_mut_ptr(), room, &mut found) };
+            let code = {
+                let _calls = serialize_loader_call();
+                // SAFETY: `batch` holds `room` writable handles; `found` is an out-parameter.
+                unsafe { find(session, batch.as_mut_ptr(), room, &mut found) }
+            };
             if let Err(err) = check(code, "C_FindObjects") {
                 break Err(err);
             }
@@ -441,8 +455,11 @@ impl RawFns {
                 break Ok(());
             }
         };
-        // SAFETY: plain call ending the search this function started.
-        let finished = check(unsafe { last(session) }, "C_FindObjectsFinal");
+        let finished = {
+            let _calls = serialize_loader_call();
+            // SAFETY: plain call ending the search this function started.
+            check(unsafe { last(session) }, "C_FindObjectsFinal")
+        };
         result?;
         finished?;
         Ok(handles)
@@ -797,6 +814,8 @@ pub(crate) fn release(key: &Path, module: Rc<SharedModule>) -> BResult<()> {
 /// loader takes it per call (one object search batch, one object's attributes), so a
 /// command waits at most for one loader call. Re-entrant per thread.
 static CALLS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// Commands (REPL thread) waiting for `CALLS`: loaders let them go first.
+static WAITING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 thread_local! {
     static HOLDS_CALLS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -809,15 +828,38 @@ pub(crate) fn serialize_calls() -> CallGuard {
     if HOLDS_CALLS.try_with(std::cell::Cell::get).unwrap_or(false) {
         return CallGuard(None);
     }
+    use std::sync::atomic::Ordering;
+    WAITING.fetch_add(1, Ordering::SeqCst);
     let guard = CALLS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    WAITING.fetch_sub(1, Ordering::SeqCst);
     let _ = HOLDS_CALLS.try_with(|held| held.set(true));
     CallGuard(Some(guard))
 }
 
+/// A key cache loader's call: like `serialize_calls`, but it yields to every command
+/// waiting for the lock, so a command waits for at most the one loader call already
+/// running (std's Mutex is not fair).
+pub(crate) fn serialize_loader_call() -> CallGuard {
+    use std::sync::atomic::Ordering;
+    loop {
+        while WAITING.load(Ordering::SeqCst) > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let guard = CALLS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if WAITING.load(Ordering::SeqCst) == 0 {
+            return CallGuard(Some(guard));
+        }
+        drop(guard); // a command queued meanwhile: it goes first
+    }
+}
+
 impl Drop for CallGuard {
     fn drop(&mut self) {
+        // (a loader's guard never set the flag; clearing it on that thread is a no-op)
         if self.0.is_some() {
             let _ = HOLDS_CALLS.try_with(|held| held.set(false));
         }

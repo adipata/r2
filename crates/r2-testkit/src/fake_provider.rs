@@ -53,6 +53,8 @@ pub struct FakeProvider {
     key_cache: Option<r2_provider::cache::KeyCache>,
     /// `.with_load_gate(..)`: the loader job pauses at the gate.
     load_gate: Option<std::sync::Arc<LoadGate>>,
+    /// `.with_failing_cache_load(..)`: the loader job fails with this message.
+    load_failure: Option<String>,
 }
 
 /// A pause point for the fake's cache loader (§5.19 tests): the job pushes `pause_after`
@@ -149,6 +151,7 @@ impl FakeProvider {
             }),
             key_cache: None,
             load_gate: None,
+            load_failure: None,
         }
     }
     /// Builder: keep a key cache (§5.19) — `key_cache()` is Some, `key_load_job()` lists a
@@ -163,6 +166,14 @@ impl FakeProvider {
     pub fn with_load_gate(self, gate: std::sync::Arc<LoadGate>) -> Self {
         Self {
             load_gate: Some(gate),
+            ..self.with_key_cache()
+        }
+    }
+    /// Builder: the cache loader fails with Provider `message` before reading anything
+    /// (implies `with_key_cache`), like a token refusing the loader's session.
+    pub fn with_failing_cache_load(self, message: &str) -> Self {
+        Self {
+            load_failure: Some(message.to_owned()),
             ..self.with_key_cache()
         }
     }
@@ -1610,7 +1621,11 @@ impl Provider for FakeProvider {
         )
     }
     fn derive(&self, key: &KeyInfo, mech: &MechanismInvocation) -> Result<DeriveResult> {
-        dispatch!(self, derive(key, mech), self.base_derive(key, mech))
+        let result = (|| dispatch!(self, derive(key, mech), self.base_derive(key, mech)))()?;
+        if let Some(info) = &result.key {
+            self.cache_patch_identity(info);
+        }
+        Ok(result)
     }
     fn generate_random(&self, len: usize) -> Result<Zeroizing<Vec<u8>>> {
         dispatch!(self, generate_random(len), self.base_generate_random(len))
@@ -1635,11 +1650,15 @@ impl Provider for FakeProvider {
         wrapped: &[u8],
         request: &UnwrapRequest,
     ) -> Result<KeyInfo> {
-        dispatch!(
-            self,
-            unwrap_key(wrapping_key, mech, wrapped, request),
-            self.base_unwrap_key(wrapping_key, mech, wrapped, request)
-        )
+        let info = (|| {
+            dispatch!(
+                self,
+                unwrap_key(wrapping_key, mech, wrapped, request),
+                self.base_unwrap_key(wrapping_key, mech, wrapped, request)
+            )
+        })()?;
+        self.cache_patch_identity(&info);
+        Ok(info)
     }
     fn read_key_template(&self, key: &KeyInfo) -> Result<KeyTemplate> {
         dispatch!(
@@ -1649,11 +1668,18 @@ impl Provider for FakeProvider {
         )
     }
     fn update_key(&self, key: &KeyInfo, changes: &KeyTemplate) -> Result<KeyEditResult> {
-        dispatch!(
-            self,
-            update_key(key, changes),
-            self.base_update_key(key, changes)
-        )
+        let result = (|| {
+            dispatch!(
+                self,
+                update_key(key, changes),
+                self.base_update_key(key, changes)
+            )
+        })()?;
+        // the edited object under its (possibly new) identity
+        if let Some(cache) = &self.key_cache {
+            cache.upsert(result.key.clone());
+        }
+        Ok(result)
     }
     fn read_full_template(&self, key: &KeyInfo) -> Result<KeyTemplate> {
         dispatch!(
@@ -1682,7 +1708,11 @@ impl Provider for FakeProvider {
             .map(|rec| rec.info.clone())
             .collect();
         let gate = self.load_gate.clone();
+        let failure = self.load_failure.clone();
         Ok(r2_provider::cache::KeyLoadJob::new(move |sink| {
+            if let Some(message) = failure {
+                return Err(ConsoleError::provider(message));
+            }
             sink.set_total(snapshot.len());
             for (at, info) in snapshot.into_iter().enumerate() {
                 if let Some(gate) = &gate

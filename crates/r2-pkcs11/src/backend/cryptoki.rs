@@ -377,12 +377,16 @@ struct RawLoader {
 }
 
 impl LoaderSession for RawLoader {
-    fn find_objects(&self, template: &[RawAttr]) -> BResult<Vec<u64>> {
-        let _calls = raw::serialize_calls();
-        self.raw.find_objects(self.session, template)
+    fn find_objects(
+        &self,
+        template: &[RawAttr],
+        cancelled: &dyn Fn() -> bool,
+    ) -> BResult<Vec<u64>> {
+        // locks per C_FindObjects* call
+        self.raw.find_objects(self.session, template, cancelled)
     }
     fn get_attrs(&self, object: u64, attributes: &[u64]) -> BResult<AttrReads> {
-        let _calls = raw::serialize_calls();
+        let _calls = raw::serialize_loader_call();
         self.raw
             .get_attrs(self.session, Self::handle(object)?, attributes)
     }
@@ -398,7 +402,7 @@ impl RawLoader {
 impl Drop for RawLoader {
     fn drop(&mut self) {
         // best effort: a session of a finalized module is already gone
-        let _calls = raw::serialize_calls();
+        let _calls = raw::serialize_loader_call();
         let _ = self.raw.close_session(self.session);
     }
 }
@@ -666,7 +670,7 @@ impl super::Backend for CryptokiBackend {
         Ok(Box::new(move || {
             let raw = raw::RawFns::open(&key).map_err(BackendError::LibraryUnavailable)?;
             let session = {
-                let _calls = raw::serialize_calls();
+                let _calls = raw::serialize_loader_call();
                 raw.open_ro_session(slot)?
             };
             Ok(Box::new(RawLoader {

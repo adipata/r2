@@ -188,3 +188,159 @@ fn pkcs11_calls_are_serialized_across_threads_and_reentrant() {
     loader.join().unwrap();
     assert!(entered.load(Ordering::SeqCst));
 }
+
+#[test]
+fn a_busy_loader_lets_waiting_commands_go_first() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+
+    use crate::backend::raw::{serialize_calls, serialize_loader_call};
+
+    let done = Arc::new(AtomicBool::new(false));
+    let stop = Arc::clone(&done);
+    #[allow(clippy::disallowed_methods)] // stands in for the loader thread
+    let loader = std::thread::spawn(move || {
+        // back-to-back calls of 2 ms each, re-taking the lock at once
+        while !stop.load(Ordering::SeqCst) {
+            let _call = serialize_loader_call();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    });
+    std::thread::sleep(Duration::from_millis(20));
+    let mut worst = Duration::ZERO;
+    for _ in 0..20 {
+        let start = Instant::now();
+        let call = serialize_calls();
+        worst = worst.max(start.elapsed());
+        drop(call);
+        std::thread::sleep(Duration::from_millis(3));
+    }
+    done.store(true, Ordering::SeqCst);
+    loader.join().unwrap();
+    // at most the one loader call already running (2 ms), with generous scheduling slack
+    assert!(
+        worst < Duration::from_millis(100),
+        "a command waited {worst:?}"
+    );
+}
+
+#[test]
+fn related_lookups_fall_back_when_the_raw_label_is_not_the_decoded_one() {
+    use r2_provider::lookup::{family_candidates, find_related};
+
+    let (backend, provider) = logged_in();
+    let ul = super::ul;
+    let planted = |class: u64, label: Option<&[u8]>| {
+        let mut attrs = vec![
+            (0x0000, ul(class)), // CKA_CLASS
+            (0x0100, ul(0x1F)),  // CKA_KEY_TYPE = CKK_AES (secret) — class decides the rest
+            (0x0102, vec![7]),   // CKA_ID
+            (0x0161, ul(16)),    // CKA_VALUE_LEN
+        ];
+        if let Some(label) = label {
+            attrs.push((0x0003, label.to_vec())); // CKA_LABEL
+        }
+        backend.plant_object(0, attrs, &[1; 16])
+    };
+    // raw label "k\xfe" decodes to "k": a label search for "k" cannot find it
+    let bad = planted(4, Some(b"k\xfe"));
+    let anchor = provider
+        .list_keys()
+        .unwrap()
+        .into_iter()
+        .find(|k| k.handle == Some(bad))
+        .unwrap();
+    assert_eq!(anchor.key_ref.label, "k");
+    let query = ObjectQuery::label("k");
+    assert!(provider.find_objects(&query).unwrap().is_empty());
+    let found = find_related(&provider, &query, &anchor).unwrap();
+    assert_eq!(
+        found.iter().map(|k| k.handle).collect::<Vec<_>>(),
+        [Some(bad)]
+    );
+
+    // no CKA_LABEL at all reads as "": the empty-label query lists and filters
+    let unlabeled = planted(4, None);
+    let anchor = provider
+        .list_keys()
+        .unwrap()
+        .into_iter()
+        .find(|k| k.handle == Some(unlabeled))
+        .unwrap();
+    assert_eq!(anchor.key_ref.label, "");
+    let found = find_related(&provider, &ObjectQuery::label(""), &anchor).unwrap();
+    assert!(found.iter().any(|k| k.handle == Some(unlabeled)));
+    // family_candidates goes through the same fallback
+    let family = family_candidates(&provider, &anchor, &[KeyClass::Secret]).unwrap();
+    assert!(family.iter().any(|k| k.handle == Some(unlabeled)));
+}
+
+/// The batched C_GetAttributeValue of RawFns (the loader's and `key info`'s read) against
+/// a real module: one call when every attribute is readable, the per-attribute fallback
+/// when the token refuses the batch (a sensitive CKA_VALUE).
+#[cfg(feature = "softhsm")]
+#[test]
+fn softhsm_batched_attribute_reads_and_their_fallback() {
+    use std::collections::BTreeMap;
+
+    use r2_config::model::Pkcs11InstanceConfig;
+    use r2_core::template::{AttrKind, AttrValue, KeyTemplate, TemplateAttr};
+    use r2_testkit::softhsm::{softhsm_token, unique_label};
+
+    let _lock = r2_testkit::global_state_lock();
+    let token = softhsm_token();
+    let mut config = Pkcs11InstanceConfig::new("softhsm", token.module_path.clone());
+    config.slot = Some(token.slot);
+    config.token_label = Some(token.token_label.clone());
+    let provider = Pkcs11Provider::new("softhsm", config, BTreeMap::new(), Default::default());
+    let info = provider
+        .list_tokens()
+        .unwrap()
+        .into_iter()
+        .find(|t| t.label == token.token_label)
+        .unwrap();
+    provider.login(&info, &pin(&token.user_pin), false).unwrap();
+    let flag =
+        |name: &str, value: bool| TemplateAttr::new(name, AttrKind::Bool, AttrValue::Bool(value));
+    let generate = |sensitive: bool| {
+        let label = unique_label();
+        let mut request = GenerateRequest::new(KeyAlgorithm::Aes, label.as_str());
+        request.size_bits = Some(128);
+        request.template = Some(KeyTemplate::new(vec![
+            flag("CKA_TOKEN", false),
+            flag("CKA_SENSITIVE", sensitive),
+            flag("CKA_EXTRACTABLE", !sensitive),
+        ]));
+        (provider.generate_key(&request).unwrap(), label)
+    };
+    const CKA_LABEL: u64 = 0x03;
+    const CKA_VALUE: u64 = 0x11;
+    const CKA_VALUE_LEN: u64 = 0x161;
+    let kinds = [CKA_LABEL, CKA_VALUE, CKA_VALUE_LEN];
+
+    let (open, open_label) = generate(false);
+    let reads = provider
+        .backend()
+        .get_attrs(open.handle.unwrap(), &kinds)
+        .unwrap();
+    assert_eq!(
+        reads[0].as_deref().map(|v| v.as_slice()),
+        Some(open_label.as_str().as_bytes())
+    );
+    assert_eq!(reads[1].as_ref().map(|v| v.len()), Some(16));
+    assert!(reads[2].is_some());
+
+    let (locked, locked_label) = generate(true);
+    let reads = provider
+        .backend()
+        .get_attrs(locked.handle.unwrap(), &kinds)
+        .unwrap();
+    assert_eq!(
+        reads[0].as_deref().map(|v| v.as_slice()),
+        Some(locked_label.as_str().as_bytes())
+    );
+    assert!(reads[1].is_none(), "a sensitive CKA_VALUE is refused");
+    assert!(reads[2].is_some());
+    provider.shutdown().unwrap();
+}

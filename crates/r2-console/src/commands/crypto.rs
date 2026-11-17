@@ -81,15 +81,18 @@ pub(crate) fn public_half_for_verify(
     if key.key_class != KeyClass::Private {
         return Ok(key);
     }
-    let candidates: Vec<KeyInfo> = provider
-        .find_objects(&r2_provider::ObjectQuery::label(key.key_ref.label.clone()))?
-        .into_iter()
-        .filter(|info| {
-            info.key_ref.label == key.key_ref.label
-                && matches!(info.key_class, KeyClass::Public | KeyClass::Certificate)
-                && (key.key_ref.key_id.is_none() || info.key_ref.key_id == key.key_ref.key_id)
-        })
-        .collect();
+    let candidates: Vec<KeyInfo> = r2_provider::lookup::find_related(
+        provider,
+        &r2_provider::ObjectQuery::label(key.key_ref.label.clone()),
+        &key,
+    )?
+    .into_iter()
+    .filter(|info| {
+        info.key_ref.label == key.key_ref.label
+            && matches!(info.key_class, KeyClass::Public | KeyClass::Certificate)
+            && (key.key_ref.key_id.is_none() || info.key_ref.key_id == key.key_ref.key_id)
+    })
+    .collect();
     for wanted in [KeyClass::Public, KeyClass::Certificate] {
         if let Some(info) = candidates.iter().find(|info| info.key_class == wanted) {
             return Ok(info.clone());

@@ -194,7 +194,9 @@ pub(crate) trait Backend {
 /// The cache loader's own session (loader thread only): object search and batched
 /// attribute reads. Dropping it closes the session.
 pub(crate) trait LoaderSession {
-    fn find_objects(&self, template: &[RawAttr]) -> BResult<Vec<u64>>;
+    /// A whole search; `cancelled` is checked between batches (it then ends early).
+    fn find_objects(&self, template: &[RawAttr], cancelled: &dyn Fn() -> bool)
+    -> BResult<Vec<u64>>;
     fn get_attrs(&self, object: u64, attributes: &[u64]) -> BResult<AttrReads>;
 }
 

@@ -125,6 +125,33 @@ fn hex_lower(data: &[u8]) -> String {
         })
 }
 
+/// `Provider::find_objects(query)` for a lookup around a known object, `anchor` (§5.19).
+/// The targeted search matches CKA_LABEL byte for byte, while a KeyInfo label is decoded
+/// (invalid UTF-8 dropped, a missing CKA_LABEL read as ""), so it can miss objects the old
+/// list-and-compare lookup found. When the query asks for the empty label, or the search
+/// does not return the anchor although it matches the query, this falls back to
+/// `list_keys` filtered by the query, exactly the old behavior.
+pub fn find_related(
+    provider: &dyn crate::provider::Provider,
+    query: &crate::types::ObjectQuery,
+    anchor: &KeyInfo,
+) -> Result<Vec<KeyInfo>> {
+    if query.label.as_deref() != Some("") {
+        let found = provider.find_objects(query)?;
+        let misses_anchor = anchor.handle.is_some()
+            && query.matches(anchor)
+            && !found.iter().any(|info| info.handle == anchor.handle);
+        if !misses_anchor {
+            return Ok(found);
+        }
+    }
+    Ok(provider
+        .list_keys()?
+        .into_iter()
+        .filter(|info| query.matches(info))
+        .collect())
+}
+
 /// The objects of `classes` that share `key`'s CKA_ID (when it has one) or its label — the
 /// candidates for a key's public half / certificate / siblings — found with targeted
 /// searches (`Provider::find_objects`, §5.19) instead of a whole-token listing. Order: the
@@ -141,7 +168,7 @@ pub fn family_candidates(
     }
     queries.push(crate::types::ObjectQuery::label(key.key_ref.label.clone()));
     for query in queries {
-        for info in provider.find_objects(&query)? {
+        for info in find_related(provider, &query, key)? {
             if !classes.contains(&info.key_class) {
                 continue;
             }

@@ -45,13 +45,13 @@ fn status_row(provider: &dyn Provider) -> Vec<String> {
             },
         ),
         CacheState::Complete => ("complete", String::new()),
-        CacheState::Partial => (
-            "partial",
-            match &status.last_error {
-                Some(error) => format!("last load failed: {error}"),
-                None => "loading was stopped".to_owned(),
-            },
-        ),
+        CacheState::Partial => match &status.last_error {
+            Some(error) => (
+                "failed",
+                format!("{error} — listed live until `cache {name}` succeeds"),
+            ),
+            None => ("partial", "loading was stopped".to_owned()),
+        },
     };
     vec![name, state.into(), status.count.to_string(), detail]
 }

@@ -2,6 +2,7 @@
 // clearing, and the targeted ObjectQuery filter.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use r2_core::error::ConsoleError;
 use r2_core::keys::{KeyAlgorithm, KeyClass, KeyInfo, KeyRef};
@@ -269,4 +270,33 @@ fn object_query_matches_every_set_field() {
     let mut no_id = key.clone();
     no_id.key_ref.key_id = None;
     assert!(!ObjectQuery::id(vec![7]).matches(&no_id));
+}
+
+#[test]
+fn a_new_load_lets_a_stopping_one_go() {
+    let cache = KeyCache::new();
+    let old = cache.begin("hsm").unwrap();
+    LoadSink::new(&old).push(info("a", KeyClass::Secret, 1));
+    assert!(cache.begin("hsm").is_none()); // still running, not stopping
+    old.stop();
+    // the old load is still inside a call: a new one starts anyway, keeping what it read
+    let new = cache.begin("hsm").unwrap();
+    assert!(!Arc::ptr_eq(&old, &new));
+    assert_eq!(labels(&cache), ["a"]);
+    LoadSink::new(&old).push(info("late", KeyClass::Secret, 2)); // ignored
+    old.finish(Ok(()));
+    LoadSink::new(&new).push(info("b", KeyClass::Secret, 3));
+    new.finish(Ok(()));
+    assert_eq!(labels(&cache), ["b"]);
+    assert_eq!(cache.status().state, CacheState::Complete);
+}
+
+#[test]
+fn stopped_and_failed_are_told_apart() {
+    let cache = KeyCache::new();
+    load(&cache, vec![info("a", KeyClass::Secret, 1)], Some(0));
+    assert!(cache.stopped() && !cache.failed());
+    let shared = cache.begin("hsm").unwrap();
+    shared.finish(Err(ConsoleError::generic("CKR_DEVICE_ERROR")));
+    assert!(cache.failed() && !cache.stopped());
 }

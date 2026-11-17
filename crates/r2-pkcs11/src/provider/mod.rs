@@ -196,6 +196,9 @@ impl Pkcs11Provider {
         r2_provider::Provider::initialize(self)?;
         // the backend owns ONE session: the SO session replaces the provider's
         self.drop_session();
+        // a stopped cache loader's read-only session would refuse the SO login
+        // (CKR_SESSION_READ_ONLY_EXISTS): let it finish its call and close it (§5.19)
+        let _ = self.backend.wait_for_loaders(LOADER_EXIT_WAIT);
         let backend = Rc::clone(&self.backend);
         let result = (|| -> std::result::Result<(), (BackendError, &'static str)> {
             backend

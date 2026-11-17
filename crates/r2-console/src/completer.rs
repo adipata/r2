@@ -55,11 +55,13 @@ pub fn complete_refs(ctx: &AppContext, prefix: &str) -> Vec<String> {
         return bare;
     }
     // §5.19: a provider with a key cache completes from it, instantly — never waiting for
-    // a load; a cache that is not complete starts loading, and every Tab press searches the
-    // cache again (with what the loader added meanwhile)
-    let keys = match provider.key_cache() {
+    // a load; a cache that is not complete starts loading (unless its loading was stopped:
+    // Ctrl+G is not undone by the next Tab), and every Tab press searches the
+    // cache again (with what the loader added meanwhile); a cache whose last load failed
+    // is bypassed (listed live, as without a cache) until `cache <provider>` succeeds
+    let keys = match provider.key_cache().filter(|cache| !cache.failed()) {
         Some(cache) => {
-            crate::cache::ensure_loading(provider.as_ref());
+            crate::cache::ensure_loading_for_tab(provider.as_ref());
             cache.view().keys
         }
         None => match provider.list_keys() {
