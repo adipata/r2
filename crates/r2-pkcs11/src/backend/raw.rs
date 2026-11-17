@@ -790,3 +790,36 @@ pub(crate) fn release(key: &Path, module: Rc<SharedModule>) -> BResult<()> {
         Err(err) => Err(super::cryptoki::convert(err, "C_Finalize")),
     }
 }
+
+/// One PKCS#11 call at a time across the REPL thread and the key cache loaders (spec
+/// §5.19): some modules (SoftHSM's file store among them) fail calls that overlap with a
+/// call on another session, so every backend call holds this lock for its duration. The
+/// loader takes it per call (one object search batch, one object's attributes), so a
+/// command waits at most for one loader call. Re-entrant per thread.
+static CALLS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+thread_local! {
+    static HOLDS_CALLS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Held while one backend call runs (a no-op guard when this thread already holds it).
+pub(crate) struct CallGuard(Option<std::sync::MutexGuard<'static, ()>>);
+
+pub(crate) fn serialize_calls() -> CallGuard {
+    if HOLDS_CALLS.try_with(std::cell::Cell::get).unwrap_or(false) {
+        return CallGuard(None);
+    }
+    let guard = CALLS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _ = HOLDS_CALLS.try_with(|held| held.set(true));
+    CallGuard(Some(guard))
+}
+
+impl Drop for CallGuard {
+    fn drop(&mut self) {
+        if self.0.is_some() {
+            let _ = HOLDS_CALLS.try_with(|held| held.set(false));
+        }
+    }
+}

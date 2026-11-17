@@ -159,3 +159,32 @@ fn find_objects_searches_by_label_and_id() {
             .is_empty()
     );
 }
+
+#[test]
+fn pkcs11_calls_are_serialized_across_threads_and_reentrant() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use crate::backend::raw::serialize_calls;
+
+    let outer = serialize_calls();
+    let inner = serialize_calls(); // re-entrant on this thread: no deadlock
+    let entered = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&entered);
+    #[allow(clippy::disallowed_methods)] // stands in for the loader thread
+    let loader = std::thread::spawn(move || {
+        let _calls = serialize_calls();
+        flag.store(true, Ordering::SeqCst);
+    });
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert!(
+        !entered.load(Ordering::SeqCst),
+        "the loader ran during a call"
+    );
+    drop(inner);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    assert!(!entered.load(Ordering::SeqCst), "the outer call still runs");
+    drop(outer);
+    loader.join().unwrap();
+    assert!(entered.load(Ordering::SeqCst));
+}

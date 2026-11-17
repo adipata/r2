@@ -378,9 +378,11 @@ struct RawLoader {
 
 impl LoaderSession for RawLoader {
     fn find_objects(&self, template: &[RawAttr]) -> BResult<Vec<u64>> {
+        let _calls = raw::serialize_calls();
         self.raw.find_objects(self.session, template)
     }
     fn get_attrs(&self, object: u64, attributes: &[u64]) -> BResult<AttrReads> {
+        let _calls = raw::serialize_calls();
         self.raw
             .get_attrs(self.session, Self::handle(object)?, attributes)
     }
@@ -396,6 +398,7 @@ impl RawLoader {
 impl Drop for RawLoader {
     fn drop(&mut self) {
         // best effort: a session of a finalized module is already gone
+        let _calls = raw::serialize_calls();
         let _ = self.raw.close_session(self.session);
     }
 }
@@ -503,6 +506,7 @@ fn is_signature_failure(err: &BackendError) -> bool {
 
 impl super::Backend for CryptokiBackend {
     fn initialize(&self) -> BResult<()> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         if self.module.borrow().is_some() {
             return Ok(());
         }
@@ -512,6 +516,7 @@ impl super::Backend for CryptokiBackend {
     }
 
     fn finalize(&self) -> BResult<()> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         let session = self.session.borrow_mut().take();
         drop(session);
         let module = self.module.borrow_mut().take();
@@ -522,6 +527,7 @@ impl super::Backend for CryptokiBackend {
     }
 
     fn is_sole_module_user(&self) -> bool {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         let key = match self.module.borrow().as_ref() {
             Some((key, _)) => key.clone(),
             None => raw::registry_key(&self.library),
@@ -531,6 +537,7 @@ impl super::Backend for CryptokiBackend {
     }
 
     fn slots_with_token(&self) -> BResult<Vec<u64>> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         let module = self.module()?;
         let slots = module
             .ctx
@@ -540,16 +547,19 @@ impl super::Backend for CryptokiBackend {
     }
 
     fn token_info(&self, slot: u64) -> BResult<RawTokenInfo> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         // Raw C_GetTokenInfo: cryptoki's TokenInfo conversion parses `utcTime` when
         // CKF_CLOCK_ON_TOKEN is set and fails on a non-digit clock (PyKCS11 never does).
         self.module()?.raw.token_info(slot)
     }
 
     fn mechanism_list(&self, slot: u64) -> BResult<Vec<u64>> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         self.module()?.raw.mechanism_list(slot)
     }
 
     fn open_session(&self, slot: u64) -> BResult<()> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         let module = self.module()?;
         let session = module
             .ctx
@@ -561,6 +571,7 @@ impl super::Backend for CryptokiBackend {
     }
 
     fn close_session(&self) -> BResult<()> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         let session = self.session.borrow_mut().take();
         match session {
             Some(session) => session.close().map_err(|e| convert(e, "C_CloseSession")),
@@ -569,10 +580,12 @@ impl super::Backend for CryptokiBackend {
     }
 
     fn has_session(&self) -> bool {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         self.session.borrow().is_some()
     }
 
     fn login(&self, user: UserKind, pin: &SecretString) -> BResult<()> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         let user_type = match user {
             UserKind::User => UserType::User,
             UserKind::So => UserType::So,
@@ -589,12 +602,14 @@ impl super::Backend for CryptokiBackend {
     }
 
     fn logout(&self) -> BResult<()> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         self.with_session("C_Logout", |session| {
             session.logout().map_err(|e| convert(e, "C_Logout"))
         })
     }
 
     fn init_token(&self, slot: u64, so_pin: &SecretString, label: &str) -> BResult<()> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         let module = self.module()?;
         module
             .ctx
@@ -603,12 +618,14 @@ impl super::Backend for CryptokiBackend {
     }
 
     fn init_pin(&self, pin: &SecretString) -> BResult<()> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         self.with_session("C_InitPIN", |session| {
             session.init_pin(pin).map_err(|e| convert(e, "C_InitPIN"))
         })
     }
 
     fn find_objects(&self, template: &[RawAttr]) -> BResult<Vec<u64>> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         let attrs = attributes(template)?;
         let result = self.with_session("C_FindObjects", |session| {
             session
@@ -620,6 +637,7 @@ impl super::Backend for CryptokiBackend {
     }
 
     fn get_attr(&self, object: u64, attribute: u64) -> BResult<Option<Zeroizing<Vec<u8>>>> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         let module = self.module()?;
         let handle = Self::raw_handle(object)?;
         self.with_session("C_GetAttributeValue", |session| {
@@ -628,6 +646,7 @@ impl super::Backend for CryptokiBackend {
     }
 
     fn get_attrs(&self, object: u64, attributes: &[u64]) -> BResult<AttrReads> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         let module = self.module()?;
         let handle = Self::raw_handle(object)?;
         self.with_session("C_GetAttributeValue", |session| {
@@ -636,6 +655,7 @@ impl super::Backend for CryptokiBackend {
     }
 
     fn loader(&self, slot: u64) -> BResult<LoaderFactory> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         let key = match self.module.borrow().as_ref() {
             Some((key, _)) => key.clone(),
             None => return Err(ckr(rv::CKR_CRYPTOKI_NOT_INITIALIZED, "module")),
@@ -645,7 +665,10 @@ impl super::Backend for CryptokiBackend {
         let guard = raw::LoaderGuard::new(key.clone());
         Ok(Box::new(move || {
             let raw = raw::RawFns::open(&key).map_err(BackendError::LibraryUnavailable)?;
-            let session = raw.open_ro_session(slot)?;
+            let session = {
+                let _calls = raw::serialize_calls();
+                raw.open_ro_session(slot)?
+            };
             Ok(Box::new(RawLoader {
                 raw,
                 session,
@@ -655,6 +678,7 @@ impl super::Backend for CryptokiBackend {
     }
 
     fn set_attrs(&self, object: u64, template: &[RawAttr]) -> BResult<()> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         let handle = obj(object)?;
         let attrs = attributes(template)?;
         let result = self.with_session("C_SetAttributeValue", |session| {
@@ -667,6 +691,7 @@ impl super::Backend for CryptokiBackend {
     }
 
     fn create_object(&self, template: &[RawAttr]) -> BResult<u64> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         let attrs = attributes(template)?;
         let result = self.with_session("C_CreateObject", |session| {
             session
@@ -678,6 +703,7 @@ impl super::Backend for CryptokiBackend {
     }
 
     fn destroy_object(&self, object: u64) -> BResult<()> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         let handle = obj(object)?;
         self.with_session("C_DestroyObject", |session| {
             session
@@ -687,6 +713,7 @@ impl super::Backend for CryptokiBackend {
     }
 
     fn generate_key(&self, mech: &MechSpec, template: &[RawAttr]) -> BResult<u64> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         let attrs = attributes(template)?;
         let result = self.with_session("C_GenerateKey", |session| {
             with_mechanism(mech, |m| {
@@ -705,6 +732,7 @@ impl super::Backend for CryptokiBackend {
         public: &[RawAttr],
         private: &[RawAttr],
     ) -> BResult<(u64, u64)> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         let public_attrs = attributes(public)?;
         let private_attrs = attributes(private)?;
         let result = self.with_session("C_GenerateKeyPair", |session| {
@@ -724,10 +752,12 @@ impl super::Backend for CryptokiBackend {
     }
 
     fn encrypt(&self, mech: &MechSpec, key: u64, data: &[u8]) -> BResult<Vec<u8>> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         Ok(self.crypt(RawOp::Encrypt, mech, key, data)?.to_vec())
     }
 
     fn encrypt_multipart(&self, mech: &MechSpec, key: u64, parts: &[&[u8]]) -> BResult<Vec<u8>> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         let key_handle = obj(key)?;
         self.with_session("C_EncryptInit", |session| {
             with_mechanism(mech, |m| {
@@ -753,14 +783,17 @@ impl super::Backend for CryptokiBackend {
     }
 
     fn decrypt(&self, mech: &MechSpec, key: u64, data: &[u8]) -> BResult<Zeroizing<Vec<u8>>> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         self.crypt(RawOp::Decrypt, mech, key, data)
     }
 
     fn sign(&self, mech: &MechSpec, key: u64, data: &[u8]) -> BResult<Vec<u8>> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         Ok(self.crypt(RawOp::Sign, mech, key, data)?.to_vec())
     }
 
     fn verify(&self, mech: &MechSpec, key: u64, data: &[u8], signature: &[u8]) -> BResult<bool> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         let module = self.module()?;
         let key_handle = obj(key)?;
         let result = self.with_session("C_Verify", |session| {
@@ -799,6 +832,7 @@ impl super::Backend for CryptokiBackend {
     }
 
     fn wrap_key(&self, mech: &MechSpec, wrapping_key: u64, key: u64) -> BResult<Vec<u8>> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         let module = self.module()?;
         let wrapping = Self::raw_handle(wrapping_key)?;
         let target = Self::raw_handle(key)?;
@@ -825,6 +859,7 @@ impl super::Backend for CryptokiBackend {
         wrapped: &[u8],
         template: &[RawAttr],
     ) -> BResult<u64> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         let module = self.module()?;
         let unwrapping = obj(unwrapping_key)?;
         self.with_session("C_UnwrapKey", |session| {
@@ -863,6 +898,7 @@ impl super::Backend for CryptokiBackend {
     }
 
     fn derive_key(&self, mech: &MechSpec, base_key: u64, template: &[RawAttr]) -> BResult<u64> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         let module = self.module()?;
         let base = obj(base_key)?;
         self.with_session("C_DeriveKey", |session| {
@@ -883,6 +919,7 @@ impl super::Backend for CryptokiBackend {
         })
     }
     fn generate_random(&self, len: usize) -> BResult<Zeroizing<Vec<u8>>> {
+        let _calls = raw::serialize_calls(); // §5.19: one PKCS#11 call at a time
         let mut out = Zeroizing::new(vec![0u8; len]);
         self.with_session("C_GenerateRandom", |session| {
             session

@@ -7552,7 +7552,12 @@ call when the batch is refused). An object deleted meanwhile (CKR_OBJECT_HANDLE_
 is skipped. The thread only fills its `LoadShared` (progress, objects, outcome); the REPL
 thread merges them (`KeyCache::sync`). One load per provider runs at a time; loads of
 different providers run in parallel. While a load runs, the previous objects stay
-readable; a load that completes replaces them.
+readable; a load that completes replaces them. PKCS#11 calls never overlap: every backend call, on the
+REPL thread and on loaders, holds one process-wide lock for its duration
+(`raw::serialize_calls`, re-entrant per thread), because some modules — SoftHSM's file
+store among them — fail a call that overlaps a call on another session. A loader takes
+the lock per call (one search batch, one object's attributes), so a command waits for at
+most one loader call.
 
 A load starts:
 - at `login`, when `cache.on_login` (default true) or the instance's
