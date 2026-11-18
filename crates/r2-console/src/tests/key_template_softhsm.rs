@@ -63,6 +63,10 @@ impl Session {
         let ctx = CtxBuilder::new(Rc::clone(&io) as Rc<dyn ConsoleIo>)
             .providers(registry)
             .editor(Rc::clone(&editor) as Rc<dyn TemplateEditor>)
+            // §5.20: the cleanup deletes need an unprotected hsm
+            .config(crate::testing::make_config(Some(
+                "providers:\n  pkcs11:\n    - {name: hsm, library: /unused.so, protected: false}\n",
+            )))
             .build();
         let session = Self {
             ctx,

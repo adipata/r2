@@ -37,7 +37,7 @@ fn test_custom_ckm_passthrough_on_softhsm() {
         &config,
         format!(
             "app:\n  history_file: {}\n  log:\n    file: {}\nui:\n  confirm_delete: false\n\
-             providers:\n  pkcs11:\n    - name: hsm\n      library: {}\n\
+             providers:\n  pkcs11:\n    - name: hsm\n      library: {}\n      protected: false\n\
              softhsm:\n  autodetect: false\n\
              custom_mechanisms:\n  - id: vendor.cbc.passthrough\n    verb: encrypt\n\
              \x20   algorithm: aes\n    cli_name: vcbc\n    label: vendor AES-CBC raw passthrough\n\

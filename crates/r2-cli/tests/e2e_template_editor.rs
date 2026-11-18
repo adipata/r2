@@ -24,7 +24,7 @@ fn write_config(dir: &Path, module: &Path) -> std::path::PathBuf {
     let path = dir.join("r2.yaml");
     let text = format!(
         "app:\n  history_file: {}\n  log:\n    file: {}\nui:\n  confirm_delete: false\n\
-         providers:\n  pkcs11:\n    - name: hsm\n      library: {}\n\
+         providers:\n  pkcs11:\n    - name: hsm\n      library: {}\n      protected: false\n\
          softhsm:\n  autodetect: false\n",
         dir.join("history").display(),
         dir.join("r2.log").display(),

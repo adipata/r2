@@ -47,7 +47,7 @@ impl Command for ProvidersCommand {
         "providers"
     }
     fn summary(&self) -> &'static str {
-        "List configured providers with type, library and auth state"
+        "List configured providers with type, library, auth state and protection"
     }
     fn usage(&self) -> &'static str {
         "providers"
@@ -76,17 +76,24 @@ impl Command for ProvidersCommand {
                 None => "-".to_owned(),
             };
             let state = state_text(&status, &library);
+            // §5.20: whether `delete` is refused on this provider
+            let protected = if ctx.cfg().is_protected(provider.name()) {
+                "yes"
+            } else {
+                "no"
+            };
             rows.push(vec![
                 provider.name().to_owned(),
                 provider.type_name().to_owned(),
                 library,
                 state,
                 token,
+                protected.to_owned(),
             ]);
         }
         ctx.io.print(table(
             Some("providers"),
-            &["name", "type", "library", "status", "token"],
+            &["name", "type", "library", "status", "token", "protected"],
             rows,
         ));
         Ok(Flow::Continue)

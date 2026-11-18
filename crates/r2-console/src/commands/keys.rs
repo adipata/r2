@@ -1467,7 +1467,7 @@ impl Command for DeleteCommand {
         "delete"
     }
     fn summary(&self) -> &'static str {
-        "Delete a key or certificate (confirmation per ui.confirm_delete)"
+        "Delete a key or certificate (refused when the provider is protected)"
     }
     fn usage(&self) -> &'static str {
         "delete <provider>:<label>[#<id-hex>][:<class>]"
@@ -1475,6 +1475,7 @@ impl Command for DeleteCommand {
     fn run(&self, ctx: &AppContext, args: &BoundArgs) -> r2_core::Result<Flow> {
         reject_named(args, self.usage(), NOUN)?;
         let reference = positional(args, 0, "provider:label", self.usage())?;
+        refuse_if_protected(ctx, reference)?;
         let (provider, key) = match ctx.providers.resolve_ref(reference) {
             Ok(found) => found,
             Err(err) if err.candidates().is_some() => {
@@ -1505,6 +1506,24 @@ impl Command for DeleteCommand {
         }
         Vec::new()
     }
+}
+
+/// §5.20: `delete` on a protected provider is refused before the key is looked up, so no
+/// match table or confirmation is ever shown for it. Ref and provider errors come first,
+/// exactly as `resolve_ref` would report them.
+fn refuse_if_protected(ctx: &AppContext, reference: &str) -> r2_core::Result<()> {
+    let parsed = parse_ref(reference)?;
+    let provider = ctx.providers.get(&parsed.provider)?;
+    if ctx.cfg().is_protected(provider.name()) {
+        return Err(ConsoleError::unsupported(format!(
+            "delete refused: provider '{}' is protected",
+            provider.name()
+        ))
+        .with_hint(
+            "set protected: false on this provider in r2.yaml to allow destructive actions",
+        ));
+    }
+    Ok(())
 }
 
 /// `delete` on a ref that matches several objects: list them, confirm once (per

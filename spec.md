@@ -3815,7 +3815,13 @@ pub struct UiSection {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MemorySection { pub enabled: bool, pub name: String }
+pub struct MemorySection {
+    pub enabled: bool,
+    pub name: String,
+    /// r2 addition (§5.20): refuse destructive actions; optional key, default true; dumped
+    /// only when false.
+    pub protected: bool,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pkcs11InstanceConfig {
@@ -3831,9 +3837,12 @@ pub struct Pkcs11InstanceConfig {
     /// r2 addition (§5.19): overrides `cache.on_login` for this instance; dumped only
     /// when set.
     pub cache_on_login: Option<bool>,
+    /// r2 addition (§5.20): refuse destructive actions; optional key, default true; dumped
+    /// only when false.
+    pub protected: bool,
 }
 impl Pkcs11InstanceConfig {
-    /// slot/token_label None, env empty (the SoftHSM autodetect instance).
+    /// slot/token_label None, env empty, protected (the SoftHSM autodetect instance).
     pub fn new(name: impl Into<String>, library: impl Into<PathBuf>) -> Self { .. }
 }
 
@@ -3848,6 +3857,9 @@ pub struct SoftHsmSection {
     pub search_paths: Vec<PathBuf>,
     pub conf_dir: PathBuf,
     pub token_dir: PathBuf,
+    /// r2 addition (§5.20): `protected` of the autodetected instance (it has no
+    /// `providers.pkcs11` entry); optional key, default true; dumped only when false.
+    pub protected: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3942,6 +3954,10 @@ impl AppConfig {
     /// AttrValue/ParamValue (c2 printed the raw YAML objects; "0x…" lower-hex rendering
     /// would break byte identity for `'0x0A0B'`, `'0x0a 0b'`, `hex:0A0B`, `AQID`).
     pub fn to_value(&self) -> Value { .. }
+    /// r2 addition (§5.20): whether `delete` is refused on the provider named `provider`:
+    /// its `providers.pkcs11[]` entry, else `providers.memory` by name, else the
+    /// autodetected SoftHSM (`softhsm.protected`); a name none of them claims → true.
+    pub fn is_protected(&self, provider: &str) -> bool { .. }
 }
 
 /// Loader result: typed config + provenance (feeds `config path` / `config show --origin`
@@ -6265,7 +6281,8 @@ export <provider>:<label> <path> --kek <label>[#<id-hex>][:<class>] [--mech <nam
        [<name>=<value> ...] [--outformat raw|hex|b64]
                                   # wrapped export (§5.6): the blob `load --kek` consumes
 csr <provider>:<label> <path> [--subject "<DN>"] [--hash sha256|sha384|sha512]
-delete <provider>:<label>         # confirmation per ui.confirm_delete
+delete <provider>:<label>         # refused on a protected provider (§5.20);
+                                  # confirmation per ui.confirm_delete
                                   # a ref matching several objects (no keypair-family
                                   # collapse) lists them in a `matches` table, asks once
                                   # "'<label>' matches N objects on <provider>: delete all N?"
@@ -7629,6 +7646,28 @@ callback only when the input fits on the prompt row (reedline's own right-prompt
 When a load ends, a line is printed above the prompt: `cache: <p>: <n> objects loaded in
 <s> s`, `cache: <p>: loading stopped (<n> of <total> objects loaded)` or `cache: <p>:
 loading failed: <error> (<n> of <total>)`. On piped input only failure notices are printed.
+
+### 5.20 Protected providers (r2 addition, §11 D37)
+
+Every provider is **protected** unless its config entry says otherwise: a protected
+provider refuses destructive actions. The only destructive action is `delete` (user
+decision 2026-11-18): `key edit`, `init-pin`, and the creating commands (`generate`,
+`load`, `unwrap`, `copy`, which never overwrite: §4.7 duplicate guard) stay allowed.
+
+Config (optional boolean key `protected`, default true, a non-boolean is a Config error):
+`providers.memory.protected`, `providers.pkcs11[].protected`, and `softhsm.protected` for
+the autodetected SoftHSM instance (§5.13), which has no `providers.pkcs11` entry; a
+`providers.pkcs11` entry carrying the autodetect name follows its own key.
+`AppConfig::is_protected(name)` resolves it (§4.8). There is no global default key, no
+command-line flag and no in-session override: to delete, set `protected: false` on that
+provider and restart r2. `config show` lists `protected: false` where set and omits the
+key otherwise (so the dump of a default config is unchanged).
+
+`delete` checks protection after the ref parses and the provider exists (those errors keep
+precedence) and before any lookup, so a protected provider never shows a confirmation or
+the multi-match `matches` table: UnsupportedOperation `delete refused: provider '<name>'
+is protected`, hint `set protected: false on this provider in r2.yaml to allow destructive
+actions`. The `providers` table gains a last column `protected` (`yes`/`no`).
 
 ## 6. Non-functional requirements
 
@@ -9222,6 +9261,19 @@ one OpenSSL's `X509` decoder accepts). Verified by R6 x509build tests
 - *Verified by*: r2-provider `key_cache::*`; r2-pkcs11 `tests::key_cache::*`; r2-console
   `tests::cache_cmd::*` and `io::indicator::unit::*`; r2-config
   `cache_settings_default_on_and_decode`, `cache_settings_reject_non_booleans`.
+
+**D37 — Protected providers (r2 addition; user decision 2026-11-18).**
+- *Description*: c2@408d6f2 deleted on any provider (after `ui.confirm_delete`). r2
+  refuses `delete` on a protected provider, and every provider is protected unless its
+  entry sets `protected: false` (`providers.memory`, `providers.pkcs11[]`, `softhsm` for
+  the autodetected instance), §5.20. The `providers` table gains a `protected` column.
+- *Reason*: a safety switch against deleting keys on production HSMs by mistake.
+- *Verified by*: r2-config `providers_are_protected_by_default`,
+  `protected_false_per_provider_decodes_and_dumps`,
+  `pkcs11_entry_wins_over_the_softhsm_setting`, `protected_rejects_non_booleans`;
+  r2-console `tests::keys_cmd::test_delete_refused_*`,
+  `test_delete_allowed_on_configured_pkcs11_entry`,
+  `tests::providers_cmd::test_providers_table_shows_protection`.
 
 **Resolved without deviation** (recorded so they are not mistaken for gaps):
 

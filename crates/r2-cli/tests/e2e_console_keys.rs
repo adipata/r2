@@ -236,7 +236,8 @@ fn no_error_panel(out: &str) {
 #[test]
 fn memory_console_keys_end_to_end() {
     let dir = tempfile::tempdir().unwrap();
-    let config = write_config(dir.path(), "");
+    // §5.20: the cleanup deletes need an unprotected mem
+    let config = write_config(dir.path(), "providers:\n  memory:\n    protected: false\n");
     let (pkcs8, private_pem, _public_pem) = software_rsa();
     let pub_path = dir.path().join("pub.pem");
     let rsa_csr = dir.path().join("rsa.csr");
@@ -333,7 +334,7 @@ mod softhsm {
         write_config(
             dir,
             &format!(
-                "providers:\n  pkcs11:\n    - name: hsm\n      library: {}\n",
+                "providers:\n  pkcs11:\n    - name: hsm\n      library: {}\n      protected: false\n",
                 token.module_path.display()
             ),
         )

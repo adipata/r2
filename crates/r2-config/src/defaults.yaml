@@ -109,3 +109,8 @@ custom_mechanisms: []      # entry schema: spec §4.8 / example §5.14
 cache:
   on_login: true           # load a PKCS#11 provider's key cache in the background at `login`
                            # (per HSM: providers.pkcs11[].cache_on_login; per login: --no-cache)
+
+# r2 addition (spec §5.20): protected providers refuse destructive actions (`delete`).
+# Every provider is protected unless its entry sets `protected: false`:
+#   providers.memory.protected, providers.pkcs11[].protected and, for the autodetected
+#   SoftHSM, softhsm.protected. There is no command-line or in-session override.

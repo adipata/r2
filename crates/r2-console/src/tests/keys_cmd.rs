@@ -1288,9 +1288,74 @@ fn test_csr_bad_hash() {
 // delete
 // ---------------------------------------------------------------------------------------
 
+/// §5.20: providers are protected by default, so `delete` is refused before any lookup,
+/// confirmation or match table, and the key stays.
+#[test]
+fn test_delete_refused_on_protected_provider_by_default() {
+    let p = make_pair(&[]); // a confirm() would panic: none may be asked
+    p.mem
+        .import_key(&aes_material(), "stays", None, None)
+        .unwrap();
+    let err = run_line(&p.ctx, "delete mem:stays").unwrap_err();
+    assert!(matches!(err.kind, ErrorKind::UnsupportedOperation));
+    assert_eq!(err.message, "delete refused: provider 'mem' is protected");
+    assert_eq!(
+        err.hint.as_deref(),
+        Some("set protected: false on this provider in r2.yaml to allow destructive actions")
+    );
+    assert_eq!(p.mem.list_keys().unwrap().len(), 1);
+    assert!(p.io.prompts().is_empty());
+}
+
+#[test]
+fn test_delete_refused_before_multi_match_table() {
+    let p = make_pair(&[]);
+    two_pairs(&p);
+    let before = p.mem.list_keys().unwrap().len();
+    let err = run_line(&p.ctx, "delete mem:N/A").unwrap_err();
+    assert_eq!(err.message, "delete refused: provider 'mem' is protected");
+    assert!(p.io.output().is_empty(), "{:?}", p.io.output());
+    assert_eq!(p.mem.list_keys().unwrap().len(), before);
+}
+
+#[test]
+fn test_delete_refusal_is_per_provider() {
+    // mem unprotected; hsm (no config entry) stays protected, even for a missing key
+    let p = make_unprotected_pair(&["y"]);
+    p.hsm
+        .import_key(&aes_material(), "hsmkey", None, None)
+        .unwrap();
+    let err = run_line(&p.ctx, "delete hsm:hsmkey").unwrap_err();
+    assert_eq!(err.message, "delete refused: provider 'hsm' is protected");
+    let err = run_line(&p.ctx, "delete hsm:missing").unwrap_err();
+    assert_eq!(err.message, "delete refused: provider 'hsm' is protected");
+    assert_eq!(p.hsm.list_keys().unwrap().len(), 1);
+    // an unknown provider or a bad ref still reports its own error first
+    let err = run_line(&p.ctx, "delete nope:x").unwrap_err();
+    assert!(matches!(err.kind, ErrorKind::ProviderNotFound), "{err:?}");
+}
+
+#[test]
+fn test_delete_allowed_on_configured_pkcs11_entry() {
+    let config = make_config(Some(
+        "ui:\n  confirm_delete: false\nproviders:\n  pkcs11:\n    - {name: hsm, library: /x.so, protected: false}\n",
+    ));
+    let p = make_pair_with(&[], Some(config), SpyEditor::new());
+    p.hsm
+        .import_key(&aes_material(), "gone", None, None)
+        .unwrap();
+    run_line(&p.ctx, "delete hsm:gone").unwrap();
+    assert!(p.hsm.list_keys().unwrap().is_empty());
+    // mem keeps its default
+    p.mem
+        .import_key(&aes_material(), "stays", None, None)
+        .unwrap();
+    assert!(run_line(&p.ctx, "delete mem:stays").is_err());
+}
+
 #[test]
 fn test_delete_confirms_then_deletes() {
-    let p = make_pair(&["y"]);
+    let p = make_unprotected_pair(&["y"]);
     p.mem
         .import_key(&aes_material(), "gone", None, None)
         .unwrap();
@@ -1306,7 +1371,7 @@ fn test_delete_confirms_then_deletes() {
 
 #[test]
 fn test_delete_declined_keeps_key() {
-    let p = make_pair(&["n"]);
+    let p = make_unprotected_pair(&["n"]);
     p.mem
         .import_key(&aes_material(), "stays", None, None)
         .unwrap();
@@ -1317,7 +1382,7 @@ fn test_delete_declined_keeps_key() {
 
 #[test]
 fn test_delete_without_confirmation_when_disabled() {
-    let config = make_config(Some("ui:\n  confirm_delete: false\n"));
+    let config = unprotected_config("ui:\n  confirm_delete: false\n");
     let p = make_pair_with(&[], Some(config), SpyEditor::new()); // a confirm() would panic
     p.mem
         .import_key(&aes_material(), "gone", None, None)
@@ -1328,7 +1393,7 @@ fn test_delete_without_confirmation_when_disabled() {
 
 #[test]
 fn test_delete_class_qualified_removes_only_that_half() {
-    let p = make_pair(&["y"]);
+    let p = make_unprotected_pair(&["y"]);
     generate(p.mem.as_ref(), KeyAlgorithm::Rsa, "pair");
     run_line(&p.ctx, "delete mem:pair:pub").unwrap();
     let classes: Vec<KeyClass> = p
@@ -1343,7 +1408,7 @@ fn test_delete_class_qualified_removes_only_that_half() {
 
 #[test]
 fn test_delete_unqualified_keypair_still_takes_private_half() {
-    let p = make_pair(&["y"]);
+    let p = make_unprotected_pair(&["y"]);
     generate(p.mem.as_ref(), KeyAlgorithm::Rsa, "pair");
     run_line(&p.ctx, "delete mem:pair").unwrap(); // class preference: the private
     let classes: Vec<KeyClass> = p
@@ -1368,7 +1433,7 @@ fn two_pairs(p: &Pair) {
 
 #[test]
 fn test_delete_ambiguous_lists_matches_and_deletes_all_when_confirmed() {
-    let p = make_pair(&["y"]);
+    let p = make_unprotected_pair(&["y"]);
     two_pairs(&p);
     generate(p.mem.as_ref(), KeyAlgorithm::Rsa, "other");
     run_line(&p.ctx, "delete mem:N/A").unwrap();
@@ -1402,7 +1467,7 @@ fn test_delete_ambiguous_lists_matches_and_deletes_all_when_confirmed() {
 
 #[test]
 fn test_delete_ambiguous_declined_keeps_everything() {
-    let p = make_pair(&["n"]);
+    let p = make_unprotected_pair(&["n"]);
     two_pairs(&p);
     run_line(&p.ctx, "delete mem:N/A").unwrap();
     assert_eq!(p.mem.list_keys().unwrap().len(), 4);
@@ -1411,7 +1476,7 @@ fn test_delete_ambiguous_declined_keeps_everything() {
 
 #[test]
 fn test_delete_ambiguous_class_filter_deletes_only_that_class() {
-    let p = make_pair(&["y"]);
+    let p = make_unprotected_pair(&["y"]);
     two_pairs(&p);
     run_line(&p.ctx, "delete mem:N/A:pub").unwrap();
     let classes: Vec<KeyClass> = p
@@ -1426,7 +1491,7 @@ fn test_delete_ambiguous_class_filter_deletes_only_that_class() {
 
 #[test]
 fn test_delete_ambiguous_same_identity_duplicates() {
-    let p = make_pair(&["y"]);
+    let p = make_unprotected_pair(&["y"]);
     p.mem
         .import_key(&aes_material(), "dup", None, None)
         .unwrap();
@@ -1442,7 +1507,7 @@ fn test_delete_ambiguous_same_identity_duplicates() {
 
 #[test]
 fn test_delete_ambiguous_without_confirmation_when_disabled() {
-    let config = make_config(Some("ui:\n  confirm_delete: false\n"));
+    let config = unprotected_config("ui:\n  confirm_delete: false\n");
     let p = make_pair_with(&[], Some(config), SpyEditor::new()); // a confirm() would panic
     two_pairs(&p);
     run_line(&p.ctx, "delete mem:N/A").unwrap();
@@ -1470,7 +1535,11 @@ impl r2_testkit::FakeHooks for KeepPublic {
 fn test_delete_ambiguous_partial_failure_reports_progress() {
     let io = Rc::new(r2_testkit::ScriptedIo::new(["y"]));
     let mem = Rc::new(r2_testkit::FakeProvider::new("mem").with_hooks(Rc::new(KeepPublic)));
-    let ctx = ctx_with(&io, registry_of(&[Rc::clone(&mem)]), None);
+    let ctx = ctx_with(
+        &io,
+        registry_of(&[Rc::clone(&mem)]),
+        Some(unprotected_config("")),
+    );
     let p = Pair {
         ctx,
         io,

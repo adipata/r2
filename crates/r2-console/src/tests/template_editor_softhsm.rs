@@ -41,6 +41,10 @@ fn test_generate_honors_template_editor_cka_id_softhsm() {
     let io = Rc::new(ScriptedIo::new(["add CKA_ID=0xc0fe", "ok", "y"]));
     let ctx = CtxBuilder::new(Rc::clone(&io) as Rc<dyn ConsoleIo>)
         .providers(registry)
+        // §5.20: the cleanup delete needs an unprotected hsm
+        .config(crate::testing::make_config(Some(
+            "providers:\n  pkcs11:\n    - {name: hsm, library: /unused.so, protected: false}\n",
+        )))
         .build();
 
     let lines = [
