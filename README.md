@@ -128,7 +128,13 @@ providers:
       library: /usr/lib/libvendor_pkcs11.so
       token_label: PROD-TOKEN     # optional; slot: <id> also works
       cache_on_login: false       # optional; overrides `cache: {on_login: true}`
+      protected: false            # optional; allows `delete` here (default true)
 ```
+
+Every provider is **protected** by default: `delete` is refused until its entry sets
+`protected: false` (`providers.memory.protected` for the memory provider,
+`softhsm.protected` for the autodetected SoftHSM). There is no override inside r2; the
+`providers` table shows which providers are protected.
 
 `config path` and `config show --origin` inside the REPL show which file each setting
 came from; `config show --defaults` prints the embedded defaults. The full schema

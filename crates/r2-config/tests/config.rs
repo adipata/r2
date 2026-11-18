@@ -2205,3 +2205,61 @@ fn cache_settings_reject_non_booleans() {
     .unwrap_err();
     assert_eq!(err.kind, ErrorKind::Config);
 }
+
+// ---- r2 addition: protected providers (§5.20) ----
+
+#[test]
+fn providers_are_protected_by_default() {
+    let config = config_from_yaml(Some(
+        "providers:\n  pkcs11:\n    - {name: prodhsm, library: /a.so}\n",
+    ))
+    .unwrap();
+    assert!(config.providers.memory.protected);
+    assert!(config.providers.pkcs11[0].protected);
+    assert!(config.softhsm.protected);
+    for name in ["mem", "prodhsm", "softhsm", "unknown"] {
+        assert!(config.is_protected(name), "{name}");
+    }
+    // the default dump does not list the key
+    assert!(!yaml::dump(&config.to_value()).contains("protected"));
+}
+
+#[test]
+fn protected_false_per_provider_decodes_and_dumps() {
+    let config = config_from_yaml(Some(
+        "providers:\n  memory: {protected: false}\n  pkcs11:\n    - {name: lab, library: /a.so, protected: no}\n    - {name: prod, library: /b.so, protected: true}\nsofthsm: {protected: false}\n",
+    ))
+    .unwrap();
+    assert!(!config.is_protected("mem"));
+    assert!(!config.is_protected("lab"));
+    assert!(config.is_protected("prod"));
+    assert!(!config.is_protected("softhsm"));
+    let dumped = yaml::dump(&config.to_value());
+    // shown only where false: memory, lab and softhsm
+    assert_eq!(dumped.matches("protected: false").count(), 3, "{dumped}");
+    assert!(!dumped.contains("protected: true"), "{dumped}");
+}
+
+#[test]
+fn pkcs11_entry_wins_over_the_softhsm_setting() {
+    // a SoftHSM configured explicitly under its autodetect name follows its own entry
+    let config = config_from_yaml(Some(
+        "providers:\n  pkcs11:\n    - {name: softhsm, library: /s.so, protected: false}\n",
+    ))
+    .unwrap();
+    assert!(config.softhsm.protected);
+    assert!(!config.is_protected("softhsm"));
+}
+
+#[test]
+fn protected_rejects_non_booleans() {
+    for text in [
+        "providers:\n  memory: {protected: maybe}\n",
+        "providers:\n  pkcs11:\n    - {name: a, library: /a.so, protected: 1}\n",
+        "softhsm: {protected: 'no'}\n",
+    ] {
+        let err = config_from_yaml(Some(text)).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Config, "{text}");
+        assert!(err.message.contains("protected"), "{}", err.message);
+    }
+}

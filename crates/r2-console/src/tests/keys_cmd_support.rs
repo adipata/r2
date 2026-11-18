@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::OnceLock;
 
+use crate::testing::make_config;
 use r2_config::model::AppConfig;
 use r2_core::error::Result;
 use r2_core::formats::{self, Encoding};
@@ -72,6 +73,20 @@ pub(crate) struct Pair {
 
 pub(crate) fn make_pair(answers: &[&str]) -> Pair {
     make_pair_with(answers, None, SpyEditor::new())
+}
+
+/// The config of a session whose providers allow `delete` (§5.20: `mem`, the memory
+/// provider, unprotected; `hsm` has no config entry and stays protected), plus `extra`
+/// YAML merged on top.
+pub(crate) fn unprotected_config(extra: &str) -> AppConfig {
+    make_config(Some(&format!(
+        "providers:\n  memory:\n    protected: false\n{extra}"
+    )))
+}
+
+/// `make_pair` with `mem` unprotected, for the `delete` tests.
+pub(crate) fn make_unprotected_pair(answers: &[&str]) -> Pair {
+    make_pair_with(answers, Some(unprotected_config("")), SpyEditor::new())
 }
 
 pub(crate) fn make_pair_with(

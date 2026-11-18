@@ -324,7 +324,7 @@ mod softhsm {
         let config = write_config(
             dir.path(),
             &format!(
-                "providers:\n  pkcs11:\n    - name: hsm\n      library: {}\n",
+                "providers:\n  pkcs11:\n    - name: hsm\n      library: {}\n      protected: false\n",
                 token.module_path.display()
             ),
         );

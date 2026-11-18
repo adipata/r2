@@ -57,6 +57,28 @@ fn test_providers_table_lists_types_and_states() {
     assert!(hsm_row.contains(" ? "), "{hsm_row}");
 }
 
+/// §5.20: the `protected` column says whether `delete` is refused.
+#[test]
+fn test_providers_table_shows_protection() {
+    let io = scripted(&[]);
+    let config = make_config(Some("providers:\n  memory:\n    protected: false\n"));
+    let ctx = CtxBuilder::new(Rc::clone(&io) as Rc<dyn r2_core::io::ConsoleIo>)
+        .config(config)
+        .build();
+    run_line(&ctx, "providers").unwrap();
+    let text = io.text();
+    assert!(text.contains("protected"), "{text}");
+    let row = |name: &str| {
+        text.lines()
+            .find(|l| l.trim_start().starts_with(&format!("{name} ")))
+            .unwrap()
+            .trim_end()
+            .to_owned()
+    };
+    assert!(row("mem").ends_with(" no"), "{}", row("mem"));
+    assert!(row("hsm").ends_with(" yes"), "{}", row("hsm"));
+}
+
 #[test]
 fn test_providers_logged_out_state() {
     let hsm = Rc::new(logged_out("hsm"));

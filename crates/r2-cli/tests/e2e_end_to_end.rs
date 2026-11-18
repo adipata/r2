@@ -177,7 +177,7 @@ mod softhsm {
             &config,
             format!(
                 "app:\n  history_file: {}\n  log:\n    file: {}\nui:\n  confirm_delete: false\n\
-                 providers:\n  pkcs11:\n    - name: hsm\n      library: {}\n\
+                 providers:\n  pkcs11:\n    - name: hsm\n      library: {}\n      protected: false\n\
                  softhsm:\n  autodetect: false\n",
                 dir.path().join("history").display(),
                 dir.path().join("r2.log").display(),

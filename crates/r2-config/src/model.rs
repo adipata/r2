@@ -155,6 +155,9 @@ pub struct UiSection {
 pub struct MemorySection {
     pub enabled: bool,
     pub name: String,
+    /// r2 addition (§5.20): refuse destructive actions (`delete`); optional key, default
+    /// true; dumped only when false.
+    pub protected: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -170,9 +173,12 @@ pub struct Pkcs11InstanceConfig {
     pub env: IndexMap<String, String>,
     /// Load the key cache at `login` (§5.19); None = `cache.on_login`.
     pub cache_on_login: Option<bool>,
+    /// r2 addition (§5.20): refuse destructive actions (`delete`); optional key, default
+    /// true; dumped only when false.
+    pub protected: bool,
 }
 impl Pkcs11InstanceConfig {
-    /// slot/token_label None, env empty (the SoftHSM autodetect instance).
+    /// slot/token_label None, env empty, protected (the SoftHSM autodetect instance).
     pub fn new(name: impl Into<String>, library: impl Into<PathBuf>) -> Self {
         Self {
             name: name.into(),
@@ -181,6 +187,7 @@ impl Pkcs11InstanceConfig {
             token_label: None,
             env: IndexMap::new(),
             cache_on_login: None,
+            protected: true,
         }
     }
 }
@@ -206,6 +213,9 @@ pub struct SoftHsmSection {
     pub search_paths: Vec<PathBuf>,
     pub conf_dir: PathBuf,
     pub token_dir: PathBuf,
+    /// r2 addition (§5.20): `protected` of the autodetected instance (it has no
+    /// `providers.pkcs11` entry); optional key, default true; dumped only when false.
+    pub protected: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -435,20 +445,17 @@ impl AppConfig {
                 if let (Some(on), Value::Mapping(fields)) = (inst.cache_on_login, &mut entry) {
                     fields.insert(Value::from("cache_on_login"), Value::from(on));
                 }
+                show_unprotected(&mut entry, inst.protected);
                 entry
             })
             .collect();
-        let providers = map([
-            (
-                "memory",
-                map([
-                    ("enabled", Value::from(self.providers.memory.enabled)),
-                    ("name", Value::from(self.providers.memory.name.as_str())),
-                ]),
-            ),
-            ("pkcs11", Value::Sequence(pkcs11)),
+        let mut memory = map([
+            ("enabled", Value::from(self.providers.memory.enabled)),
+            ("name", Value::from(self.providers.memory.name.as_str())),
         ]);
-        let softhsm = map([
+        show_unprotected(&mut memory, self.providers.memory.protected);
+        let providers = map([("memory", memory), ("pkcs11", Value::Sequence(pkcs11))]);
+        let mut softhsm = map([
             ("autodetect", Value::from(self.softhsm.autodetect)),
             (
                 "provider_name",
@@ -467,6 +474,7 @@ impl AppConfig {
             ("conf_dir", path_value(&self.softhsm.conf_dir)),
             ("token_dir", path_value(&self.softhsm.token_dir)),
         ]);
+        show_unprotected(&mut softhsm, self.softhsm.protected);
         let templates_pkcs11: Mapping = self
             .templates
             .pkcs11_raw
@@ -548,6 +556,22 @@ impl AppConfig {
                 map([("on_login", Value::from(self.cache.on_login))]),
             ),
         ])
+    }
+
+    /// Whether destructive actions (`delete`) are refused on the provider named `provider`
+    /// (§5.20): its `providers.pkcs11[]` entry, else `providers.memory` by name, else the
+    /// autodetected SoftHSM (`softhsm.protected`). A name none of them claims is protected.
+    pub fn is_protected(&self, provider: &str) -> bool {
+        if let Some(instance) = self.providers.pkcs11.iter().find(|i| i.name == provider) {
+            return instance.protected;
+        }
+        if self.providers.memory.name == provider {
+            return self.providers.memory.protected;
+        }
+        if self.softhsm.provider_name == provider {
+            return self.softhsm.protected;
+        }
+        true
     }
 
     /// c2 `_cross_check`: unique provider names; custom mechanism providers defined.
@@ -719,11 +743,12 @@ impl UiSection {
 impl MemorySection {
     pub fn from_value(value: &Value, path: &str) -> Result<Self> {
         let data = as_mapping(value, path)?;
-        warn_unknown(data, &["enabled", "name"], path, "config key");
+        warn_unknown(data, &["enabled", "name", "protected"], path, "config key");
         let enabled = as_bool(req(data, "enabled", path)?, &join(path, "enabled"))?;
         Ok(Self {
             enabled,
             name: ident(data, "name", path)?,
+            protected: protected_flag(data, path)?,
         })
     }
 }
@@ -739,6 +764,7 @@ impl Pkcs11InstanceConfig {
                 "token_label",
                 "env",
                 "cache_on_login",
+                "protected",
             ],
             path,
             "config key",
@@ -775,6 +801,7 @@ impl Pkcs11InstanceConfig {
             token_label,
             env,
             cache_on_login,
+            protected: protected_flag(data, path)?,
         })
     }
 }
@@ -808,6 +835,22 @@ impl ProvidersSection {
         })
     }
 }
+/// The optional `protected` key of a provider entry (§5.20): absent → true.
+fn protected_flag(data: &Mapping, path: &str) -> Result<bool> {
+    match get(data, "protected") {
+        None => Ok(true),
+        Some(raw) => as_bool(raw, &join(path, "protected")),
+    }
+}
+
+/// `config show` lists `protected` only when a provider is unprotected (§5.20), so the
+/// dump of a default config stays as it was.
+fn show_unprotected(entry: &mut Value, protected: bool) {
+    if let (false, Value::Mapping(fields)) = (protected, entry) {
+        fields.insert(Value::from("protected"), Value::from(false));
+    }
+}
+
 impl SoftHsmSection {
     pub fn from_value(value: &Value, path: &str) -> Result<Self> {
         let data = as_mapping(value, path)?;
@@ -819,6 +862,7 @@ impl SoftHsmSection {
                 "search_paths",
                 "conf_dir",
                 "token_dir",
+                "protected",
             ],
             path,
             "config key",
@@ -839,6 +883,7 @@ impl SoftHsmSection {
             search_paths,
             conf_dir: as_path(req(data, "conf_dir", path)?, &join(path, "conf_dir"))?,
             token_dir: as_path(req(data, "token_dir", path)?, &join(path, "token_dir"))?,
+            protected: protected_flag(data, path)?,
         })
     }
 }

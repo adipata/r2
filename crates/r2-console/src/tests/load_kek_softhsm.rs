@@ -178,7 +178,9 @@ fn session_with_editor(editor: Rc<dyn TemplateEditor>) -> Session {
     let io = Rc::new(ScriptedIo::empty());
     let ctx = CtxBuilder::new(Rc::clone(&io) as Rc<dyn ConsoleIo>)
         .providers(registry)
-        .config(make_config(Some("ui:\n  confirm_delete: false\n")))
+        .config(make_config(Some(
+            "ui:\n  confirm_delete: false\nproviders:\n  pkcs11:\n    - {name: hsm, library: /unused.so, protected: false}\n",
+        )))
         .editor(editor)
         .build();
     let session = Session {

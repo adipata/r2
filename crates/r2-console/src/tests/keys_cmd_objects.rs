@@ -285,7 +285,7 @@ fn test_export_data_raw_and_format_refusal() {
 
 #[test]
 fn test_delete_data_object() {
-    let p = make_pair(&["y"]);
+    let p = make_unprotected_pair(&["y"]);
     p.mem
         .import_key(&data_material(), "note", None, None)
         .unwrap();
