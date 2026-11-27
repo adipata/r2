@@ -1470,10 +1470,17 @@ impl Command for DeleteCommand {
         "Delete a key or certificate (refused when the provider is protected)"
     }
     fn usage(&self) -> &'static str {
-        "delete <provider>:<label>[#<id-hex>][:<class>]"
+        "delete <provider>:<label>[#<id-hex>][:<class>] | delete <provider> --all"
+    }
+    fn flags(&self) -> &'static [&'static str] {
+        &["all"]
     }
     fn run(&self, ctx: &AppContext, args: &BoundArgs) -> r2_core::Result<Flow> {
         reject_named(args, self.usage(), NOUN)?;
+        if args.flag("all") {
+            let name = positional(args, 0, "provider", self.usage())?;
+            return delete_everything(ctx, name, self.usage());
+        }
         let reference = positional(args, 0, "provider:label", self.usage())?;
         refuse_if_protected(ctx, reference)?;
         let (provider, key) = match ctx.providers.resolve_ref(reference) {
@@ -1504,7 +1511,14 @@ impl Command for DeleteCommand {
         if completed_args(tokens, cursor_token) == 0 {
             return complete_refs(ctx, cursor_token);
         }
-        Vec::new()
+        // `--all` follows a bare provider name only (a ref already names its objects).
+        let bare_provider = tokens
+            .get(1)
+            .is_some_and(|first| !first.contains(':') && !first.starts_with("--"));
+        if !bare_provider || tokens.iter().any(|token| token == "--all") {
+            return Vec::new();
+        }
+        owned(&["--all"])
     }
 }
 
@@ -1513,7 +1527,11 @@ impl Command for DeleteCommand {
 /// exactly as `resolve_ref` would report them.
 fn refuse_if_protected(ctx: &AppContext, reference: &str) -> r2_core::Result<()> {
     let parsed = parse_ref(reference)?;
-    let provider = ctx.providers.get(&parsed.provider)?;
+    refuse_protected_provider(ctx, &parsed.provider)
+}
+
+fn refuse_protected_provider(ctx: &AppContext, name: &str) -> r2_core::Result<()> {
+    let provider = ctx.providers.get(name)?;
     if ctx.cfg().is_protected(provider.name()) {
         return Err(ConsoleError::unsupported(format!(
             "delete refused: provider '{}' is protected",
@@ -1567,7 +1585,57 @@ fn delete_all_matches(
         text(ctx, "delete cancelled".to_owned());
         return Ok(Flow::Continue);
     }
-    for (done, (key, text_ref)) in matches.iter().zip(&shown).enumerate() {
+    delete_each(ctx, provider.as_ref(), &matches, &shown)
+}
+
+/// `delete <provider> --all`: refused on a protected provider (before any listing), then
+/// lists every object the provider holds and asks the operator to type the provider name
+/// (always, whatever ui.confirm_delete says) before deleting them all.
+fn delete_everything(ctx: &AppContext, name: &str, usage: &str) -> r2_core::Result<Flow> {
+    if name.contains(':') {
+        return Err(ConsoleError::generic(format!(
+            "--all takes a provider name, not a ref ('{name}')"
+        ))
+        .with_hint(format!("usage: {usage}")));
+    }
+    refuse_protected_provider(ctx, name)?;
+    let provider = ctx.providers.get(name)?;
+    require_usable(provider.as_ref())?;
+    let all = provider.list_keys()?;
+    if all.is_empty() {
+        text(ctx, format!("no keys on {name}"));
+        return Ok(Flow::Continue);
+    }
+    let total = all.len();
+    let shown = display_refs(&all);
+    let rows: Vec<Vec<String>> = shown
+        .iter()
+        .zip(all.iter())
+        .map(|(text, info)| key_row(text.clone(), info))
+        .collect();
+    ctx.io
+        .print(table(Some("delete all"), &KEY_TABLE_COLUMNS, rows));
+    let answer = ctx.io.prompt(&ParamSpec::str(
+        "confirm",
+        format!("type '{name}' to delete all {total} objects on {name}"),
+    ))?;
+    if py_strip(&answer) != name {
+        text(ctx, "delete cancelled".to_owned());
+        return Ok(Flow::Continue);
+    }
+    delete_each(ctx, provider.as_ref(), &all, &shown)
+}
+
+/// Deletes `keys` in order, printing "deleted <shown ref>" for each and a total; the first
+/// failure (or Ctrl-C between objects) stops and says how many went before it.
+fn delete_each(
+    ctx: &AppContext,
+    provider: &dyn Provider,
+    keys: &[KeyInfo],
+    shown: &[String],
+) -> r2_core::Result<Flow> {
+    let total = keys.len();
+    for (done, (key, text_ref)) in keys.iter().zip(shown).enumerate() {
         if let Err(mut err) = check_interrupt().and_then(|()| provider.delete_key(key)) {
             err.message = format!(
                 "{} (deleted {done} of {total} before this failure)",

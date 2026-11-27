@@ -6288,6 +6288,12 @@ delete <provider>:<label>         # refused on a protected provider (§5.20);
                                   # "'<label>' matches N objects on <provider>: delete all N?"
                                   # and deletes them all; a failure stops there and says
                                   # "(deleted k of N before this failure)"
+delete <provider> --all           # every object the provider lists: refused on a protected
+                                  # provider before any listing; shows a `delete all` table,
+                                  # then always (whatever ui.confirm_delete says) prompts
+                                  # "type '<provider>' to delete all N objects on <provider>"
+                                  # and deletes only on that exact (trimmed) answer, else
+                                  # "delete cancelled"; "no keys on <provider>" when empty
 
 ops [<provider>] [--key <provider>:<label>]
 encrypt <provider>:<label> [<mech>] [<name>=<value> ...] [<data>] [--in <path>]

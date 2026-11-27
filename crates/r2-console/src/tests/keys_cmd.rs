@@ -1514,6 +1514,94 @@ fn test_delete_ambiguous_without_confirmation_when_disabled() {
     assert!(p.mem.list_keys().unwrap().is_empty());
 }
 
+// delete <provider> --all
+
+#[test]
+fn test_delete_all_lists_everything_and_deletes_after_typed_name() {
+    let p = make_unprotected_pair(&["mem"]);
+    two_pairs(&p);
+    generate(p.mem.as_ref(), KeyAlgorithm::Rsa, "other");
+    p.hsm
+        .import_key(&aes_material(), "elsewhere", None, None)
+        .unwrap();
+    run_line(&p.ctx, "delete mem --all").unwrap();
+    assert!(p.mem.list_keys().unwrap().is_empty());
+    assert_eq!(
+        p.hsm.list_keys().unwrap().len(),
+        1,
+        "other providers untouched"
+    );
+    assert_eq!(
+        p.io.prompts(),
+        ["type 'mem' to delete all 6 objects on mem"]
+    );
+    let output = p.io.output();
+    assert!(
+        output.contains(&"deleted mem:other:priv".to_owned()),
+        "{output:?}"
+    );
+    assert_eq!(output.last().unwrap(), "deleted 6 objects");
+}
+
+#[test]
+fn test_delete_all_cancelled_unless_name_typed_exactly() {
+    for answer in ["y", "", "MEM", "yes"] {
+        let p = make_unprotected_pair(&[answer]);
+        two_pairs(&p);
+        run_line(&p.ctx, "delete mem --all").unwrap();
+        assert_eq!(p.mem.list_keys().unwrap().len(), 4, "{answer:?}");
+        assert!(p.io.output().contains(&"delete cancelled".to_owned()));
+    }
+}
+
+#[test]
+fn test_delete_all_asks_even_when_confirm_delete_is_off() {
+    let config = unprotected_config("ui:\n  confirm_delete: false\n");
+    let p = make_pair_with(&["  mem "], Some(config), SpyEditor::new());
+    two_pairs(&p);
+    run_line(&p.ctx, "delete mem --all").unwrap();
+    assert_eq!(p.io.prompts().len(), 1);
+    assert!(p.mem.list_keys().unwrap().is_empty());
+}
+
+#[test]
+fn test_delete_all_refused_on_protected_provider_before_listing() {
+    let p = make_pair(&[]);
+    two_pairs(&p);
+    let err = run_line(&p.ctx, "delete mem --all").unwrap_err();
+    assert_eq!(err.message, "delete refused: provider 'mem' is protected");
+    assert!(p.io.output().is_empty(), "{:?}", p.io.output());
+    assert!(p.io.prompts().is_empty());
+    assert_eq!(p.mem.list_keys().unwrap().len(), 4);
+}
+
+#[test]
+fn test_delete_all_empty_provider_and_bad_arguments() {
+    let p = make_unprotected_pair(&[]);
+    run_line(&p.ctx, "delete mem --all").unwrap();
+    assert_eq!(p.io.output().last().unwrap(), "no keys on mem");
+    let err = run_line(&p.ctx, "delete mem:x --all").unwrap_err();
+    assert_eq!(
+        err.message,
+        "--all takes a provider name, not a ref ('mem:x')"
+    );
+    let err = run_line(&p.ctx, "delete nope --all").unwrap_err();
+    assert!(matches!(err.kind, ErrorKind::ProviderNotFound), "{err:?}");
+    let err = run_line(&p.ctx, "delete --all").unwrap_err();
+    assert_eq!(err.message, "missing <provider> argument");
+}
+
+#[test]
+fn test_delete_all_completion() {
+    let p = make_unprotected_pair(&[]);
+    assert_eq!(
+        complete(&p.ctx, "delete", &["delete", "mem"], ""),
+        ["--all"]
+    );
+    assert!(complete(&p.ctx, "delete", &["delete", "mem", "--all"], "").is_empty());
+    assert!(complete(&p.ctx, "delete", &["delete", "mem:x"], "").is_empty());
+}
+
 /// Refuses to delete public keys (a CKA_DESTROYABLE=false stand-in).
 struct KeepPublic;
 
