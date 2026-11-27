@@ -1470,12 +1470,23 @@ impl Command for DeleteCommand {
         "Delete a key or certificate (refused when the provider is protected)"
     }
     fn usage(&self) -> &'static str {
-        "delete <provider>:<label>[#<id-hex>][:<class>]"
+        "delete <provider>:<label>[#<id-hex>][:<class>] | delete <provider>:<pattern> | delete <provider> --all"
+    }
+    fn flags(&self) -> &'static [&'static str] {
+        &["all"]
     }
     fn run(&self, ctx: &AppContext, args: &BoundArgs) -> r2_core::Result<Flow> {
         reject_named(args, self.usage(), NOUN)?;
+        if args.flag("all") {
+            let name = positional(args, 0, "provider", self.usage())?;
+            return delete_everything(ctx, name, self.usage());
+        }
         let reference = positional(args, 0, "provider:label", self.usage())?;
         refuse_if_protected(ctx, reference)?;
+        let parsed = parse_ref(reference)?;
+        if is_label_pattern(&parsed.label) {
+            return delete_pattern(ctx, reference, &parsed);
+        }
         let (provider, key) = match ctx.providers.resolve_ref(reference) {
             Ok(found) => found,
             Err(err) if err.candidates().is_some() => {
@@ -1504,7 +1515,14 @@ impl Command for DeleteCommand {
         if completed_args(tokens, cursor_token) == 0 {
             return complete_refs(ctx, cursor_token);
         }
-        Vec::new()
+        // `--all` follows a bare provider name only (a ref already names its objects).
+        let bare_provider = tokens
+            .get(1)
+            .is_some_and(|first| !first.contains(':') && !first.starts_with("--"));
+        if !bare_provider || tokens.iter().any(|token| token == "--all") {
+            return Vec::new();
+        }
+        owned(&["--all"])
     }
 }
 
@@ -1513,7 +1531,11 @@ impl Command for DeleteCommand {
 /// exactly as `resolve_ref` would report them.
 fn refuse_if_protected(ctx: &AppContext, reference: &str) -> r2_core::Result<()> {
     let parsed = parse_ref(reference)?;
-    let provider = ctx.providers.get(&parsed.provider)?;
+    refuse_protected_provider(ctx, &parsed.provider)
+}
+
+fn refuse_protected_provider(ctx: &AppContext, name: &str) -> r2_core::Result<()> {
+    let provider = ctx.providers.get(name)?;
     if ctx.cfg().is_protected(provider.name()) {
         return Err(ConsoleError::unsupported(format!(
             "delete refused: provider '{}' is protected",
@@ -1567,7 +1589,140 @@ fn delete_all_matches(
         text(ctx, "delete cancelled".to_owned());
         return Ok(Flow::Continue);
     }
-    for (done, (key, text_ref)) in matches.iter().zip(&shown).enumerate() {
+    delete_each(ctx, provider.as_ref(), &matches, &shown)
+}
+
+/// `delete <provider> --all`: refused on a protected provider (before any listing), then
+/// lists every object the provider holds and asks the operator to type the provider name
+/// (always, whatever ui.confirm_delete says) before deleting them all.
+fn delete_everything(ctx: &AppContext, name: &str, usage: &str) -> r2_core::Result<Flow> {
+    if name.contains(':') {
+        return Err(ConsoleError::generic(format!(
+            "--all takes a provider name, not a ref ('{name}')"
+        ))
+        .with_hint(format!("usage: {usage}")));
+    }
+    refuse_protected_provider(ctx, name)?;
+    let provider = ctx.providers.get(name)?;
+    require_usable(provider.as_ref())?;
+    let all = provider.list_keys()?;
+    if all.is_empty() {
+        text(ctx, format!("no keys on {name}"));
+        return Ok(Flow::Continue);
+    }
+    let total = all.len();
+    let shown = display_refs(&all);
+    let rows: Vec<Vec<String>> = shown
+        .iter()
+        .zip(all.iter())
+        .map(|(text, info)| key_row(text.clone(), info))
+        .collect();
+    ctx.io
+        .print(table(Some("delete all"), &KEY_TABLE_COLUMNS, rows));
+    let answer = ctx.io.prompt(&ParamSpec::str(
+        "confirm",
+        format!("type '{name}' to delete all {total} objects on {name}"),
+    ))?;
+    if py_strip(&answer) != name {
+        text(ctx, "delete cancelled".to_owned());
+        return Ok(Flow::Continue);
+    }
+    delete_each(ctx, provider.as_ref(), &all, &shown)
+}
+
+/// A label with `*` (any run of characters) or `?` (one character) is a pattern.
+fn is_label_pattern(label: &str) -> bool {
+    label.contains(['*', '?'])
+}
+
+/// Shell-style glob over the whole label: `*` = any run (also empty), `?` = one character;
+/// everything else literal and case-sensitive.
+fn label_glob_matches(pattern: &str, label: &str) -> bool {
+    let pattern: Vec<char> = pattern.chars().collect();
+    let label: Vec<char> = label.chars().collect();
+    let (mut p, mut l) = (0, 0);
+    let mut backtrack: Option<(usize, usize)> = None; // (index after '*', label index)
+    while l < label.len() {
+        match pattern.get(p) {
+            Some('*') => {
+                p += 1;
+                backtrack = Some((p, l));
+            }
+            Some(&c) if c == '?' || c == label[l] => {
+                p += 1;
+                l += 1;
+            }
+            _ => match backtrack {
+                Some((star_p, star_l)) => {
+                    p = star_p;
+                    l = star_l + 1;
+                    backtrack = Some((star_p, star_l + 1));
+                }
+                None => return false,
+            },
+        }
+    }
+    pattern[p..].iter().all(|c| *c == '*')
+}
+
+/// `delete <provider>:<pattern>[#<id>][:<class>]`: every object whose label matches the
+/// glob (and the id/class/handle when given) is listed, and a y/N confirmation is always
+/// asked (whatever ui.confirm_delete says) before they are all deleted.
+fn delete_pattern(
+    ctx: &AppContext,
+    reference: &str,
+    parsed: &r2_core::keys::ParsedRef,
+) -> r2_core::Result<Flow> {
+    let provider = ctx.providers.get(&parsed.provider)?;
+    require_usable(provider.as_ref())?;
+    let selector = KeySelector::from(parsed);
+    let matches: Vec<KeyInfo> = provider
+        .list_keys()?
+        .into_iter()
+        .filter(|info| {
+            let mut exact = selector.clone();
+            exact.label.clone_from(&info.key_ref.label);
+            label_glob_matches(&selector.label, &info.key_ref.label)
+                && matches_selector(info, &exact)
+        })
+        .collect();
+    if matches.is_empty() {
+        return Err(
+            ConsoleError::key_not_found(format!("no keys match '{reference}'")).with_hint(
+                "in a label pattern, * matches any run of characters and ? one character",
+            ),
+        );
+    }
+    let total = matches.len();
+    let shown = display_refs(&matches);
+    let rows: Vec<Vec<String>> = shown
+        .iter()
+        .zip(matches.iter())
+        .map(|(text, info)| key_row(text.clone(), info))
+        .collect();
+    ctx.io
+        .print(table(Some("matches"), &KEY_TABLE_COLUMNS, rows));
+    let noun = if total == 1 { "object" } else { "objects" };
+    if !ctx.io.confirm(
+        &format!("'{reference}' matches {total} {noun}: delete all {total}?"),
+        false,
+    )? {
+        text(ctx, "delete cancelled".to_owned());
+        return Ok(Flow::Continue);
+    }
+    delete_each(ctx, provider.as_ref(), &matches, &shown)
+}
+
+/// Deletes `keys` in order, printing "deleted <shown ref>" for each and a total; the first
+/// failure (or Ctrl-C between objects) stops and says how many went before it.
+fn delete_each(
+    ctx: &AppContext,
+    provider: &dyn Provider,
+    keys: &[KeyInfo],
+    shown: &[String],
+) -> r2_core::Result<Flow> {
+    let total = keys.len();
+    for (done, (key, text_ref)) in keys.iter().zip(shown).enumerate() {
         if let Err(mut err) = check_interrupt().and_then(|()| provider.delete_key(key)) {
             err.message = format!(
                 "{} (deleted {done} of {total} before this failure)",
@@ -1577,6 +1732,7 @@ fn delete_all_matches(
         }
         text(ctx, format!("deleted {text_ref}"));
     }
-    text(ctx, format!("deleted {total} objects"));
+    let noun = if total == 1 { "object" } else { "objects" };
+    text(ctx, format!("deleted {total} {noun}"));
     Ok(Flow::Continue)
 }

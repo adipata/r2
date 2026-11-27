@@ -136,6 +136,13 @@ Every provider is **protected** by default: `delete` is refused until its entry 
 `softhsm.protected` for the autodetected SoftHSM). There is no override inside r2; the
 `providers` table shows which providers are protected.
 
+On an unprotected provider, `delete <provider>:<label>` removes every object sharing that
+label after one confirmation, `delete <provider>:*1024*` removes every object whose label
+matches the pattern (`*` any run of characters, `?` one character) after listing them and
+asking, and `delete <provider> --all` removes everything the provider holds once you type
+the provider's name to confirm. Objects without a label are listed and addressed as
+`<provider>::<class>` (or `<provider>:#<id>`).
+
 `config path` and `config show --origin` inside the REPL show which file each setting
 came from; `config show --defaults` prints the embedded defaults. The full schema
 (templates, custom attributes, custom mechanisms) is in spec §4.8 and §7; the embedded

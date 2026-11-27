@@ -783,6 +783,23 @@ impl Pkcs11Provider {
             .find(|class| cko(*class) == code))
     }
 
+    /// Objects of `key_class` (and `key_id`) whose CKA_LABEL is missing or decodes to "" —
+    /// what a KeyInfo with an empty label stands for. A `CKA_LABEL = ""` search template
+    /// would miss the objects that have no CKA_LABEL at all.
+    fn unlabeled_handles(&self, key_class: KeyClass, key_id: Option<&[u8]>) -> OResult<Vec<u64>> {
+        let mut template = vec![(cka::CLASS, Zeroizing::new(ulong_bytes(cko(key_class))?))];
+        if let Some(id) = key_id {
+            template.push((cka::ID, bytes(id)));
+        }
+        let mut unlabeled = Vec::new();
+        for handle in self.backend().find_objects(&template)? {
+            if label_text(self.attr(handle, cka::LABEL)?).is_empty() {
+                unlabeled.push(handle);
+            }
+        }
+        Ok(unlabeled)
+    }
+
     fn class_template(
         &self,
         key_class: KeyClass,
@@ -803,12 +820,16 @@ impl Pkcs11Provider {
     /// wins regardless of `key.handle` (handles renumber across re-login); among twins only
     /// the exact `key.handle` object is acceptable, else AmbiguousKey.
     pub(crate) fn find_handle(&self, key: &KeyInfo) -> OResult<u64> {
-        let template = self.class_template(
-            key.key_class,
-            &key.key_ref.label,
-            key.key_ref.key_id.as_deref(),
-        )?;
-        let handles = self.backend().find_objects(&template)?;
+        let handles = if key.key_ref.label.is_empty() {
+            self.unlabeled_handles(key.key_class, key.key_ref.key_id.as_deref())?
+        } else {
+            let template = self.class_template(
+                key.key_class,
+                &key.key_ref.label,
+                key.key_ref.key_id.as_deref(),
+            )?;
+            self.backend().find_objects(&template)?
+        };
         let display = key.key_ref.display();
         match handles.len() {
             0 => {
@@ -1052,7 +1073,13 @@ impl Pkcs11Provider {
 
     pub(crate) fn find_key_impl(&self, selector: &KeySelector) -> Result<KeyInfo> {
         self.op("key lookup", || {
-            let mut template = vec![(cka::LABEL, bytes(selector.label.as_bytes()))];
+            // An empty label stands for a missing CKA_LABEL too: search without it and keep
+            // the objects whose decoded label is empty.
+            let unlabeled = selector.label.is_empty();
+            let mut template = Vec::new();
+            if !unlabeled {
+                template.push((cka::LABEL, bytes(selector.label.as_bytes())));
+            }
             if let Some(id) = &selector.key_id {
                 template.push((cka::ID, bytes(id)));
             }
@@ -1067,6 +1094,9 @@ impl Pkcs11Provider {
                 let Some(info) = self.key_info(handle, class)? else {
                     continue;
                 };
+                if unlabeled && !info.key_ref.label.is_empty() {
+                    continue;
+                }
                 if selector
                     .handle
                     .is_some_and(|wanted| info.handle != Some(wanted))

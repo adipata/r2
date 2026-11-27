@@ -181,6 +181,21 @@ fn test_parse_ref_valid() {
     }
 }
 
+/// An unlabeled object is addressable once a selector names it (`keys` lists it so).
+#[test]
+fn test_parse_ref_empty_label_with_selector() {
+    let parsed = parse_ref("prov::priv").unwrap();
+    assert_eq!(parsed.label, "");
+    assert_eq!(parsed.key_class, Some(KeyClass::Private));
+    let parsed = parse_ref("prov:#0a1b").unwrap();
+    assert_eq!(parsed.label, "");
+    assert_eq!(parsed.key_id, Some(vec![0x0a, 0x1b]));
+    let parsed = parse_ref("prov:@7").unwrap();
+    assert_eq!(parsed.label, "");
+    assert_eq!(parsed.handle, Some(7));
+    assert!(parse_ref("prov:").is_err());
+}
+
 // --- parse_ref: malformed refs (pos points at the offending character) ------
 
 #[test]
@@ -198,7 +213,6 @@ fn test_parse_ref_malformed() {
         ("prov:label#xyz", 11),   // invalid hex digit 'x'
         ("prov:x#0a1b:frob", 12), // unknown class selector after the id
         ("prov:x#0a1b:", 12),     // empty class selector after the id
-        ("prov::priv", 5),        // class selector with no label
         ("prov:x#:pub", 7),       // class selector but empty id
     ];
     for &(reference, pos) in bad {

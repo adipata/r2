@@ -1387,7 +1387,10 @@ validation too). Algorithm of `parse_ref` (positions are byte offsets; every err
    private/public/certificate too)").
 4. Without `#`: a trailing `:<class>` is a selector ONLY when the token is recognised
    (case-insensitive); otherwise the label keeps its `:`/`#` characters.
-5. Empty label → "missing key label" (pos = first `:` + 1). Empty id → "empty key id
+5. Empty label with no `#id`, `:<class>` or `@<handle>` → "missing key label" (pos =
+   first `:` + 1); with one of them the empty label is accepted and selects objects whose
+   CKA_LABEL is missing or empty (`prov::priv`, `prov:#0a1b`, `prov:@7`, as `keys` lists
+   them; r2 addition). Empty id → "empty key id
    after '#'" (pos = `#` + 1). Non-hex id char → "invalid hex digit {c!r} in key id"
    (its offset; hint "the id after '#' is lowercase hex, e.g. #0a1b"; upper case is
    accepted). Odd length → "odd number of hex digits in key id" (pos = end of the id; hint
@@ -1397,7 +1400,8 @@ Documented carve-out: a literal label ending in a class token or `@<digits>` nee
 explicit `#id`.
 
 **`display_refs`** (normative): `key_ref.display()` per info; displays that occur more than
-once get a `:<class token>` suffix; displays that still collide (same label/id/class) get
+once get a `:<class token>` suffix, and so does an unlabeled id-less object (`prov:`
+would not parse; r2 addition); displays that still collide (same label/id/class) get
 an additional `@<handle>` suffix when the info has a handle. Every emitted form parses via
 `parse_ref`. Used by the `keys` table, ref completion and the AmbiguousKey message. NOT
 used by `key info`'s `related: …` line, which always prints `{ref.display()}:{class
@@ -6288,6 +6292,20 @@ delete <provider>:<label>         # refused on a protected provider (§5.20);
                                   # "'<label>' matches N objects on <provider>: delete all N?"
                                   # and deletes them all; a failure stops there and says
                                   # "(deleted k of N before this failure)"
+delete <provider>:<pattern>[#<id-hex>][:<class>]
+                                  # a label with `*` (any run, also empty) or `?` (one
+                                  # character) is a whole-label, case-sensitive glob: the
+                                  # matching objects (id/class/handle still filter) are listed
+                                  # in a `matches` table, then always (whatever
+                                  # ui.confirm_delete says) "'<ref>' matches N objects:
+                                  # delete all N? [y/N]"; no match → KeyNotFound
+                                  # "no keys match '<ref>'"
+delete <provider> --all           # every object the provider lists: refused on a protected
+                                  # provider before any listing; shows a `delete all` table,
+                                  # then always (whatever ui.confirm_delete says) prompts
+                                  # "type '<provider>' to delete all N objects on <provider>"
+                                  # and deletes only on that exact (trimmed) answer, else
+                                  # "delete cancelled"; "no keys on <provider>" when empty
 
 ops [<provider>] [--key <provider>:<label>]
 encrypt <provider>:<label> [<mech>] [<name>=<value> ...] [<data>] [--in <path>]

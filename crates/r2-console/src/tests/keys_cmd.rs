@@ -1514,6 +1514,228 @@ fn test_delete_ambiguous_without_confirmation_when_disabled() {
     assert!(p.mem.list_keys().unwrap().is_empty());
 }
 
+// delete <provider> --all
+
+#[test]
+fn test_delete_all_lists_everything_and_deletes_after_typed_name() {
+    let p = make_unprotected_pair(&["mem"]);
+    two_pairs(&p);
+    generate(p.mem.as_ref(), KeyAlgorithm::Rsa, "other");
+    p.hsm
+        .import_key(&aes_material(), "elsewhere", None, None)
+        .unwrap();
+    run_line(&p.ctx, "delete mem --all").unwrap();
+    assert!(p.mem.list_keys().unwrap().is_empty());
+    assert_eq!(
+        p.hsm.list_keys().unwrap().len(),
+        1,
+        "other providers untouched"
+    );
+    assert_eq!(
+        p.io.prompts(),
+        ["type 'mem' to delete all 6 objects on mem"]
+    );
+    let output = p.io.output();
+    assert!(
+        output.contains(&"deleted mem:other:priv".to_owned()),
+        "{output:?}"
+    );
+    assert_eq!(output.last().unwrap(), "deleted 6 objects");
+}
+
+#[test]
+fn test_delete_all_cancelled_unless_name_typed_exactly() {
+    for answer in ["y", "", "MEM", "yes"] {
+        let p = make_unprotected_pair(&[answer]);
+        two_pairs(&p);
+        run_line(&p.ctx, "delete mem --all").unwrap();
+        assert_eq!(p.mem.list_keys().unwrap().len(), 4, "{answer:?}");
+        assert!(p.io.output().contains(&"delete cancelled".to_owned()));
+    }
+}
+
+#[test]
+fn test_delete_all_asks_even_when_confirm_delete_is_off() {
+    let config = unprotected_config("ui:\n  confirm_delete: false\n");
+    let p = make_pair_with(&["  mem "], Some(config), SpyEditor::new());
+    two_pairs(&p);
+    run_line(&p.ctx, "delete mem --all").unwrap();
+    assert_eq!(p.io.prompts().len(), 1);
+    assert!(p.mem.list_keys().unwrap().is_empty());
+}
+
+#[test]
+fn test_delete_all_refused_on_protected_provider_before_listing() {
+    let p = make_pair(&[]);
+    two_pairs(&p);
+    let err = run_line(&p.ctx, "delete mem --all").unwrap_err();
+    assert_eq!(err.message, "delete refused: provider 'mem' is protected");
+    assert!(p.io.output().is_empty(), "{:?}", p.io.output());
+    assert!(p.io.prompts().is_empty());
+    assert_eq!(p.mem.list_keys().unwrap().len(), 4);
+}
+
+#[test]
+fn test_delete_all_empty_provider_and_bad_arguments() {
+    let p = make_unprotected_pair(&[]);
+    run_line(&p.ctx, "delete mem --all").unwrap();
+    assert_eq!(p.io.output().last().unwrap(), "no keys on mem");
+    let err = run_line(&p.ctx, "delete mem:x --all").unwrap_err();
+    assert_eq!(
+        err.message,
+        "--all takes a provider name, not a ref ('mem:x')"
+    );
+    let err = run_line(&p.ctx, "delete nope --all").unwrap_err();
+    assert!(matches!(err.kind, ErrorKind::ProviderNotFound), "{err:?}");
+    let err = run_line(&p.ctx, "delete --all").unwrap_err();
+    assert_eq!(err.message, "missing <provider> argument");
+}
+
+#[test]
+fn test_delete_all_completion() {
+    let p = make_unprotected_pair(&[]);
+    assert_eq!(
+        complete(&p.ctx, "delete", &["delete", "mem"], ""),
+        ["--all"]
+    );
+    assert!(complete(&p.ctx, "delete", &["delete", "mem", "--all"], "").is_empty());
+    assert!(complete(&p.ctx, "delete", &["delete", "mem:x"], "").is_empty());
+}
+
+// delete <provider>:<pattern>
+
+fn labels(provider: &dyn Provider) -> Vec<String> {
+    let mut labels: Vec<String> = provider
+        .list_keys()
+        .unwrap()
+        .iter()
+        .map(|k| format!("{}:{}", k.key_ref.label, class_text_of(k.key_class)))
+        .collect();
+    labels.sort();
+    labels
+}
+
+fn class_text_of(class: KeyClass) -> &'static str {
+    crate::render::class_text(class)
+}
+
+fn import_labels(p: &Pair, names: &[&str]) {
+    for name in names {
+        p.mem.import_key(&aes_material(), name, None, None).unwrap();
+    }
+}
+
+#[test]
+fn test_delete_pattern_lists_confirms_and_deletes_matches() {
+    let p = make_unprotected_pair(&["y"]);
+    import_labels(&p, &["rsa1024-a", "x1024", "1024", "rsa2048", "a10244"]);
+    generate(p.mem.as_ref(), KeyAlgorithm::Rsa, "pair-1024");
+    run_line(&p.ctx, "delete mem:*1024*").unwrap();
+    assert_eq!(
+        p.io.prompts(),
+        ["'mem:*1024*' matches 6 objects: delete all 6?"]
+    );
+    assert_eq!(labels(p.mem.as_ref()), ["rsa2048:secret"]);
+    let output = p.io.output();
+    assert!(
+        output.contains(&"deleted mem:pair-1024:pub".to_owned()),
+        "{output:?}"
+    );
+    assert_eq!(output.last().unwrap(), "deleted 6 objects");
+}
+
+#[test]
+fn test_delete_pattern_glob_rules() {
+    // (pattern, labels left) over rsa1024-a, x1024, 1024, rsa2048, a10244
+    for (pattern, left) in [
+        ("1024*", vec!["a10244", "rsa1024-a", "rsa2048", "x1024"]),
+        ("*1024", vec!["a10244", "rsa1024-a", "rsa2048"]),
+        ("rsa????", vec!["1024", "a10244", "rsa1024-a", "x1024"]),
+        ("?1024", vec!["1024", "a10244", "rsa1024-a", "rsa2048"]),
+        ("*", vec![]),
+        (
+            "RSA*",
+            vec!["1024", "a10244", "rsa1024-a", "rsa2048", "x1024"],
+        ), // case-sensitive
+    ] {
+        let p = make_unprotected_pair(&["y"]);
+        import_labels(&p, &["rsa1024-a", "x1024", "1024", "rsa2048", "a10244"]);
+        let result = run_line(&p.ctx, &format!("delete mem:{pattern}"));
+        let mut got: Vec<String> = p
+            .mem
+            .list_keys()
+            .unwrap()
+            .iter()
+            .map(|k| k.key_ref.label.clone())
+            .collect();
+        got.sort();
+        assert_eq!(got, left, "{pattern}");
+        if left.len() == 5 {
+            assert!(matches!(result.unwrap_err().kind, ErrorKind::KeyNotFound));
+        }
+    }
+}
+
+#[test]
+fn test_delete_pattern_with_class_suffix_and_single_match() {
+    let p = make_unprotected_pair(&["y", "y"]);
+    two_pairs(&p);
+    run_line(&p.ctx, "delete mem:N*:pub").unwrap();
+    assert_eq!(labels(p.mem.as_ref()), ["N/A:private", "N/A:private"]);
+    import_labels(&p, &["lonely"]);
+    run_line(&p.ctx, "delete mem:lon?ly").unwrap();
+    assert_eq!(
+        p.io.prompts().last().unwrap(),
+        "'mem:lon?ly' matches 1 object: delete all 1?"
+    );
+    assert_eq!(p.io.output().last().unwrap(), "deleted 1 object");
+}
+
+#[test]
+fn test_delete_pattern_always_confirms_and_can_be_declined() {
+    let config = unprotected_config("ui:\n  confirm_delete: false\n");
+    let p = make_pair_with(&["n"], Some(config), SpyEditor::new());
+    import_labels(&p, &["k1", "k2"]);
+    run_line(&p.ctx, "delete mem:k*").unwrap();
+    assert_eq!(p.io.prompts().len(), 1);
+    assert_eq!(p.mem.list_keys().unwrap().len(), 2);
+    assert!(p.io.output().contains(&"delete cancelled".to_owned()));
+}
+
+#[test]
+fn test_delete_pattern_no_match_and_protected() {
+    let p = make_unprotected_pair(&[]);
+    import_labels(&p, &["k1"]);
+    let err = run_line(&p.ctx, "delete mem:*zzz*").unwrap_err();
+    assert!(matches!(err.kind, ErrorKind::KeyNotFound));
+    assert_eq!(err.message, "no keys match 'mem:*zzz*'");
+    assert!(p.io.prompts().is_empty());
+    p.hsm.import_key(&aes_material(), "k1", None, None).unwrap();
+    let err = run_line(&p.ctx, "delete hsm:*").unwrap_err();
+    assert_eq!(err.message, "delete refused: provider 'hsm' is protected");
+    assert!(p.io.output().is_empty(), "{:?}", p.io.output());
+    assert_eq!(p.hsm.list_keys().unwrap().len(), 1);
+}
+
+#[test]
+fn test_delete_unlabeled_object_by_class_ref() {
+    let p = make_unprotected_pair(&["y"]);
+    p.mem.store_key_unchecked(&aes_material(), "", None, None);
+    import_labels(&p, &["named"]);
+    run_line(&p.ctx, "keys mem").unwrap();
+    assert!(
+        p.io.output()
+            .iter()
+            .any(|line| line.contains("mem::secret")),
+        "{:?}",
+        p.io.output()
+    );
+    run_line(&p.ctx, "delete mem::secret").unwrap();
+    assert_eq!(labels(p.mem.as_ref()), ["named:secret"]);
+    let err = run_line(&p.ctx, "delete mem:").unwrap_err();
+    assert_eq!(err.message, "missing key label");
+}
+
 /// Refuses to delete public keys (a CKA_DESTROYABLE=false stand-in).
 struct KeepPublic;
 
