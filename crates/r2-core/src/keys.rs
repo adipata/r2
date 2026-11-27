@@ -505,7 +505,9 @@ pub fn parse_ref(reference: &str) -> Result<ParsedRef> {
         }
     };
 
-    if label.is_empty() {
+    // An object without CKA_LABEL lists as `prov::priv` / `prov:#0a1b` / `prov:@7`: the
+    // empty label is accepted when a selector names the object, never on its own.
+    if label.is_empty() && id_hex.is_none() && key_class.is_none() && handle.is_none() {
         return Err(error("missing key label".to_owned(), colon + 1).with_hint(REF_HINT));
     }
     let Some(id_hex) = id_hex else {
@@ -565,7 +567,10 @@ pub fn display_refs(infos: &[KeyInfo]) -> Vec<String> {
         .iter()
         .zip(infos)
         .map(|(text, info)| {
-            if plain_counts.get(text.as_str()).copied().unwrap_or(0) == 1 {
+            // `prov:` alone would not parse back: an unlabeled, id-less object always
+            // carries its class (`prov::priv`).
+            let unnamed = info.key_ref.label.is_empty() && info.key_ref.key_id.is_none();
+            if plain_counts.get(text.as_str()).copied().unwrap_or(0) == 1 && !unnamed {
                 text.clone()
             } else {
                 format!("{text}:{}", info.key_class.token())

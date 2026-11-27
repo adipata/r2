@@ -1429,3 +1429,45 @@ fn key_material_is_gated_by_pycas_der_loaders() {
         .unwrap();
     assert_eq!(info.key_class, KeyClass::Public);
 }
+
+/// An object without CKA_LABEL (or with an empty one) lists with the empty label, and
+/// `prov::<class>` / `prov:#id` find and delete it (a `CKA_LABEL = ""` search would not).
+#[test]
+fn unlabeled_objects_are_found_and_deleted() {
+    let (backend, provider) = logged_in();
+    let ul = super::ul;
+    let plant = |id: u8, label: Option<&[u8]>| {
+        let mut attrs = vec![
+            (0x0000, ul(4)),    // CKA_CLASS = secret key
+            (0x0100, ul(0x1F)), // CKA_KEY_TYPE = AES
+            (0x0102, vec![id]), // CKA_ID
+            (0x0161, ul(16)),   // CKA_VALUE_LEN
+        ];
+        if let Some(label) = label {
+            attrs.push((0x0003, label.to_vec())); // CKA_LABEL
+        }
+        backend.plant_object(0, attrs, &[1; 16])
+    };
+    plant(1, None);
+    plant(2, Some(b""));
+    plant(3, Some(b"named"));
+    let err = provider
+        .find_key(&sel("").with_class(Some(KeyClass::Secret)))
+        .unwrap_err();
+    assert_eq!(err.candidates().map(<[_]>::len), Some(2), "{err:?}");
+    let missing = provider.find_key(&sel("").with_id(Some(vec![1]))).unwrap();
+    assert_eq!(missing.key_ref.label, "");
+    provider.delete_key(&missing).unwrap();
+    let empty = provider
+        .find_key(&sel("").with_class(Some(KeyClass::Secret)))
+        .unwrap();
+    assert_eq!(empty.key_ref.key_id, Some(vec![2]));
+    provider.delete_key(&empty).unwrap();
+    let left: Vec<String> = provider
+        .list_keys()
+        .unwrap()
+        .iter()
+        .map(|k| k.key_ref.label.clone())
+        .collect();
+    assert_eq!(left, ["named"]);
+}

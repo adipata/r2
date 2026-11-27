@@ -1470,7 +1470,7 @@ impl Command for DeleteCommand {
         "Delete a key or certificate (refused when the provider is protected)"
     }
     fn usage(&self) -> &'static str {
-        "delete <provider>:<label>[#<id-hex>][:<class>] | delete <provider> --all"
+        "delete <provider>:<label>[#<id-hex>][:<class>] | delete <provider>:<pattern> | delete <provider> --all"
     }
     fn flags(&self) -> &'static [&'static str] {
         &["all"]
@@ -1483,6 +1483,10 @@ impl Command for DeleteCommand {
         }
         let reference = positional(args, 0, "provider:label", self.usage())?;
         refuse_if_protected(ctx, reference)?;
+        let parsed = parse_ref(reference)?;
+        if is_label_pattern(&parsed.label) {
+            return delete_pattern(ctx, reference, &parsed);
+        }
         let (provider, key) = match ctx.providers.resolve_ref(reference) {
             Ok(found) => found,
             Err(err) if err.candidates().is_some() => {
@@ -1626,6 +1630,89 @@ fn delete_everything(ctx: &AppContext, name: &str, usage: &str) -> r2_core::Resu
     delete_each(ctx, provider.as_ref(), &all, &shown)
 }
 
+/// A label with `*` (any run of characters) or `?` (one character) is a pattern.
+fn is_label_pattern(label: &str) -> bool {
+    label.contains(['*', '?'])
+}
+
+/// Shell-style glob over the whole label: `*` = any run (also empty), `?` = one character;
+/// everything else literal and case-sensitive.
+fn label_glob_matches(pattern: &str, label: &str) -> bool {
+    let pattern: Vec<char> = pattern.chars().collect();
+    let label: Vec<char> = label.chars().collect();
+    let (mut p, mut l) = (0, 0);
+    let mut backtrack: Option<(usize, usize)> = None; // (index after '*', label index)
+    while l < label.len() {
+        match pattern.get(p) {
+            Some('*') => {
+                p += 1;
+                backtrack = Some((p, l));
+            }
+            Some(&c) if c == '?' || c == label[l] => {
+                p += 1;
+                l += 1;
+            }
+            _ => match backtrack {
+                Some((star_p, star_l)) => {
+                    p = star_p;
+                    l = star_l + 1;
+                    backtrack = Some((star_p, star_l + 1));
+                }
+                None => return false,
+            },
+        }
+    }
+    pattern[p..].iter().all(|c| *c == '*')
+}
+
+/// `delete <provider>:<pattern>[#<id>][:<class>]`: every object whose label matches the
+/// glob (and the id/class/handle when given) is listed, and a y/N confirmation is always
+/// asked (whatever ui.confirm_delete says) before they are all deleted.
+fn delete_pattern(
+    ctx: &AppContext,
+    reference: &str,
+    parsed: &r2_core::keys::ParsedRef,
+) -> r2_core::Result<Flow> {
+    let provider = ctx.providers.get(&parsed.provider)?;
+    require_usable(provider.as_ref())?;
+    let selector = KeySelector::from(parsed);
+    let matches: Vec<KeyInfo> = provider
+        .list_keys()?
+        .into_iter()
+        .filter(|info| {
+            let mut exact = selector.clone();
+            exact.label.clone_from(&info.key_ref.label);
+            label_glob_matches(&selector.label, &info.key_ref.label)
+                && matches_selector(info, &exact)
+        })
+        .collect();
+    if matches.is_empty() {
+        return Err(
+            ConsoleError::key_not_found(format!("no keys match '{reference}'")).with_hint(
+                "in a label pattern, * matches any run of characters and ? one character",
+            ),
+        );
+    }
+    let total = matches.len();
+    let shown = display_refs(&matches);
+    let rows: Vec<Vec<String>> = shown
+        .iter()
+        .zip(matches.iter())
+        .map(|(text, info)| key_row(text.clone(), info))
+        .collect();
+    ctx.io
+        .print(table(Some("matches"), &KEY_TABLE_COLUMNS, rows));
+    let noun = if total == 1 { "object" } else { "objects" };
+    if !ctx.io.confirm(
+        &format!("'{reference}' matches {total} {noun}: delete all {total}?"),
+        false,
+    )? {
+        text(ctx, "delete cancelled".to_owned());
+        return Ok(Flow::Continue);
+    }
+    delete_each(ctx, provider.as_ref(), &matches, &shown)
+}
+
 /// Deletes `keys` in order, printing "deleted <shown ref>" for each and a total; the first
 /// failure (or Ctrl-C between objects) stops and says how many went before it.
 fn delete_each(
@@ -1645,6 +1732,7 @@ fn delete_each(
         }
         text(ctx, format!("deleted {text_ref}"));
     }
-    text(ctx, format!("deleted {total} objects"));
+    let noun = if total == 1 { "object" } else { "objects" };
+    text(ctx, format!("deleted {total} {noun}"));
     Ok(Flow::Continue)
 }
